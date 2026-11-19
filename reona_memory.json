@@ -1,0 +1,27 @@
+{
+  "affection": 62,
+  "target_channel_id": 1571035253974237219,
+  "last_interaction_ts": 1795117904.504178,
+  "last_interaction_date": "2026-11-20",
+  "last_night_vibe": "",
+  "body_state": {
+    "level": "none",
+    "symptom": "",
+    "cause": "",
+    "recover_at": 0.0,
+    "afterglow_until": 0.0,
+    "cared_by_user": false
+  },
+  "pending_aftermath": null,
+  "current_activity": {
+    "text": "半夢半醒翻了個身",
+    "next_update_at": 1795118852.147746,
+    "stage_index": 1
+  },
+  "recent_topics": [],
+  "sweet_notes": [],
+  "grudge_notes": [],
+  "recent_replies": [],
+  "recent_photo_ids": [],
+  "next_proactive_at": 0.0
+}
