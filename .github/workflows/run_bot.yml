@@ -45,7 +45,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          python bot.py
+          python reona_dc_bot.py
 
       - name: 同步最新記憶檔回倉庫
         if: always()
