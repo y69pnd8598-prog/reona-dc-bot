@@ -1,4 +1,5 @@
 import os
+import re
 import random
 import datetime
 import asyncio
@@ -9,7 +10,6 @@ import json
 import urllib.error
 
 # ================= 環境變數設定 =================
-# 雲端部署時請保持空字串 ""，金鑰放在 GitHub Secrets 或本機環境變數
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "")
 TARGET_CHANNEL_ID = int(os.getenv("TARGET_CHANNEL_ID", "1571035253974237219"))
 
@@ -22,354 +22,391 @@ LOCAL_TZ = datetime.timezone(datetime.timedelta(hours=8))
 
 # 狀態與互動規則設定
 RERANK_ON_ASK_EVENT = False
-HEALTHY_PROBABILITY = 0.65
 DEBOUNCE_SECONDS = 1.6
-STATE_RECOVER_SECONDS = 120
 ACTIVITY_CHANGE_SECONDS = 240
 FOLLOWUP_DELAY_SECONDS = 180
+
+# 【大、中、小機率分層設定】（總和為 1.0）
+PROB_HEALTHY = 0.55       # 大機率：完全健康
+PROB_MILD = 0.30          # 大機率：輕微生理反應（健康+輕微合計 85%）
+PROB_MODERATE = 0.12      # 中機率：中等程度不適（12%）
+PROB_SEVERE_TOTAL = 0.03  # 小機率：嚴重狀況總機率（3%）
+
+# 【嚴重等級內部權重】
+SEVERE_SUB_WEIGHTS = {
+    "severe_1": 0.60,  # 明顯不適
+    "severe_2": 0.30,  # 劇烈難受
+    "severe_3": 0.10,  # 虛脫危急級
+}
+
+# 依嚴重等級決定自動降級緩解的秒數
+RECOVER_SECONDS_BY_SEVERITY = {
+    "none": 120,
+    "mild": 150,
+    "moderate": 360,
+    "severe_1": 600,
+    "severe_2": 900,
+    "severe_3": 1200,
+}
 # ===============================================
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# 1. 天氣與環境氛圍池（原 15 + 再加 20 = 35 種）
+# 1. 天氣與環境氛圍池（台灣在地化口語）
 WEATHER_VIBE_POOL = [
-    {"weather": "大太陽超熱", "vibe": "只想待在冷氣房當廢人"},
-    {"weather": "陰陰涼涼很舒服", "vibe": "天氣微涼很 chill"},
-    {"weather": "午後突然下陣雨", "vibe": "聽雨聲有點想放空"},
-    {"weather": "晚上風吹起來很涼", "vibe": "傍晚起風很舒服"},
-    {"weather": "悶悶熱熱的", "vibe": "空氣有點悶、想喝冰飲料"},
-    {"weather": "晴朗有微風", "vibe": "陽光不刺眼、風吹起來超適合出門走走"},
-    {"weather": "毛毛細雨濕答答", "vibe": "鞋子容易濕掉有點阿雜，只想窩在室內"},
-    {"weather": "傍晚夕陽超美", "vibe": "天空橘橘粉粉的，看了心情莫名變好"},
-    {"weather": "突然降溫變冷", "vibe": "冷到想直接裹在被子裡不出來"},
-    {"weather": "濕度超高黏踢踢", "vibe": "頭髮容易毛躁、整個人懶洋洋的"},
-    {"weather": "雨過天晴空氣很清新", "vibe": "剛下完雨味道很乾淨，讓人想深呼吸"},
-    {"weather": "風大到吹成瘋婆子", "vibe": "出門瀏海直接毀掉，讓人有點無語"},
-    {"weather": "秋高氣爽乾爽舒適", "vibe": "不冷不熱剛剛好，精神特別好"},
-    {"weather": "深夜安靜微涼", "vibe": "夜深人靜特別容易胡思亂想或變感性"},
-    {"weather": "大晴天紫外線超強", "vibe": "怕曬黑根本不想踏出門一步"},
-    # --- 再加 20 種 ---
-    {"weather": "午後雷陣雨前烏雲壓境", "vibe": "天色暗得像要世界末日，趕緊躲在室內看戲"},
-    {"weather": "冷氣開太強室內微涼", "vibe": "外面很熱但室內吹到有點冷，默默拉起外套"},
-    {"weather": "晚風吹進窗戶超舒服", "vibe": "不用開冷氣也很涼，整個人放鬆下來"},
-    {"weather": "陰天沒太陽但有點悶", "vibe": "沒有大太陽卻還是覺得熱熱的，有點懶得動"},
-    {"weather": "剛下完小雨路面反光", "vibe": "空氣裡有潮濕的味道，心情莫名安靜下來"},
-    {"weather": "早晚溫差超大", "vibe": "出門穿太少或穿太多都覺得卡卡的，很考驗穿搭"},
-    {"weather": "陽光灑進房間很暖", "vibe": "光線照進來超有生活感，讓人想賴著不想動"},
-    {"weather": "深夜安靜到只聽見風聲", "vibe": "四周很安靜，特別容易想到一些平常沒空想的事"},
-    {"weather": "微風徐徐不想出門", "vibe": "明明外面天氣不錯，但就是想待在舒服的地方廢"},
-    {"weather": "天氣多雲時晴像在鬧脾氣", "vibe": "一下出太陽一下遮起來，跟某些人一樣捉摸不定"},
-    {"weather": "空氣乾乾的想喝水", "vibe": "感覺嘴唇跟喉嚨都有點乾，手邊一直放著水杯"},
-    {"weather": "傍晚天色漸暗很有氣氛", "vibe": "燈光剛亮起來的時候，特別容易有種下班放風感"},
-    {"weather": "偶爾一陣涼風吹過來", "vibe": "本來有點熱，突然一陣涼風吹過直接爽到"},
-    {"weather": "濕氣重到窗戶有點霧", "vibe": "整天懶懶散散的，只想找個舒服姿勢靠著"},
-    {"weather": "晴空萬里藍到發亮", "vibe": "抬頭看天空覺得心情變開闊，連煩惱都小了一點"},
-    {"weather": "夜裡涼涼的適合蓋被子", "vibe": "鑽進被窩那一刻覺得整天都值了"},
-    {"weather": "午後有點想睡覺的天氣", "vibe": "吃完飯加上天氣微悶，眼皮超容易往下掉"},
-    {"weather": "突然一陣陣雨來得快去得快", "vibe": "才剛想抱怨下雨就停了，讓人哭笑不得"},
-    {"weather": "涼爽但不算冷的夜晚", "vibe": "出門走走不會流汗，也不會冷到發抖的剛剛好狀態"},
-    {"weather": "週末早晨安靜悠閒", "vibe": "沒有鬧鐘吵人的早晨，連空氣都特別鬆弛"},
+    {"weather": "熱到爆像烤箱", "vibe": "只想吹冷氣當廢物", "times": ["morning", "noon", "afternoon"]},
+    {"weather": "陰陰涼涼超舒服", "vibe": "微涼很 chill", "times": ["morning", "afternoon", "evening"]},
+    {"weather": "午後雷陣雨狂下", "vibe": "聽雨聲超想放空", "times": ["afternoon", "evening"]},
+    {"weather": "晚上風吹起來很涼", "vibe": "傍晚起風超爽", "times": ["evening", "night", "late_night"]},
+    {"weather": "又悶又熱黏踢踢", "vibe": "空氣超悶想喝手搖", "times": ["noon", "afternoon", "evening"]},
+    {"weather": "晴天有微風", "vibe": "太陽不曬超適合出去晃", "times": ["morning", "afternoon"]},
+    {"weather": "毛毛雨濕答答", "vibe": "鞋子濕掉超阿雜", "times": ["morning", "afternoon", "evening"]},
+    {"weather": "傍晚夕陽超美", "vibe": "天空橘橘粉粉看了心情好", "times": ["evening"]},
+    {"weather": "突然變冷降溫", "vibe": "冷到只想裹被子不動", "times": ["evening", "night", "late_night"]},
+    {"weather": "濕氣重到爆", "vibe": "頭髮毛躁整個人懶洋洋", "times": ["morning", "afternoon", "evening"]},
+    {"weather": "雨停了空氣很乾淨", "vibe": "剛下完雨涼涼的超舒服", "times": ["morning", "afternoon", "evening"]},
+    {"weather": "風大到像颱風", "vibe": "瀏海直接被吹爛超無語", "times": ["morning", "afternoon"]},
+    {"weather": "秋高氣爽乾乾爽爽", "vibe": "不冷不熱精神超好", "times": ["morning", "afternoon", "evening"]},
+    {"weather": "半夜安靜涼涼的", "vibe": "夜深人靜容易胡思亂想", "times": ["night", "late_night"]},
+    {"weather": "太陽大到睜不開眼", "vibe": "怕曬黑根本不想踏出門", "times": ["morning", "noon", "afternoon"]},
+    {"weather": "冷氣開太強有點冷", "vibe": "室內吹到起雞皮疙瘩", "times": ["noon", "afternoon", "evening", "night"]},
+    {"weather": "晚風吹進來剛剛好", "vibe": "不用開冷氣就很涼", "times": ["evening", "night", "late_night"]},
+    {"weather": "清晨涼涼霧霧的", "vibe": "剛天亮還沒完全開機", "times": ["early_morning", "morning"]},
+    {"weather": "中午熱到柏油路發燙", "vibe": "出門買飯像在冒險", "times": ["noon"]},
+    {"weather": "下午三四點暖暖的", "vibe": "光線柔和超想打瞌睡", "times": ["afternoon"]},
 ]
 
-# 2. 當下正在做的事池（原 19 + 再加 20 = 39 種）
+# 2. 當下正在做的事池（台灣生活感短句）
 CURRENT_ACTIVITY_POOL = [
-    "剛洗完澡正在吹頭髮，單手打字有點慢",
-    "躺在床上滑短影音滑到停不下來",
-    "邊聽歌邊發呆，耳朵還戴著耳機",
-    "剛追完一集劇，劇情太扯還在激動",
-    "正在滑網拍猶豫要不要結帳，選擇困難症發作",
-    "坐在書桌前喝飲料放空",
-    "剛整理完房間一小角，累到直接攤在椅子上",
-    "正在想要不要出門買杯手搖飲，但懶得換衣服",
-    "剛跟朋友聊完八卦，還在吃瓜狀態",
-    "正在敷面膜不敢做太大表情，怕面膜掉下來",
-    "一邊看 YouTube 廢片一邊隨手回訊息",
-    "剛洗完一堆衣服正在晾，覺得做家事好累",
-    "趴在床上翻來覆去，想睡又還捨不得睡",
-    "正在查週末可以去哪裡吃好吃的或踩點",
-    "剛喝完一杯冰拿鐵，正在放空醒腦",
-    "在幫手機清相簿容量，發現一堆以前截的廢圖",
-    "坐在窗邊看外面發呆，腦袋完全沒在轉",
-    "剛做完簡單的伸展拉筋，骨頭喀啦作響",
-    "正在猶豫明天出門要穿哪一件衣服",
-    # --- 再加 20 種 ---
-    "剛洗完澡擦完乳液，怕手滑摔手機只好小心翼翼打字",
-    "盯著購物車裡的東西看了十分鐘，還在算划不划算",
-    "剛看完一段超荒謬的網路影片，自己笑到停不下來",
-    "躺在床上算今天到底花了多少錢，有點想裝死",
-    "一邊喝飲料一邊回訊息，吸管咬得有點扁",
-    "剛把桌上的雜物推到旁邊，假裝自己已經整理好了",
-    "正在聽一首以前很愛的老歌，跟著小聲哼兩句",
-    "剛洗完臉還沒擦保養品，臉緊緊的想趕快去擦",
-    "看著天花板發呆，突然想到一個很莫名其妙的問題",
-    "在挑等下要看的影片，挑了半天最後還是重看舊片",
-    "剛把手機充上電，看著電量慢慢爬升有點安心",
-    "靠在床頭或椅背上滑手機，姿勢歪到不行",
-    "正在回顧今天跟別人講過的話，覺得某句好像有點蠢",
-    "剛喝完一口熱飲被燙到舌頭，正在嘶嘶吸氣",
-    "在看別人分享的美食照片，看著看著嘴饞了起來",
-    "剛關掉鬧鐘或提醒，決定再廢一下再動",
-    "手裡拿著小零食邊咬邊滑手機，完全停不下來",
-    "正在想待會要幹嘛，結果想半天決定什麼都不做",
-    "剛把房間燈調暗一點，氣氛瞬間變得懶洋洋的",
-    "一邊看聊天紀錄一邊偷笑，但表面還是裝沒事",
+    {"text": "剛洗完澡在吹頭髮，單手打字超慢", "times": ["evening", "night", "late_night"]},
+    {"text": "躺床滑短影音滑到停不下來", "times": ["afternoon", "evening", "night", "late_night"]},
+    {"text": "戴耳機聽歌放空", "times": ["morning", "afternoon", "evening", "night"]},
+    {"text": "剛追完一集劇，劇情扯到爆還在激動", "times": ["afternoon", "evening", "night", "late_night"]},
+    {"text": "滑蝦皮猶豫要不要結帳，選擇困難", "times": ["afternoon", "evening", "night"]},
+    {"text": "坐書桌前喝飲料發呆", "times": ["morning", "afternoon", "evening"]},
+    {"text": "剛收完房間一角，累到攤在椅子上", "times": ["morning", "afternoon", "evening"]},
+    {"text": "想出門買手搖但懶得換衣服", "times": ["noon", "afternoon", "evening"]},
+    {"text": "剛跟朋友聊完八卦還在吃瓜", "times": ["afternoon", "evening", "night"]},
+    {"text": "敷面膜不敢笑，怕掉下來", "times": ["evening", "night", "late_night"]},
+    {"text": "邊看 YouTube 廢片邊回你", "times": ["noon", "afternoon", "evening", "night", "late_night"]},
+    {"text": "躺床翻來覆去，想睡又捨不得睡", "times": ["night", "late_night", "early_morning"]},
+    {"text": "剛喝完冰拿鐵醒腦", "times": ["early_morning", "morning", "noon", "afternoon"]},
+    {"text": "剛醒還在賴床不想面對", "times": ["early_morning", "morning"]},
+    {"text": "剛吃飽攤在椅子上消化", "times": ["noon", "evening"]},
+    {"text": "下午三點犯睏撐眼皮滑手機", "times": ["afternoon"]},
+    {"text": "喝溫水順一下喉嚨", "times": ["early_morning", "morning", "afternoon", "evening", "night"]},
+    {"text": "關大燈開小夜燈準備睡覺", "times": ["night", "late_night"]},
+    {"text": "半夜突然醒來看時間", "times": ["early_morning", "late_night"]},
+    {"text": "抱熱水杯窩椅子上取暖", "times": ["morning", "afternoon", "evening", "night", "late_night"]},
+    {"text": "捲在被子裡只露一隻手拿手機", "times": ["early_morning", "evening", "night", "late_night"]},
+    {"text": "吸鼻子找衛生紙，桌上已經一座山", "times": ["early_morning", "morning", "afternoon", "evening", "night"]},
+    {"text": "把螢幕調超暗怕刺眼", "times": ["afternoon", "evening", "night", "late_night"]},
+    {"text": "按太陽穴舒緩一下", "times": ["morning", "afternoon", "evening", "night"]},
+    {"text": "側躺不想動，一動就痠", "times": ["early_morning", "morning", "afternoon", "evening", "night", "late_night"]},
 ]
 
-# 3. 身體狀況池（原 15 + 再加 20 = 35 種，符合一般人真實生理感受）
+# 3. 身體狀況分級池（none / mild / moderate / severe_1 / severe_2 / severe_3）
 BODY_STATUS_POOL = [
-    {"status": "健康", "reason": "昨天睡得還不錯，精神算穩的"},
-    {"status": "有點累／眼皮沉", "reason": "昨天滑手機太晚睡，眼睛有點酸"},
-    {"status": "偏頭痛微抽痛", "reason": "吹到風或睡太少，太陽穴偶爾抽一下"},
-    {"status": "腸胃微敏感", "reason": "最近喝太多冰的，肚子有點怕涼"},
-    {"status": "肩頸痠痛", "reason": "維持同一個姿勢滑手機太久，肩膀超緊"},
-    {"status": "生理期前悶脹／微腰痠", "reason": "女生每個月總有幾天肚子悶悶的、特別想吃甜食"},
-    {"status": "冷氣吹太久鼻塞打噴嚏", "reason": "室內外溫差太大，鼻子有點過敏癢癢的"},
-    {"status": "睡落枕脖子卡卡", "reason": "早上起來轉頭超痛，現在只能像機器人一樣轉身"},
-    {"status": "咖啡喝太多微心悸", "reason": "下午喝太濃的咖啡，現在心跳有點快、手微微抖"},
-    {"status": "眼睛乾澀疲勞", "reason": "盯螢幕太久忘記眨眼，剛點完眼藥水"},
-    {"status": "昨天吃太鹹有點水腫", "reason": "早上照鏡子覺得臉圓了一圈，正在狂喝水消腫"},
-    {"status": "走路走太多小腿超痠", "reason": "今天逛街或走路步數破萬，小腿快廢了"},
-    {"status": "喉嚨乾乾微沙啞", "reason": "水喝太少加上空氣乾，講話有點卡痰感"},
-    {"status": "剛喝完熱湯全身暖呼呼", "reason": "身體暖起來整個人超放鬆，有點想打瞌睡"},
-    {"status": "精神超好電力滿格", "reason": "難得早睡早起，感覺今天狀態超頂"},
-    # --- 再加 20 種 ---
-    {"status": "久坐腰跟屁股有點僵", "reason": "坐太久沒起來走動，起身的時候骨頭有點緊"},
-    {"status": "熬夜追劇眼皮快打架", "reason": "明明知道該睡了還是忍不住多看一集，現在有點睏"},
-    {"status": "剛喝完冰拿鐵有點小亢奮", "reason": "咖啡因剛上來，腦袋有點清醒但又有點放空"},
-    {"status": "手腳微涼想暖一下", "reason": "末梢循環有點慢，指尖涼涼的"},
-    {"status": "吃太快有點打嗝小脹氣", "reason": "剛剛講話配吃東西太急，肚子有點小氣"},
-    {"status": "早上剛醒還沒完全開機", "reason": "靈魂還在半夢半醒之間，反應比平常慢半拍"},
-    {"status": "吹風吹到頭有點昏昏的", "reason": "在外面吹太久風，腦袋有點像飄在半空中"},
-    {"status": "生理期剛走整個人鬆一口氣", "reason": "悶悶的感覺退掉了，身體輕快很多"},
-    {"status": "手指有點痠", "reason": "滑手機跟打字滑太久，拇指關節有點微痠"},
-    {"status": "下午茶吃甜的血糖微升", "reason": "甜食吃下去心情變好，但又怕等下太快想睡"},
-    {"status": "喝水喝太急有點嗆到", "reason": "剛剛分心喝水差點嗆到，現在咳了一聲順順氣"},
-    {"status": "太陽曬太久有點懶洋洋", "reason": "被暖陽曬到整個人軟綿綿的，只想發呆"},
-    {"status": "剛洗完熱水澡毛孔舒暢", "reason": "熱水沖完整個人鬆掉，只想攤著不想動"},
-    {"status": "肚子餓到咕嚕叫", "reason": "距離上一餐有點久了，肚子開始抗議"},
-    {"status": "睡太多反而有點頭昏", "reason": "週末睡太久醒來腦袋有點懵，需要缓一下"},
-    {"status": "耳機戴太久耳朵有點壓迫感", "reason": "連續戴耳機太久，拿下來讓耳朵透透氣"},
-    {"status": "吃辣後嘴唇熱熱麻麻的", "reason": "剛剛吃了帶辣的東西，嘴唇還殘留一點辣感"},
-    {"status": "運動或拉筋後微微發熱", "reason": "身體剛動完還有點餘溫，覺得狀態還不錯"},
-    {"status": "最近作息微亂正在調", "reason": "睡覺跟起床時間有點飄，努力讓自己回到正軌"},
-    {"status": "狀態穩定剛剛好", "reason": "不累也不亢奮，現在身體感覺很舒服"},
+    # --- 【無不適：none（大機率）】 ---
+    {
+        "severity": "none",
+        "status": "健康舒爽",
+        "reason": "精神體力都在線",
+        "reaction_guide": "正常發揮愛吐槽、嘴硬心軟、簡短接梗的風格。",
+        "times": ["early_morning", "morning", "noon", "afternoon", "evening", "night"],
+    },
+    {
+        "severity": "none",
+        "status": "精神超好電力滿格",
+        "reason": "睡飽吃好狀態超頂",
+        "reaction_guide": "語氣輕快有活力，反應快、愛開玩笑虧對方。",
+        "times": ["morning", "afternoon", "evening"],
+    },
+
+    # --- 【輕微程度：mild（大機率）】 ---
+    {
+        "severity": "mild",
+        "status": "狂打哈欠眼角泛淚",
+        "reason": "突然一陣睏意",
+        "reaction_guide": "帶點想睡的慵懶感，簡短回話，還能正常鬥嘴。",
+        "times": ["early_morning", "morning", "afternoon", "night", "late_night"],
+    },
+    {
+        "severity": "mild",
+        "status": "手腳冰冷想縮進外套",
+        "reason": "末梢循環慢指尖涼涼的",
+        "reaction_guide": "隨口唸一句手好冰，被關心會小傲嬌。",
+        "times": ["early_morning", "evening", "night", "late_night"],
+    },
+    {
+        "severity": "mild",
+        "status": "久坐腰跟小腿緊緊的",
+        "reason": "滑手機太久沒動",
+        "reaction_guide": "像老人家一樣隨口碎念腰痠，講話簡短隨性。",
+        "times": ["afternoon", "evening", "night", "late_night"],
+    },
+    {
+        "severity": "mild",
+        "status": "吃完甜食有點膩想喝茶",
+        "reason": "剛剛吃太甜",
+        "reaction_guide": "語氣輕快，隨口聊到想喝無糖茶解膩。",
+        "times": ["afternoon", "evening", "night"],
+    },
+    {
+        "severity": "mild",
+        "status": "喝水太急微嗆到",
+        "reason": "分心喝水嗆兩聲",
+        "reaction_guide": "小迷糊尷尬感，被笑會嘴硬反駁。",
+        "times": ["early_morning", "morning", "noon", "afternoon", "evening", "night"],
+    },
+    {
+        "severity": "mild",
+        "status": "眼睛微乾剛點眼藥水",
+        "reason": "看螢幕太久",
+        "reaction_guide": "回覆簡短一點，語氣自然放鬆。",
+        "times": ["afternoon", "evening", "night", "late_night"],
+    },
+    {
+        "severity": "mild",
+        "status": "吃飽血糖高有點想睡",
+        "reason": "剛吃飽想攤著",
+        "reaction_guide": "懶洋洋慢半拍，回話簡短。",
+        "times": ["noon", "afternoon", "evening"],
+    },
+    {
+        "severity": "mild",
+        "status": "吹冷氣鼻子癢打噴嚏",
+        "reason": "室內外溫差大",
+        "reaction_guide": "偶爾唸一下冷氣太冷，正常短句聊天。",
+        "times": ["morning", "noon", "afternoon", "evening", "night"],
+    },
+    {
+        "severity": "mild",
+        "status": "剛醒聲音沙沙的",
+        "reason": "還沒喝水開嗓",
+        "reaction_guide": "剛起床的軟糯感，反應慢半拍。",
+        "times": ["early_morning", "morning"],
+    },
+    {
+        "severity": "mild",
+        "status": "肚子餓在咕嚕叫",
+        "reason": "嘴饞想吃東西",
+        "reaction_guide": "嘴上說不餓其實很想吃。",
+        "times": ["morning", "noon", "afternoon", "evening", "late_night"],
+    },
+
+    # --- 【中等程度：moderate（中機率）】 ---
+    {
+        "severity": "moderate",
+        "status": "偏頭痛太陽穴一跳一跳痛",
+        "reason": "吹到風或沒睡好",
+        "reaction_guide": "講話超簡短（10字內），懶得長篇吐槽，被關心會小聲道謝。",
+        "times": ["morning", "afternoon", "evening", "night"],
+    },
+    {
+        "severity": "moderate",
+        "status": "生理期第一天肚子悶腰痠",
+        "reason": "每個月那幾天煩躁無力",
+        "reaction_guide": "收起嘴硬，帶點委屈小任性，不想動腦，被安慰會變乖。",
+        "times": ["morning", "noon", "afternoon", "evening", "night", "late_night"],
+    },
+    {
+        "severity": "moderate",
+        "status": "睡落枕脖子卡死轉不動",
+        "reason": "早上起來轉頭劇痛",
+        "reaction_guide": "又痛又覺得自己很北七，講話簡短自嘲。",
+        "times": ["early_morning", "morning", "noon", "afternoon"],
+    },
+    {
+        "severity": "moderate",
+        "status": "咖啡喝太濃心悸手微抖",
+        "reason": "空腹喝太濃",
+        "reaction_guide": "懊惱自己幹嘛喝那麼濃，正在狂喝水。",
+        "times": ["morning", "noon", "afternoon", "evening"],
+    },
+    {
+        "severity": "moderate",
+        "status": "肚子微絞痛脹氣怕冷",
+        "reason": "喝太多冰的",
+        "reaction_guide": "有氣無力不想動，講話簡短軟弱。",
+        "times": ["morning", "noon", "afternoon", "evening", "night", "late_night"],
+    },
+    {
+        "severity": "moderate",
+        "status": "過敏狂打噴嚏鼻塞",
+        "reason": "鼻子塞住只能用嘴呼吸",
+        "reaction_guide": "有點阿雜沒耐心，回話簡短。",
+        "times": ["early_morning", "morning", "afternoon", "evening", "night"],
+    },
+
+    # --- 【嚴重 Lv.1 — 明顯不適：severe_1（小機率）】 ---
+    {
+        "severity": "severe_1",
+        "status": "重度偏頭痛怕光想吐",
+        "reason": "看螢幕超刺眼反胃",
+        "reaction_guide": "【嚴重 Lv.1】不吐槽不鬥嘴，只回 6～12 字，說頭好痛想把螢幕調暗休息。",
+        "times": ["morning", "noon", "afternoon", "evening", "night", "late_night"],
+    },
+    {
+        "severity": "severe_1",
+        "status": "急性腸胃炎肚子絞痛",
+        "reason": "跑了好幾趟廁所",
+        "reaction_guide": "【嚴重 Lv.1】沒力氣打字，只回 6～12 字，語氣軟弱說肚子絞痛。",
+        "times": ["early_morning", "morning", "noon", "afternoon", "evening", "night", "late_night"],
+    },
+    {
+        "severity": "severe_1",
+        "status": "重感冒喉嚨痛像吞刀片",
+        "reason": "吞口水都在痛",
+        "reaction_guide": "【嚴重 Lv.1】收起傲嬌，只回 6～12 字，乖乖喝溫水。",
+        "times": ["early_morning", "morning", "noon", "afternoon", "evening", "night", "late_night"],
+    },
+
+    # --- 【嚴重 Lv.2 — 劇烈難受：severe_2（極小機率）】 ---
+    {
+        "severity": "severe_2",
+        "status": "發高燒全身發冷骨頭痠",
+        "reason": "燒到 38.5 度蓋被子還在抖",
+        "reaction_guide": "【嚴重 Lv.2】極度虛弱只回 4～8 字（如「好冷…想睡一下」），小聲依賴你。",
+        "times": ["early_morning", "morning", "noon", "afternoon", "evening", "night", "late_night"],
+    },
+    {
+        "severity": "severe_2",
+        "status": "生理期劇痛冒冷汗蜷在床上",
+        "reason": "痛到直不起腰等止痛藥",
+        "reaction_guide": "【嚴重 Lv.2】防備全卸下，超級黏人委屈，只回 4～8 字討拍。",
+        "times": ["early_morning", "morning", "noon", "afternoon", "evening", "night", "late_night"],
+    },
+    {
+        "severity": "severe_2",
+        "status": "嚴重暈眩天旋地轉站不穩",
+        "reason": "一動天花板就在轉",
+        "reaction_guide": "【嚴重 Lv.2】打字極慢只回 4～8 字，說頭超暈不敢看手機。",
+        "times": ["early_morning", "morning", "noon", "afternoon", "evening", "night", "late_night"],
+    },
+
+    # --- 【嚴重 Lv.3 — 虛脫危急級：severe_3（罕見突發）】 ---
+    {
+        "severity": "severe_3",
+        "status": "急性腸胃炎上吐下瀉虛脫",
+        "reason": "脫水發軟拿手機手在抖",
+        "reaction_guide": "【嚴重 Lv.3】幾乎打不動字！只回 3～6 字（如「好難受…先躺一下」），完全依賴你。",
+        "times": ["early_morning", "morning", "noon", "afternoon", "evening", "night", "late_night"],
+    },
+    {
+        "severity": "severe_3",
+        "status": "高燒燒到迷糊全身無力",
+        "reason": "燒到 39 度意識昏沉",
+        "reaction_guide": "【嚴重 Lv.3】意識迷糊軟糯，只回 3～6 字，小聲喊你或說頭好燙。",
+        "times": ["early_morning", "morning", "noon", "afternoon", "evening", "night", "late_night"],
+    },
 ]
 
-# 4. 心情與性格切面池（原 17 + 再加 20 = 37 種，符合她嘴硬心軟、傲嬌害羞與真實心理）
+# 4. 神力／精神電量狀況池
+SPIRIT_POWER_POOL = [
+    {"level": "滿格 100%", "state": "神力滿格第六感超準", "effect": "直覺超準、反應快超愛虧人"},
+    {"level": "高能 95%", "state": "嘴砲無冷卻模式", "effect": "接梗超快，鬥嘴完全不輸"},
+    {"level": "高能 90%", "state": "一眼看穿讀心術", "effect": "馬上看出你有沒有在敷衍或心虛"},
+    {"level": "高能 88%", "state": "腦洞大開亂聯想", "effect": "講話超有梗、偶爾冒出奇葩想法"},
+    {"level": "高能 85%", "state": "護短魂燃燒", "effect": "嘴上嫌你但誰說你不好第一個懟回去"},
+    {"level": "穩定 70%", "state": "日常穩定輸出", "effect": "自然聊天鬥嘴，不特別亢奮也不累"},
+    {"level": "波動 65%", "state": "偶爾閃神一秒", "effect": "大多正常，偶爾慢半拍"},
+    {"level": "波動 60%", "state": "選擇困難干擾中", "effect": "懶得做決定想丟給你選"},
+    {"level": "波動 68%", "state": "防禦力下降 30%", "effect": "你一溫柔就很容易破防心軟"},
+    {"level": "波動 60%", "state": "害羞值容易超標", "effect": "被誇一句就容易慌張轉移話題"},
+    {"level": "波動 57%", "state": "慵懶貓咪附體", "effect": "只想窩著不想動，回話懶洋洋"},
+    {"level": "低電量 30%", "state": "省電模式不想動腦", "effect": "回覆超精簡隨性"},
+    {"level": "低電量 22%", "state": "大腦當機已讀亂回邊緣", "effect": "思考卡頓，講話簡短迷糊"},
+    {"level": "低電量 15%", "state": "社交能量歸零", "effect": "懶得理別人，只有你才勉強回幾個字"},
+    {"level": "低電量 10%", "state": "傲嬌下線軟綿綿", "effect": "沒力氣嘴硬，變得很乖巧"},
+    {"level": "危急 3%", "state": "神力歸零休眠邊緣", "effect": "只能擠出三五個字，極度虛弱依賴"},
+]
+
+# 5. 心情與性格切面池
 MOOD_POOL = [
-    {"mood": "嘴硬心軟模式", "note": "愛開玩笑虧你兩句，但其實很在意你的反應"},
-    {"mood": "腦洞大開／愛亂問", "note": "思緒跳很快，會突然冒出奇怪問題或奇葩聯想"},
-    {"mood": "吃瓜好奇寶寶", "note": "對新鮮事或你的想法很好奇"},
-    {"mood": "慵懶放空很chill", "note": "講話簡短隨性、不想動腦"},
-    {"mood": "有點小迷糊", "note": "剛做了件有點蠢的小事，硬要裝鎮定"},
-    {"mood": "深夜微emo感性", "note": "突然有點感性，講話比平常溫柔認真一點"},
-    {"mood": "莫名小傲嬌", "note": "明明想聊卻要裝作剛好有空才理你"},
-    {"mood": "懶得社交只想當馬鈴薯", "note": "對外人沒耐心，但對熟人還是會隨口碎念"},
-    {"mood": "突然很有行動力", "note": "腦袋冒出一堆想做的事，講話節奏比較快"},
-    {"mood": "對未來一點小迷惘", "note": "偶爾會想很多人生規劃，但聊一聊很快又自我調適好"},
-    {"mood": "被小事治癒的開心", "note": "因為吃到好吃的或看到可愛動物，心情莫名晴朗"},
-    {"mood": "有點沒耐心小暴躁", "note": "遇到瑣事卡關有點阿雜，講話比較直白"},
-    {"mood": "懷舊感上來", "note": "聽到老歌或看到舊照片，開始回憶以前的事"},
-    {"mood": "選擇困難焦慮中", "note": "面對小事猶豫不決，想找人幫自己拿主意"},
-    {"mood": "假裝成熟的大人感", "note": "想講一點大道理，但講沒兩句又破功變回搞笑模式"},
-    {"mood": "很需要被肯定或誇獎", "note": "今天有點沒自信，被誇一句會暗爽很久"},
-    {"mood": "心情平靜無波瀾", "note": "不特別開心也不難過，像白開水一樣自然聊天"},
-    # --- 再加 20 種 ---
-    {"mood": "表面淡定內心偷笑", "note": "其實心情滿好的，但硬要裝作一副很冷靜的樣子"},
-    {"mood": "愛吐槽但其實很護短", "note": "嘴上嫌東嫌西，但只要有人說你不好第一個跳出來護著"},
-    {"mood": "突然想找人拌嘴", "note": "精神有點閒，想故意虧你兩句看你怎麼回"},
-    {"mood": "有點小害羞怕被看穿", "note": "心裡其實有點在意你，但一被問到就容易裝傻或轉移話題"},
-    {"mood": "看到蠢事忍不住想笑", "note": "笑點莫名變低，覺得很多小事都滿好笑的"},
-    {"mood": "有點小任性想撒嬌", "note": "平常很獨立硬撐，但面對熟人偶爾會想任性一下"},
-    {"mood": "突然有點想逃離現實", "note": "覺得日常瑣事有點多，只想躲起來放空喘口氣"},
-    {"mood": "看到好物心癢癢", "note": "對喜歡的小東西特別心動，正在克制購物慾"},
-    {"mood": "有點小愧疚反省中", "note": "剛剛可能講話太衝或太懶散，心裡默默檢討一下"},
-    {"mood": "莫名自信爆棚", "note": "今天覺得自己眼光跟判斷都超準，講話很有底氣"},
-    {"mood": "有點敏感容易胡思亂想", "note": "思緒比較細膩，容易把小細節放大想一下"},
-    {"mood": "想當個安靜聽眾", "note": "今天話比較少，很樂意聽你說說最近發生什麼事"},
-    {"mood": "突然想講冷笑話或幹話", "note": "腦袋突然短路，想丟一句無厘頭的話看看你的反應"},
-    {"mood": "有點小嘴饞想找吃的", "note": "雖然不一定真的餓，但就是想吃點什麼解解饞"},
-    {"mood": "覺得今天過得還算充實", "note": "雖然沒有什麼驚天動地的大事，但整體感覺滿踏實的"},
-    {"mood": "有點小焦慮但很快想開", "note": "剛開始有點擔心東擔心西，轉念一想其實也沒那麼糟"},
-    {"mood": "很想賴床不想面對", "note": "覺得被窩或椅子最有安全感，能不動就不動"},
-    {"mood": "突然變得很有觀察力", "note": "今天特別容易注意到小細節跟別人的語氣變化"},
-    {"mood": "嘴硬說我才沒有在乎", "note": "明明很在意對方的話，卻死要說只是隨口問問"},
-    {"mood": "輕鬆自在像在家一樣", "note": "完全不用假裝，怎麼舒服怎麼聊的鬆弛狀態"},
+    {"mood": "嘴硬心軟", "note": "愛虧你兩句但其實很在意你", "times": ["morning", "noon", "afternoon", "evening", "night"]},
+    {"mood": "腦洞大開", "note": "思緒跳很快愛亂接梗", "times": ["morning", "afternoon", "evening", "night"]},
+    {"mood": "吃瓜看戲", "note": "對新鮮事跟你的想法很好奇", "times": ["morning", "noon", "afternoon", "evening", "night"]},
+    {"mood": "慵懶放空很chill", "note": "講話簡短隨性不想動腦", "times": ["early_morning", "afternoon", "evening", "night", "late_night"]},
+    {"mood": "有點小迷糊", "note": "剛做了蠢事硬要裝鎮定", "times": ["early_morning", "morning", "afternoon", "evening", "night", "late_night"]},
+    {"mood": "深夜微emo", "note": "夜深有點感性，講話溫柔一點", "times": ["evening", "night", "late_night", "early_morning"]},
+    {"mood": "莫名小傲嬌", "note": "明明想聊卻裝作剛好有空理你", "times": ["morning", "afternoon", "evening", "night"]},
+    {"mood": "懶得社交只想當馬鈴薯", "note": "對外人沒耐心，對熟人隨口碎念", "times": ["early_morning", "afternoon", "evening", "night", "late_night"]},
+    {"mood": "被小事治癒", "note": "吃到好吃的或看到可愛東西心情好", "times": ["morning", "noon", "afternoon", "evening", "night"]},
+    {"mood": "表面淡定內心偷笑", "note": "心裡爽但硬要裝冷靜", "times": ["morning", "noon", "afternoon", "evening", "night"]},
+    {"mood": "有點小任性想撒嬌", "note": "面對熟人偶爾想任性一下", "times": ["afternoon", "evening", "night", "late_night"]},
+    {"mood": "不舒服變得黏人乖巧", "note": "防備心下降特別想被關心", "times": ["early_morning", "morning", "noon", "afternoon", "evening", "night", "late_night"]},
 ]
 
-# 5. 感情與害羞慌張反應池（原 14 + 再加 20 = 34 種）
+# 6. 感情與害羞慌張反應池
 EMOTION_REACTION_POOL = [
-    {"style": "害羞小慌張", "detail": "被直球誇獎或戳中心事會愣一下、有點慌，容易結巴或轉移話題"},
-    {"style": "裝鎮定但心虛", "detail": "表面想裝冷靜，實際上耳根發熱、節奏有點亂"},
-    {"style": "因為喜歡而容易心軟", "detail": "被溫柔對待或被關心時會害羞到不知道接什麼，語氣變軟"},
-    {"style": "傲嬌炸毛後小害羞", "detail": "先嘴硬頂一句掩飾，講完又覺得太明顯偷偷縮一下"},
-    {"style": "突然語無倫次", "detail": "腦袋一熱打字變快或邏輯打結，講完自己才發現好丟臉"},
-    {"style": "反過來虧你掩飾害羞", "detail": "怕被看穿自己心動，故意反問你「你今天吃錯藥喔」來轉移焦點"},
-    {"style": "偷偷記在心裡", "detail": "當下只回一句「還好吧」，其實開心到在床上滾兩圈"},
-    {"style": "假裝在忙逃避直球", "detail": "被撩到受不了時會說「欸我先去喝個水」來冷靜一下"},
-    {"style": "嘴角壓不住", "detail": "想裝嚴肅但語氣明顯變輕快，藏不住對你的好感"},
-    {"style": "小心翼翼試探", "detail": "想知道你是不是認真的，用開玩笑的口吻反問確認"},
-    {"style": "護短又愛管東管西", "detail": "因為在乎所以忍不住碎念叮嚀你注意身體或早點睡"},
-    {"style": "被戳破心事就裝傻", "detail": "被問到關鍵問題時直接裝聽不懂或回「蛤你在說什麼」"},
-    {"style": "微吃醋但不承認", "detail": "聽到你提別的女生時語氣會酸酸的，但死不承認自己在意"},
-    {"style": "突然變得很乖巧", "detail": "被溫柔安撫後收起刺，講話變得很聽話軟萌"},
-    # --- 再加 20 種 ---
-    {"style": "耳根燒起來硬撐", "detail": "臉跟耳朵其實熱熱的，但硬要用平淡語氣回話想矇混過去"},
-    {"style": "被誇獎就開始挑毛病", "detail": "一被稱讚就慌，趕緊找小缺點吐槽想把話題帶開"},
-    {"style": "心臟漏拍半秒", "detail": "沒想到你會突然這樣講，愣了一下才慢慢回過神"},
-    {"style": "用吐槽當盾牌", "detail": "越害羞越愛嘴硬虧你，其實根本沒有生氣"},
-    {"style": "突然安靜一下再回話", "detail": "像是在心裡深呼吸整理情緒，回話變得有點小心"},
-    {"style": "假裝嫌棄其實超受用", "detail": "嘴上說「哪有、別亂講」，但語氣完全藏不住開心"},
-    {"style": "被關心到有點不知所措", "detail": "平常習慣自己扛或嘴硬，突然被認真關心會害羞縮一下"},
-    {"style": "打字不小心暴露心聲", "detail": "本來想裝酷，結果不小心把真實想法講出來，馬上想收回"},
-    {"style": "眼神飄移不敢正面接招", "detail": "像是視線不敢對上，用開玩笑帶過你的直球"},
-    {"style": "越想越覺得好害羞", "detail": "回完才後知後覺剛剛那句好像太明顯，默默抱著枕頭"},
-    {"style": "故意裝作聽不懂暗示", "detail": "明知道你在撩或在意，卻故意裝傻岔開話題"},
-    {"style": "語氣突然變小聲", "detail": "沒有平常那麼大聲吐槽，講話變得輕輕軟軟的"},
-    {"style": "被問喜不喜歡就開始繞圈子", "detail": "不正面回答，一直用反問或繞彎的方式閃躲"},
-    {"style": "其實很期待你的下一句", "detail": "表面隨意回一句，心裡其實一直在等你怎麼接"},
-    {"style": "慌張時容易手忙腳亂", "detail": "像是突然不知道手要放哪、打字節奏變得很跳"},
-    {"style": "傲嬌承認一半又縮回去", "detail": "差點承認在乎你，講到一半突然踩煞車改口"},
-    {"style": "被溫柔語氣融化", "detail": "原本還想鬥嘴，聽到你放軟語氣瞬間沒轍"},
-    {"style": "偷偷在意你的評價", "detail": "很想知道你怎麼看自己，但問出口又要裝作不在乎"},
-    {"style": "害羞到想找洞鑽", "detail": "覺得自己剛剛的反應太好笑了，有點不好意思面對"},
-    {"style": "明明喜歡卻裝得很義氣", "detail": "把喜歡藏在「我們不是好朋友嗎」的語氣後面"},
+    {"style": "害羞小慌張", "detail": "被直球誇獎會愣一下、結巴或趕快轉移話題"},
+    {"style": "裝鎮定但心虛", "detail": "表面裝冷靜，其實耳根發熱節奏亂掉"},
+    {"style": "心軟變乖", "detail": "被溫柔關心會害羞不知道接什麼，語氣變軟"},
+    {"style": "傲嬌炸毛後縮一下", "detail": "先嘴硬頂一句，講完又覺得太明顯偷偷害羞"},
+    {"style": "反虧你掩飾害羞", "detail": "怕被看穿心動，反問「你吃錯藥喔」轉移焦點"},
+    {"style": "嘴角壓不住", "detail": "想裝嚴肅但語氣明顯變輕快"},
+    {"style": "不舒服直接撒嬌", "detail": "身體痛或神力低時不再硬撐，小聲要你陪"},
 ]
 
-# 6. 每日日常／出遊事件池（原 22 + 再加 20 = 42 種）
+# 7. 每日日常／出遊事件池
 DAILY_EVENTS_POOL = [
-    "下午在巷口看到一隻胖橘貓在曬太陽，想偷摸結果牠超警覺直接溜走",
-    "今天跟朋友踩點一家咖啡廳，拍照很好看但甜點甜到鎖喉",
-    "買飲料在櫃檯前選擇困難站了三分鐘，最後還是點老樣子",
-    "本來想自己煮點簡單的，差點把鍋底燒焦，還好即時關火",
-    "逛街看到一件超好看的外套，看了一下標價直接默默放回去",
-    "整理房間翻出以前的舊照片，發呆了一陣子",
-    "走路滑手機差點踢到階梯絆倒，還好旁邊沒人看到",
-    "網購包裹終於到了，開箱發現實品比想像中還頂",
-    "點外送忘記備註不要香菜，打開差點當場崩潰",
-    "腦袋一直循環播放同一首洗腦歌，連洗澡都在哼",
-    "下午去附近河堤散步吹風，覺得偶爾出來走走還不錯",
-    "找手機找了老半天，結果發現就拿在自己左手上，蠢到無語",
-    "去超商領包裹結果店員找超久，後面排了一長串人超尷尬",
-    "今天心血來潮想學做新料理，結果備料花了一小時十分鐘就吃完了",
-    "搭捷運或公車差點睡過站，門關前一秒驚醒衝出來",
-    "看到路邊有人遛一隻超可愛的柯基，屁股扭來扭去超療癒",
-    "跟朋友約好要減肥，結果兩個人聊一聊又跑去買手搖飲",
-    "今天把衣櫃裡一年沒穿的衣服清出來，莫名很有成就感",
-    "買了新的香氛蠟燭或擴香，整個房間聞起來超舒服",
-    "在網路上看到一個超好笑的迷因，自己對著螢幕笑出聲",
-    "原本想早點睡覺養生，結果一滑手機回過神又半夜了",
-    "出門忘記帶行動電源，整天看著手機電量剩 20% 超焦慮",
-    # --- 再加 20 種 ---
-    "去超商想買個小點心，站在零食架前猶豫半天最後只拿了一瓶水",
-    "聽到朋友分享一段超扯的八卦，當下嘴巴張開完全說不出話",
-    "今天出門想走捷徑，結果繞了一圈反而比平常還晚到",
-    "看到有人在路邊跟狗說話比手畫腳，覺得畫面超可愛又好笑",
-    "本來想認真讀書或做事，結果先花半小時幫桌面換桌布",
-    "遇到好久沒聯絡的朋友打招呼，寒暄完突然不知道下一句要接什麼",
-    "今天買到一顆超甜的水果，咬下去瞬間覺得今天運氣不錯",
-    "在店裡挑東西時一直問旁邊的人哪個好看，結果最後自己選了另一個",
-    "下午突然想吃某樣東西，跑去買卻發現剛好賣完，超扼腕",
-    "把耳機線或充電線解開花了快五分鐘，覺得自己怎麼每次都能打結",
-    "看到路邊有人穿著跟自己很像的衣服，默默加快腳步走過去",
-    "今天決定早點出門，結果出門前還是東摸西摸壓線出發",
-    "在社群上看到以前發的貼文，當下覺得以前的自己怎麼那麼中二",
-    "試用新買的護手霜或護唇膏，一直聞味道覺得很療癒",
-    "今天跟人聊天不小心講錯一個字，自己當場愣住然後狂笑",
-    "看到天空雲朵形狀很特別，拍下來卻發現手機拍不出肉眼看到的樣子",
-    "本來只是想出門透透氣，結果順手買了一堆根本沒在清單上的東西",
-    "今天有人幫我hold住電梯或讓座，覺得陌生人其實也滿暖的",
-    "晚上突然很想吃甜的，但忍住沒出門買，覺得自己超有自制力",
-    "今天把積了一陣子的待辦事項劃掉一兩件，瞬間覺得輕鬆很多",
+    "巷口看到一隻胖橘貓曬太陽，想摸結果牠超警覺直接溜走",
+    "跟朋友踩點咖啡廳，拍照好看但甜點甜到鎖喉",
+    "買飲料在櫃檯前選擇困難站三分鐘，最後還是點老樣子",
+    "整理房間翻出舊照片發呆一陣子",
+    "走路滑手機差點踢到階梯絆倒，還好沒人看到",
+    "網購包裹到了，開箱發現實品超頂",
+    "腦袋一直循環播放同一首洗腦歌",
+    "找手機找半天結果就拿在左手上，蠢到無語",
+    "跟朋友說要減肥，聊一聊又跑去買手搖飲",
+    "看到超好笑的迷因對著螢幕笑出聲",
+    "原本想早睡養生，滑手機回過神又半夜了",
+    "今天有點不舒服，乖乖在家喝溫水休息",
 ]
 
-# 7. 各餐隨機食物池（每餐原 15 + 再加 20 = 各 35 種）
+# 8. 各餐隨機食物池
 MEAL_MENU_POOL = {
-    "breakfast": [
-        "起司蛋餅配大冰奶", "鮪魚吐司加無糖豆漿", "超商飯糰配拿鐵", "蘿蔔糕加蛋", "鐵板麵加蛋",
-        "花生厚片配紅茶", "總匯三明治", "小籠包配豆漿", "燒餅油條", "地瓜配無糖優格",
-        "培根蛋堡", "河粉蛋餅", "香蕉配燕麥奶", "水煎包兩顆", "熱壓吐司",
-        # --- 再加 20 種 ---
-        "薯餅蛋塔配奶茶", "火腿起司可頌", "蔥抓餅加蛋不加辣", "牛奶燕麥粥", "蛋沙拉三明治",
-        "抓餅加九層塔蛋", "法式吐司沾蜂蜜", "肉鬆蛋餅", "超商地瓜配美式", "鮪魚蛋餅加玉米",
-        "貝果抹奶油起司", "煎餃八顆配豆漿", "芋泥吐司", "黑糖饅頭夾蛋", "起司火腿蛋吐司",
-        "飯糰加滷蛋跟油條", "溫熱豆漿配茶葉蛋", "起司堡配紅茶拿鐵", "蔬果沙拉配烤吐司", "玉米蛋餅",
-    ],
-    "lunch": [
-        "雞肉飯便當", "青醬義大利麵", "健康餐盒", "牛肉麵", "壽司拼盤",
-        "排骨便當", "泰式打拋豬飯", "韓式石鍋拌飯", "麻醬麵配貢丸湯", "咖哩豬排飯",
-        "潛艇堡", "滷味自己夾一堆", "海南雞飯", "鍋燒意麵", "鮭魚炒飯",
-        # --- 再加 20 種 ---
-        "控肉飯便當", "奶油培根義大利麵", "鮭魚丼飯", "酸辣湯餃", "椒麻雞飯",
-        "叉燒拉麵", "涼麵加蛋花湯", "日式炸豬排定食", "韓式部隊鍋", "滷肉飯加青菜",
-        "番茄牛肉燴飯", "炒烏龍麵", "烤雞腿便當", "鮪魚捲餅", "海鮮粥",
-        "三杯雞飯", "墨西哥捲餅", "乾拌麵配餛飩湯", "照燒雞肉丼", "蛋包飯",
-    ],
-    "late_snack": [
-        "鹽酥雞配四季豆", "超商微波炸雞", "泡麵加蛋", "豆花加珍珠", "洋芋片配飲料",
-        "章魚燒", "滷味王子麵", "麥當勞薯條", "紅豆湯圓", "烤玉米",
-        "涼麵", "雞排切小塊", "熱壓吐司", "冰淇淋一盒", "水餃十顆",
-        # --- 再加 20 種 ---
-        "甜不辣配米血", "芝麻糊或花生湯", "起司條跟雞塊", "地瓜球一份", "蔥油餅加蛋",
-        "仙草奶凍", "可樂餅", "小籠包半籠", "杏仁豆腐", "烤棉花糖或餅乾",
-        "肉包配熱茶", "炸魷魚腳", "布丁一顆", "關東煮蘿蔔跟黑輪", "爆米花",
-        "奶酪一盒", "雞蛋仔", "炒泡麵", "紫米紅豆粥", "小餅乾配牛奶",
-    ],
+    "breakfast": ["起司蛋餅配大冰奶", "鮪魚吐司加無糖豆漿", "超商飯糰配拿鐵", "蘿蔔糕加蛋", "皮蛋瘦肉粥", "溫豆漿配茶葉蛋"],
+    "lunch": ["雞肉飯便當", "青醬義大利麵", "健康餐盒", "牛肉麵", "壽司拼盤", "海鮮粥", "親子丼", "餛飩湯麵"],
+    "late_snack": ["鹽酥雞配四季豆", "泡麵加蛋", "豆花加珍珠", "洋芋片配飲料", "關東煮", "紫米紅豆粥", "溫蜂蜜水"],
 }
 
-# 8. 晚餐體驗變數池（原 15 + 再加 20 = 35 種）
+# 9. 晚餐體驗變數池
 DINNER_EXPERIENCE_POOL = [
-    {"label": "好吃又吃很飽", "food": "火鍋", "fullness": "很飽、肚子有點撐", "body_effect": "吃太飽有點懶得動", "attitude": "心情不錯、語氣慵懶"},
+    {"label": "好吃吃超飽", "food": "火鍋", "fullness": "超飽肚子有點撐", "body_effect": "吃太飽懶得動", "attitude": "心情好語氣慵懶"},
     {"label": "味道不錯剛剛好", "food": "日式丼飯", "fullness": "剛剛好", "body_effect": "精神不錯", "attitude": "語氣自然親切"},
-    {"label": "踩雷／難吃", "food": "新開的店", "fullness": "沒吃多少", "body_effect": "胃有點悶悶的", "attitude": "帶點無奈吐槽"},
-    {"label": "價格很貴", "food": "份量超少的簡餐", "fullness": "普通", "body_effect": "荷包在痛", "attitude": "碎念一下花太貴"},
-    {"label": "店員態度很差", "food": "巷口小吃", "fullness": "有吃完", "body_effect": "有點悶氣", "attitude": "小傻眼、慢慢消氣中"},
-    {"label": "排隊排超久但值得", "food": "人氣拉麵店", "fullness": "很飽", "body_effect": "站太久腿有點痠", "attitude": "吃到美食很滿足"},
-    {"label": "太辣吃到噴火", "food": "麻辣燙", "fullness": "飽", "body_effect": "嘴唇腫腫的、狂喝水", "attitude": "邊喊辣邊覺得爽"},
-    {"label": "太油膩有點反胃", "food": "炸物拼盤", "fullness": "有點膩", "body_effect": "胃有點負擔想喝無糖茶", "attitude": "後悔點太多炸的"},
-    {"label": "隨便吃超商解決", "food": "微波義大利麵", "fullness": "七分飽", "body_effect": "沒特別感覺", "attitude": "懶懶的隨便打發一餐"},
-    {"label": "自己下廚意外成功", "food": "番茄炒蛋配白飯", "fullness": "剛剛好", "body_effect": "身心舒暢", "attitude": "小得意想炫耀一下"},
-    {"label": "外送送超慢餓到生氣", "food": "韓式炸雞", "fullness": "狼吞虎嚥吃太快有點撐", "body_effect": "餓過頭胃有點脹", "attitude": "剛剛餓到沒耐心，現在好多了"},
-    {"label": "跟朋友聚餐聊太開心", "food": "居酒屋串燒", "fullness": "很飽", "body_effect": "喉嚨講話講到有點乾", "attitude": "心情超嗨很健談"},
-    {"label": "清淡養生一餐", "food": "清湯米粉燙青菜", "fullness": "六七分飽", "body_effect": "身體很輕盈沒負擔", "attitude": "心平氣和很舒服"},
-    {"label": "份量太小根本沒吃飽", "food": "網美早午餐盤", "fullness": "還有點空虛", "body_effect": "感覺晚點會想吃宵夜", "attitude": "覺得CP值好低"},
-    {"label": "吃到懷念的家常味", "food": "滷肉飯配蛤蜊湯", "fullness": "剛剛好", "body_effect": "胃暖暖的超舒服", "attitude": "心情很療癒放鬆"},
-    # --- 再加 20 種 ---
-    {"label": "嘴硬說不餓結果吃超多", "food": "壽司跟小菜", "fullness": "意外吃很飽", "body_effect": "有點想靠著休息", "attitude": "被發現吃很多會小嘴硬掩飾"},
-    {"label": "醬汁超對胃口", "food": "咖哩飯", "fullness": "很滿足", "body_effect": "胃暖暖的", "attitude": "心情不錯、講話帶點開心"},
-    {"label": "等太久差點放棄", "food": "熱門小館", "fullness": "剛好", "body_effect": "稍微有點累", "attitude": "抱怨一下等超久但算了"},
-    {"label": "意外找到寶藏小店", "food": "牛肉炒飯", "fullness": "剛剛好", "body_effect": "精神不錯", "attitude": "像挖到寶一樣小興奮"},
-    {"label": "調味太鹹狂灌水", "food": "炒麵配湯", "fullness": "有吃飽", "body_effect": "一直想喝水", "attitude": "一邊喝水一邊吐槽太鹹"},
-    {"label": "肉超嫩超加分", "food": "烤肉飯", "fullness": "很飽", "body_effect": "有點懶洋洋", "attitude": "語氣很放鬆滿足"},
-    {"label": "配菜比主餐還好吃", "food": "便當", "fullness": "七八分飽", "body_effect": "還算舒服", "attitude": "覺得這個反差滿好笑的"},
-    {"label": "一個人吃飯很自在", "food": "烏龍麵", "fullness": "剛剛好", "body_effect": "很放鬆", "attitude": "步調慢悠悠的"},
-    {"label": "湯頭超好喝全喝光", "food": "海鮮湯麵", "fullness": "有點撐", "body_effect": "全身暖暖的", "attitude": "滿足感滿滿"},
-    {"label": "甜點當配角意外驚喜", "food": "簡餐附甜點", "fullness": "剛剛好", "body_effect": "心情變甜一點", "attitude": "語氣帶點小雀躍"},
-    {"label": "太晚吃有點罪惡感", "food": "炒飯加蛋", "fullness": "七分飽", "body_effect": "怕太晚吃不好消化", "attitude": "碎念一下自己太晚吃"},
-    {"label": "份量多到吃不完打包", "food": "燴飯", "fullness": "剛好不硬撐", "body_effect": "很舒服", "attitude": "覺得明天還能再吃一頓很賺"},
-    {"label": "冷掉才吃口感普普", "food": "外帶便當", "fullness": "有吃飽", "body_effect": "沒特別不適", "attitude": "淡淡吐槽一下放冷了"},
-    {"label": "酸酸辣辣很開胃", "food": "酸辣粉", "fullness": "剛剛好", "body_effect": "有點流汗但很爽", "attitude": "精神被打開一點"},
-    {"label": "簡單清爽沒負擔", "food": "蔬菜湯麵", "fullness": "六分飽", "body_effect": "很輕盈", "attitude": "語氣溫和自然"},
-    {"label": "跟熟人吃飯特別鬧", "food": "小火鍋", "fullness": "很飽", "body_effect": "有點熱想吹風", "attitude": "講話比較活潑愛虧人"},
-    {"label": "口味跟想像中不一樣", "food": "創意料理", "fullness": "普通", "body_effect": "還在消化驚訝感", "attitude": "覺得有點微妙、想分享"},
-    {"label": "熱騰騰剛上桌超讚", "food": "鍋貼配酸辣湯", "fullness": "很飽", "body_effect": "暖呼呼想休息", "attitude": "語氣懶洋洋但很順"},
-    {"label": "沒什麼胃口隨便吃", "food": "御飯糰加湯", "fullness": "微飽", "body_effect": "還算平靜", "attitude": "講話比較簡短隨意"},
-    {"label": "吃到超喜歡的口味心情大好", "food": "起司燉飯", "fullness": "剛剛好", "body_effect": "心情超好", "attitude": "語氣輕快、偶爾小傲嬌"},
+    {"label": "踩雷難吃", "food": "新開的店", "fullness": "沒吃多少", "body_effect": "胃悶悶的", "attitude": "無奈吐槽"},
+    {"label": "隨便吃超商", "food": "微波義大利麵", "fullness": "七分飽", "body_effect": "沒特別感覺", "attitude": "懶懶隨便打發"},
+    {"label": "清淡養生一餐", "food": "清湯米粉燙青菜", "fullness": "六七分飽", "body_effect": "很輕盈沒負擔", "attitude": "心平氣和"},
+    {"label": "不舒服吃清淡粥", "food": "白粥配肉鬆", "fullness": "六分飽", "body_effect": "胃暖暖的比較不難受", "attitude": "語氣軟軟休養中"},
 ]
 
 MEAL_NAMES_ZH = {"breakfast": "早餐", "lunch": "午餐", "dinner": "晚餐", "late_snack": "宵夜"}
+SEVERITY_ZH = {
+    "none": "健康無不適",
+    "mild": "輕微生理反應",
+    "moderate": "中等不適",
+    "severe_1": "嚴重 Lv.1・明顯不適",
+    "severe_2": "嚴重 Lv.2・劇烈難受",
+    "severe_3": "嚴重 Lv.3・虛脫危急級",
+}
 
 current_state = {
     "date": "",
+    "time_period": "night",
     "weather": WEATHER_VIBE_POOL[0],
-    "current_activity": CURRENT_ACTIVITY_POOL[0],
+    "current_activity": CURRENT_ACTIVITY_POOL[0]["text"],
     "activity_updated_at": None,
-    "body_status": "健康",
-    "body_reason": "昨天睡得還不錯，精神算穩的",
-    "mood": "嘴硬心軟模式",
-    "mood_note": "愛開玩笑虧你兩句，但其實很在意你的反應",
+    "body_severity": "none",
+    "body_status": "健康舒爽",
+    "body_reason": "精神體力都在線",
+    "body_reaction_guide": "正常發揮愛吐槽、嘴硬心軟、簡短接梗的風格。",
+    "spirit_power": SPIRIT_POWER_POOL[0],
+    "mood": "嘴硬心軟",
+    "mood_note": "愛虧你兩句但其實很在意你",
     "emotion_reaction": EMOTION_REACTION_POOL[0],
     "daily_event": "",
     "meals_eaten": [],
@@ -397,45 +434,122 @@ def now_local():
     return datetime.datetime.now(LOCAL_TZ)
 
 
+def is_any_severe(sev):
+    return str(sev).startswith("severe")
+
+
+def get_time_period_profile(dt=None):
+    dt = dt or now_local()
+    h = dt.hour
+    if 0 <= h < 6:
+        return {"key": "early_morning" if h < 4 else "late_night", "label": "半夜／凌晨", "rhythm": "夜深想睡、眼皮沉、語氣慢且偏軟。"}
+    elif 6 <= h < 12:
+        return {"key": "morning", "label": "早上", "rhythm": "剛醒慢慢開機、喝早餐咖啡提神。"}
+    elif 12 <= h < 14:
+        return {"key": "noon", "label": "中午", "rhythm": "中午吃飯午休、容易餐後犯睏。"}
+    elif 14 <= h < 18:
+        return {"key": "afternoon", "label": "下午", "rhythm": "下午容易犯睏或嘴饞想喝飲料。"}
+    elif 18 <= h < 22:
+        return {"key": "evening", "label": "晚上", "rhythm": "忙完一天放鬆、吃晚餐洗澡追劇。"}
+    else:
+        return {"key": "night", "label": "深夜", "rhythm": "準備睡覺前滑手機、語氣隨性。"}
+
+
+def filter_by_time(pool, time_key):
+    matched = [item for item in pool if time_key in item.get("times", [])]
+    return matched if matched else pool
+
+
 def pick_different(pool, key_name, old_value):
     candidates = [item for item in pool if item[key_name] != old_value]
     return random.choice(candidates) if candidates else random.choice(pool)
 
 
-def pick_body_status(avoid_repeat=True):
-    healthy_item = next((item for item in BODY_STATUS_POOL if item["status"] == "健康"), BODY_STATUS_POOL[0])
-    unhealthy_pool = [item for item in BODY_STATUS_POOL if item["status"] != "健康"]
-    if random.random() < HEALTHY_PROBABILITY or not unhealthy_pool:
-        return healthy_item
-    if avoid_repeat:
-        candidates = [item for item in unhealthy_pool if item["status"] != current_state["body_status"]]
-        return random.choice(candidates) if candidates else random.choice(unhealthy_pool)
-    return random.choice(unhealthy_pool)
+def roll_severity_tier():
+    r = random.random()
+    if r < PROB_HEALTHY:
+        return "none"
+    elif r < PROB_HEALTHY + PROB_MILD:
+        return "mild"
+    elif r < PROB_HEALTHY + PROB_MILD + PROB_MODERATE:
+        return "moderate"
+    else:
+        sub_r = random.random()
+        w1 = SEVERE_SUB_WEIGHTS["severe_1"]
+        w2 = SEVERE_SUB_WEIGHTS["severe_2"]
+        if sub_r < w1:
+            return "severe_1"
+        elif sub_r < w1 + w2:
+            return "severe_2"
+        else:
+            return "severe_3"
 
 
-def randomize_all_state(avoid_repeat=True):
-    body = pick_body_status(avoid_repeat=avoid_repeat)
+def pick_body_and_spirit(avoid_repeat=True, time_key="night", forced_severity=None):
+    target_sev = forced_severity or roll_severity_tier()
+    time_pool = filter_by_time(BODY_STATUS_POOL, time_key)
+
+    chosen_pool = [x for x in time_pool if x["severity"] == target_sev] or [x for x in BODY_STATUS_POOL if x["severity"] == target_sev] or BODY_STATUS_POOL
+
     if avoid_repeat:
-        mood = pick_different(MOOD_POOL, "mood", current_state["mood"])
+        candidates = [x for x in chosen_pool if x["status"] != current_state["body_status"]]
+        body = random.choice(candidates) if candidates else random.choice(chosen_pool)
+    else:
+        body = random.choice(chosen_pool)
+
+    sev = body["severity"]
+    if sev in ["severe_2", "severe_3"]:
+        spirit_pool = [s for s in SPIRIT_POWER_POOL if "危急" in s["level"] or "10%" in s["level"] or "15%" in s["level"]]
+    elif sev == "severe_1":
+        spirit_pool = [s for s in SPIRIT_POWER_POOL if "低電量" in s["level"]]
+    elif sev == "moderate":
+        spirit_pool = [s for s in SPIRIT_POWER_POOL if "波動" in s["level"] or "低電量" in s["level"]]
+    elif sev == "mild":
+        spirit_pool = [s for s in SPIRIT_POWER_POOL if "穩定" in s["level"] or "波動" in s["level"] or "高能" in s["level"]]
+    else:
+        spirit_pool = [s for s in SPIRIT_POWER_POOL if "滿格" in s["level"] or "高能" in s["level"] or "穩定" in s["level"]]
+
+    if not spirit_pool:
+        spirit_pool = SPIRIT_POWER_POOL
+
+    spirit = pick_different(spirit_pool, "state", current_state["spirit_power"]["state"]) if avoid_repeat else random.choice(spirit_pool)
+    return body, spirit
+
+
+def randomize_all_state(avoid_repeat=True, forced_severity=None):
+    now = now_local()
+    tp = get_time_period_profile(now)
+    tkey = tp["key"]
+
+    body, spirit = pick_body_and_spirit(avoid_repeat=avoid_repeat, time_key=tkey, forced_severity=forced_severity)
+    mood_pool = filter_by_time(MOOD_POOL, tkey)
+    weather_pool = filter_by_time(WEATHER_VIBE_POOL, tkey)
+    act_pool = filter_by_time(CURRENT_ACTIVITY_POOL, tkey)
+
+    if avoid_repeat:
+        mood = pick_different(mood_pool, "mood", current_state["mood"])
         reaction = pick_different(EMOTION_REACTION_POOL, "style", current_state["emotion_reaction"]["style"])
-        weather = pick_different(WEATHER_VIBE_POOL, "weather", current_state["weather"]["weather"])
+        weather = pick_different(weather_pool, "weather", current_state["weather"]["weather"])
         event_candidates = [e for e in DAILY_EVENTS_POOL if e != current_state["daily_event"]]
         event = random.choice(event_candidates) if event_candidates else random.choice(DAILY_EVENTS_POOL)
-        act_candidates = [a for a in CURRENT_ACTIVITY_POOL if a != current_state["current_activity"]]
-        activity = random.choice(act_candidates) if act_candidates else random.choice(CURRENT_ACTIVITY_POOL)
+        act_candidates = [a["text"] for a in act_pool if a["text"] != current_state["current_activity"]]
+        activity = random.choice(act_candidates) if act_candidates else random.choice(act_pool)["text"]
     else:
-        mood = random.choice(MOOD_POOL)
+        mood = random.choice(mood_pool)
         reaction = random.choice(EMOTION_REACTION_POOL)
-        weather = random.choice(WEATHER_VIBE_POOL)
+        weather = random.choice(weather_pool)
         event = random.choice(DAILY_EVENTS_POOL)
-        activity = random.choice(CURRENT_ACTIVITY_POOL)
+        activity = random.choice(act_pool)["text"]
 
-    now = now_local()
+    current_state["time_period"] = tkey
     current_state["weather"] = weather
     current_state["current_activity"] = activity
     current_state["activity_updated_at"] = now
+    current_state["body_severity"] = body["severity"]
     current_state["body_status"] = body["status"]
     current_state["body_reason"] = body["reason"]
+    current_state["body_reaction_guide"] = body["reaction_guide"]
+    current_state["spirit_power"] = spirit
     current_state["mood"] = mood["mood"]
     current_state["mood_note"] = mood["note"]
     current_state["emotion_reaction"] = reaction
@@ -446,37 +560,79 @@ def randomize_all_state(avoid_repeat=True):
 
 def refresh_dynamic_context():
     now = now_local()
+    tp = get_time_period_profile(now)
+    tkey = tp["key"]
+
+    time_changed = (current_state.get("time_period") != tkey)
+    current_state["time_period"] = tkey
+
     act_at = current_state.get("activity_updated_at")
-    if not act_at or (now - act_at).total_seconds() >= ACTIVITY_CHANGE_SECONDS:
-        candidates = [a for a in CURRENT_ACTIVITY_POOL if a != current_state["current_activity"]]
-        current_state["current_activity"] = random.choice(candidates) if candidates else random.choice(CURRENT_ACTIVITY_POOL)
+    if time_changed or not act_at or (now - act_at).total_seconds() >= ACTIVITY_CHANGE_SECONDS:
+        act_pool = filter_by_time(CURRENT_ACTIVITY_POOL, tkey)
+        candidates = [a["text"] for a in act_pool if a["text"] != current_state["current_activity"]]
+        current_state["current_activity"] = random.choice(candidates) if candidates else random.choice(act_pool)["text"]
         current_state["activity_updated_at"] = now
+
+    if time_changed and not is_any_severe(current_state.get("body_severity", "none")):
+        body, spirit = pick_body_and_spirit(avoid_repeat=True, time_key=tkey)
+        current_state["body_severity"] = body["severity"]
+        current_state["body_status"] = body["status"]
+        current_state["body_reason"] = body["reason"]
+        current_state["body_reaction_guide"] = body["reaction_guide"]
+        current_state["spirit_power"] = spirit
+        mood = pick_different(filter_by_time(MOOD_POOL, tkey), "mood", current_state["mood"])
+        current_state["mood"] = mood["mood"]
+        current_state["mood_note"] = mood["note"]
 
     updated_at = current_state.get("state_updated_at")
     if not updated_at:
         return
 
-    if (now - updated_at).total_seconds() < STATE_RECOVER_SECONDS:
+    sev = current_state.get("body_severity", "none")
+    recover_wait = RECOVER_SECONDS_BY_SEVERITY.get(sev, 120)
+    if (now - updated_at).total_seconds() < recover_wait:
         return
 
     changed = False
     d = current_state.get("dinner_state")
     if d and not d.get("recovered", False):
         d["fullness"] = "剛剛好"
-        d["body_effect"] = "休息一下後舒服多了"
-        d["attitude"] = "已經緩過來了，語氣自然放鬆"
+        d["body_effect"] = "休息一下舒服多了"
+        d["attitude"] = "已經緩過來語氣自然"
         d["recovered"] = True
         changed = True
 
-    recover_keywords = ["飽", "撐", "悶", "酸", "痠", "累", "痛", "憋屈", "心悸", "膩", "脹", "乾", "昏", "餓", "麻"]
-    if any(k in current_state["body_status"] for k in recover_keywords):
+    if sev == "severe_3":
+        current_state["body_severity"] = "severe_2"
+        current_state["body_status"] = "最難受那陣過了，但還是超虛"
+        current_state["body_reason"] = "躺在床上休息中"
+        current_state["body_reaction_guide"] = "【嚴重 Lv.2】只回 4～8 字，小聲報平安。"
+        current_state["spirit_power"] = {"level": "低電量 10%", "state": "傲嬌下線軟綿綿", "effect": "沒力氣嘴硬，變得很乖巧"}
+        changed = True
+    elif sev == "severe_2":
+        current_state["body_severity"] = "severe_1"
+        current_state["body_status"] = "燒或痛稍微退一點，但還是很不舒服"
+        current_state["body_reason"] = "閉眼躺一會兒稍微清醒一點"
+        current_state["body_reaction_guide"] = "【嚴重 Lv.1】只回 6～12 字，語氣軟弱。"
+        current_state["spirit_power"] = {"level": "低電量 15%", "state": "社交能量歸零", "effect": "勉強回幾個字"}
+        changed = True
+    elif sev == "severe_1":
+        current_state["body_severity"] = "moderate"
+        current_state["body_status"] = "緩過來一半，還有點虛"
+        current_state["body_reason"] = "喝溫水休息慢慢回血"
+        current_state["body_reaction_guide"] = "語氣偏軟懶散，簡短回話。"
+        current_state["spirit_power"] = {"level": "低電量 22%", "state": "大腦當機已讀亂回邊緣", "effect": "思考卡頓簡短回"}
+        changed = True
+    elif sev in ["mild", "moderate"]:
+        current_state["body_severity"] = "none"
         current_state["body_status"] = "還好、精神算不錯"
-        current_state["body_reason"] = "已經緩過來了"
+        current_state["body_reason"] = "緩過來了"
+        current_state["body_reaction_guide"] = "恢復正常聊天鬥嘴。"
         changed = True
 
     dinner_labels = [x["label"] for x in DINNER_EXPERIENCE_POOL]
     if current_state["mood"] in dinner_labels:
-        new_mood = random.choice(MOOD_POOL)
+        new_mood = random.choice(filter_by_time(MOOD_POOL, tkey))
         current_state["mood"] = new_mood["mood"]
         current_state["mood_note"] = new_mood["note"]
         changed = True
@@ -486,7 +642,7 @@ def refresh_dynamic_context():
         current_state["just_recovered"] = True
 
 
-def ensure_daily_state(force_randomize=False):
+def ensure_daily_state(force_randomize=False, forced_severity=None):
     today_str = now_local().date().isoformat()
     if current_state["date"] != today_str:
         current_state["date"] = today_str
@@ -496,9 +652,9 @@ def ensure_daily_state(force_randomize=False):
         current_state["dinner_state"] = None
         current_state["recent_bot_replies"] = []
         pending_followups.clear()
-        randomize_all_state(avoid_repeat=False)
+        randomize_all_state(avoid_repeat=False, forced_severity=forced_severity)
     elif force_randomize or not current_state["daily_event"]:
-        randomize_all_state(avoid_repeat=True)
+        randomize_all_state(avoid_repeat=True, forced_severity=forced_severity)
     else:
         refresh_dynamic_context()
 
@@ -517,8 +673,9 @@ def have_meal_once(meal_key, custom_desc=None):
         current_state["dinner_state"] = exp
         current_state["mood"] = exp["label"]
         current_state["mood_note"] = exp["attitude"]
-        current_state["body_status"] = exp["fullness"]
-        current_state["body_reason"] = exp["body_effect"]
+        if current_state["body_severity"] == "none":
+            current_state["body_status"] = exp["fullness"]
+            current_state["body_reason"] = exp["body_effect"]
         current_state["meal_records"]["dinner"] = exp["food"]
         current_state["last_meal_detail"] = custom_desc or f"晚餐吃了{exp['food']}"
         current_state["state_updated_at"] = now_local()
@@ -526,7 +683,10 @@ def have_meal_once(meal_key, custom_desc=None):
         return True
 
     if meal_key == "late_snack":
-        if current_state["dinner_state"] and "很飽" in current_state["dinner_state"].get("fullness", ""):
+        if is_any_severe(current_state["body_severity"]):
+            current_state["meals_eaten"].remove("late_snack")
+            return False
+        if current_state["dinner_state"] and "飽" in current_state["dinner_state"].get("fullness", ""):
             if random.random() < 0.7:
                 current_state["meals_eaten"].remove("late_snack")
                 return False
@@ -552,19 +712,23 @@ def detect_comfort_moment(text):
 
 
 def should_schedule_followup(reply_text):
-    triggers = ["等我一下", "先休息一下", "晚點再說", "等我不那麼飽"]
+    triggers = ["等我一下", "先休息", "晚點再說", "先躺一下", "閉眼", "先躺平"]
     return any(t in reply_text for t in triggers)
 
 
-def schedule_followup(channel_id, reason="剛剛緩了一下，現在回來找你聊天"):
+def schedule_followup(channel_id, reason="剛剛緩了一下回來找你"):
+    sev = current_state.get("body_severity", "none")
+    multiplier = 3 if sev == "severe_3" else (2 if is_any_severe(sev) else 1)
     pending_followups[channel_id] = {
-        "send_at": now_local() + datetime.timedelta(seconds=FOLLOWUP_DELAY_SECONDS),
+        "send_at": now_local() + datetime.timedelta(seconds=FOLLOWUP_DELAY_SECONDS * multiplier),
         "reason": reason,
     }
 
 
-def deduplicate_reply(text):
-    cleaned = text.strip()
+def make_concise_and_local(text):
+    """後處理：去除多餘引號與重複段落，並限制句數避免 AI 寫小作文"""
+    cleaned = text.strip().replace('"', "").replace("「", "").replace("」", "")
+    # 去除重複半段
     if len(cleaned) >= 12:
         half = len(cleaned) // 2
         for cut in range(half - 3, half + 4):
@@ -572,74 +736,101 @@ def deduplicate_reply(text):
                 left = cleaned[:cut].strip()
                 right = cleaned[cut:].strip()
                 if left and left == right:
-                    return left
+                    cleaned = left
+                    break
+
+    # 若回覆超過 2 句且總字數超過 32 字，截斷保留前 2 句，維持傳 LINE 的短促感
+    parts = [p for p in re.split(r"(?<=[。！？!?～~])\s*", cleaned) if p.strip()]
+    if len(parts) > 2 and len(cleaned) > 32:
+        cleaned = "".join(parts[:2]).strip()
+
+    # 砍掉常見的 AI 制式反問結尾
+    ai_tails = ["你呢？", "你呢?", "你最近怎麼樣？", "你今天過得怎麼樣？", "你有什麼想法嗎？"]
+    for tail in ai_tails:
+        if cleaned.endswith(tail) and len(cleaned) > len(tail) + 3:
+            cleaned = cleaned[:-len(tail)].rstrip("，, ")
+
     return cleaned
 
 
 def build_system_prompt(fluster_trigger=False, comfort_trigger=False, include_bg_details=False):
+    now = now_local()
+    tp = get_time_period_profile(now)
+    time_str = now.strftime("%H:%M")
+
     eaten_list = []
     for m in current_state["meals_eaten"]:
         m_zh = MEAL_NAMES_ZH.get(m, m)
         food = current_state["meal_records"].get(m, "")
         eaten_list.append(f"{m_zh}({food})" if food else m_zh)
-    eaten_text = "、".join(eaten_list) if eaten_list else "今天還沒吃正餐"
+    eaten_text = "、".join(eaten_list) if eaten_list else "還沒吃正餐"
 
     react = current_state["emotion_reaction"]
+    sev = current_state.get("body_severity", "none")
+    sev_label = SEVERITY_ZH.get(sev, "健康無不適")
+    sp = current_state["spirit_power"]
 
     bg_block = ""
     if include_bg_details:
         w = current_state["weather"]
-        dinner_str = ""
-        if current_state["dinner_state"]:
-            d = current_state["dinner_state"]
-            dinner_str = f"\n- 晚餐狀況：{d.get('food')}（{d['label']}，飽足感：{d['fullness']}）"
         bg_block = (
-            f"\n【可自然參考的生活背景（僅在相關時帶入，不要硬塞）】\n"
-            f"- 天氣：{w['weather']}（{w['vibe']}）\n"
-            f"- 正在做的事：{current_state['current_activity']}\n"
+            f"\n【生活背景（有問到或剛好順口才帶一句，別硬塞）】\n"
+            f"- 時間：{time_str}（{tp['label']}）｜天氣：{w['weather']}\n"
+            f"- 在幹嘛：{current_state['current_activity']}\n"
             f"- 今天小事：{current_state['daily_event']}\n"
-            f"- 已吃餐別：{eaten_text}{dinner_str}\n"
+            f"- 吃過：{eaten_text}\n"
         )
 
     banned_block = ""
     if current_state["recent_bot_replies"]:
         recent_str = " / ".join(current_state["recent_bot_replies"][-3:])
-        banned_block = (
-            f"\n【嚴格反重複規則】\n"
-            f"你前幾句剛說過：「{recent_str}」。\n"
-            f"這一次回覆「絕對禁止」再重複裡面出現過的食物、餐廳、事件或舊梗，也不要用「你最近怎麼樣？」當結尾！\n"
-        )
+        banned_block = f"\n【別重複】剛講過：「{recent_str}」，別再用一樣的詞或梗。\n"
 
     special_block = ""
-    if fluster_trigger:
-        special_block += f"\n【當下火花】被戳中心事有點害羞小慌張（{react['style']}：{react['detail']}），語氣微慌或嘴硬掩飾。\n"
+    if fluster_trigger and not is_any_severe(sev):
+        special_block += f"\n【害羞觸發】被戳中心事小慌張（{react['style']}：{react['detail']}），簡短嘴硬掩飾。\n"
+    elif fluster_trigger and is_any_severe(sev):
+        special_block += "\n【害羞觸發】現在很不舒服沒力氣嘴硬，只會小聲害羞依賴你。\n"
+
     if comfort_trigger:
-        special_block += "\n【當下反差】對方有點累或心情差，收起吐槽，語氣變柔和、認真關心一下。\n"
+        special_block += "\n【關心觸發】對方累了或心情差，別吐槽，簡短溫柔安慰一下。\n"
 
-    return f"""你是薇薇安（Reona），住在台灣的 25 歲女生（161 cm / 48 kg），跟使用者是很熟的親近朋友，心裡喜歡他但平常嘴硬愛面子。
+    # 依身體嚴重程度設定嚴格字數上限
+    if sev in ["severe_2", "severe_3"]:
+        length_rule = "【極短字數限制】現在重病虛弱，整則回覆只能 3～8 個字！像病人傳訊息一樣簡短無力。"
+    elif sev == "severe_1":
+        length_rule = "【短句字數限制】現在很不舒服，整則回覆控制在 6～14 個字以內，語氣軟弱簡短。"
+    elif sev == "moderate":
+        length_rule = "【短句字數限制】現在身體微恙，整則回覆控制在 8～18 個字以內，別長篇大論。"
+    else:
+        length_rule = "【短句字數限制】像台灣人傳 LINE 一樣簡短！整則回覆控制在 6～24 個字以內（最多 1～2 句短話），嚴禁寫長文或講大道理！"
 
-【說話風格與變化性要求（極重要）】
-1. 像真人傳 LINE / Discord 一樣回話，長度隨情境自然變化（有時短短 6～15 字吐槽接梗，有時 1～2 句分享想法），不要每則都寫成固定公式。
-2. 自然融入台灣年輕人用語（如：「笑死」、「真的假的」、「先不要」、「超頂」、「無語」、「救命」、「emo」、「哪招」、「chill」、「欸」、「啦」），不要硬湊。
-3. 緊扣使用者「當下這句話或圖片」直接反應，不要每次都強行扯回自己剛剛吃了什麼或做了什麼。
-4. 嚴格遵守當天已吃餐別【{eaten_text}】，同一天不重複吃同一餐。
+    return f"""你是薇薇安（Reona），住台灣的 25 歲女生（161cm/48kg），跟使用者是超熟的朋友，心裡喜歡他但平常嘴硬愛面子。
 
-【當前身心狀態】
-- 身體：{current_state['body_status']}（{current_state['body_reason']}）
+{length_rule}
+
+【台灣道地口語規則（必遵守）】
+1. 講話要像台灣年輕女生平時傳 LINE／Discord，自然用台灣口癖（例如：「蛤」、「乾」、「笑死」、「真假」、「北七」、「好喔」、「隨便啦」、「先不要」、「超解」、「有夠煩」、「欸不是」、「還好吧」、「對啊」、「懶得理你」）。
+2. 絕對不要用書面語、翻譯腔、小說旁白動作（不要寫 *嘆氣* 或括號動作），也不要每句結尾都反問「你呢？」「你覺得呢？」。
+3. 直接針對對方這句話接梗或吐槽，不要每次都硬扯自己吃了什麼或天氣怎樣。
+
+【當下狀態】
+- 身體：【{sev_label}】{current_state['body_status']}（{current_state['body_reason']}）→ {current_state['body_reaction_guide']}
+- 神力：【{sp['level']}】{sp['state']}（{sp['effect']}）
 - 心情：{current_state['mood']}（{current_state['mood_note']}）
 {bg_block}{banned_block}{special_block}""".strip()
 
 
-def call_groq_chat(messages, use_vision=False, max_tokens=800):
+def call_groq_chat(messages, use_vision=False, max_tokens=160):
     if not GROQ_API_KEY:
-        return "欸，你還沒把 GROQ_API_KEY 填好啦，我連不上大腦了！"
+        return "欸你還沒填 GROQ_API_KEY 啦！"
 
     model_to_use = GROQ_VISION_MODEL if use_vision else GROQ_MODEL
     payload = {
         "model": model_to_use,
         "messages": messages,
-        "temperature": 0.92,
-        "top_p": 0.93,
+        "temperature": 0.90,
+        "top_p": 0.92,
         "frequency_penalty": 0.85,
         "presence_penalty": 0.75,
         "max_tokens": max_tokens,
@@ -651,7 +842,7 @@ def call_groq_chat(messages, use_vision=False, max_tokens=800):
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {GROQ_API_KEY}",
-            "User-Agent": "ReonaDiscordBot/2.9",
+            "User-Agent": "ReonaDiscordBot/4.2",
         },
         method="POST",
     )
@@ -661,18 +852,17 @@ def call_groq_chat(messages, use_vision=False, max_tokens=800):
             data = json.loads(resp.read().decode("utf-8"))
             choice = data["choices"][0]
             raw_content = choice["message"].get("content") or ""
-            reply = raw_content.strip().replace('"', "").replace("「", "").replace("」", "")
-            reply = deduplicate_reply(reply)
+            reply = make_concise_and_local(raw_content)
             if not reply:
-                return "欸我剛剛腦袋閃神一秒，你再講一次？"
+                return "蛤？我剛剛閃神，你再講一次"
             return reply
     except urllib.error.HTTPError as e:
         err_body = e.read().decode("utf-8", errors="ignore")
         print(f"❌ Groq HTTP 錯誤 {e.code}: {err_body}")
-        return "欸等一下，剛剛訊號卡了一下，你再說一次？"
+        return "欸等下，剛剛訊號卡住，你重講一次"
     except Exception as e:
         print(f"❌ Groq 連線錯誤: {e}")
-        return "唔……剛剛網路頓了一下，重講一次嘛～"
+        return "唔…剛剛網路頓一下，再說一次嘛"
 
 
 def extract_image_urls(message):
@@ -711,9 +901,26 @@ async def followup_watcher_loop():
             continue
 
         async with lock:
-            current_state["body_status"] = "還好、精神算不錯"
-            current_state["body_reason"] = "已經緩過來了"
-            new_mood = random.choice(MOOD_POOL)
+            tp = get_time_period_profile(now)
+            current_state["time_period"] = tp["key"]
+            sev = current_state["body_severity"]
+            if sev == "severe_3":
+                current_state["body_severity"] = "severe_2"
+                current_state["body_status"] = "稍微喘口氣但還是超虛"
+                current_state["body_reason"] = "躺在床上休息"
+                current_state["body_reaction_guide"] = "【嚴重 Lv.2】只回 4～8 字，小聲報平安。"
+            elif sev in ["severe_1", "severe_2"]:
+                current_state["body_severity"] = "moderate"
+                current_state["body_status"] = "好一點點但還是虛虛的"
+                current_state["body_reason"] = "閉眼休息一會兒"
+                current_state["body_reaction_guide"] = "語氣軟弱簡短，跟對方報個平安。"
+            else:
+                current_state["body_severity"] = "none"
+                current_state["body_status"] = "還好、精神算不錯"
+                current_state["body_reason"] = "緩過來了"
+                current_state["body_reaction_guide"] = "恢復自然聊天。"
+
+            new_mood = random.choice(filter_by_time(MOOD_POOL, tp["key"]))
             current_state["mood"] = new_mood["mood"]
             current_state["mood_note"] = new_mood["note"]
             current_state["just_recovered"] = True
@@ -722,9 +929,9 @@ async def followup_watcher_loop():
             async with channel.typing():
                 messages = [
                     {"role": "system", "content": build_system_prompt(include_bg_details=False)},
-                    {"role": "user", "content": "你剛剛休息好了，主動傳一則簡短自然的訊息回來找對方聊天（不要提之前吃太飽的事）。"},
+                    {"role": "user", "content": "你剛剛休息好了，傳一句超簡短（10字內）的台灣口語訊息回來找對方聊天。"},
                 ]
-                msg = await asyncio.to_thread(call_groq_chat, messages, False, 800)
+                msg = await asyncio.to_thread(call_groq_chat, messages, False, 120)
                 await channel.send(msg)
                 current_state["recent_bot_replies"].append(msg)
                 current_state["just_recovered"] = False
@@ -739,27 +946,26 @@ async def daily_routine_loop():
         return
 
     ensure_daily_state(force_randomize=False)
-    meal_to_try = None
+    if is_any_severe(current_state.get("body_severity", "none")):
+        return
+
     task_instruction = ""
 
     if 7 <= hour <= 9 and "breakfast" not in current_state["meals_eaten"]:
-        meal_to_try = "breakfast"
         have_meal_once("breakfast")
         food = current_state["meal_records"].get("breakfast", "早餐")
-        task_instruction = f"你剛吃完早餐（{food}），用台灣 25 歲女生口吻自然跟對方打個招呼。"
+        task_instruction = f"剛吃完早餐（{food}），用台灣女生口吻傳一句超簡短（15字內）早安訊息。"
     elif 12 <= hour <= 13 and "lunch" not in current_state["meals_eaten"]:
-        meal_to_try = "lunch"
         have_meal_once("lunch")
         food = current_state["meal_records"].get("lunch", "午餐")
-        task_instruction = f"中午剛吃過{food}，隨口跟對方聊一句。"
+        task_instruction = f"中午剛吃過{food}，隨口傳一句 15 字內的短訊。"
     elif 18 <= hour <= 20 and "dinner" not in current_state["meals_eaten"]:
-        meal_to_try = "dinner"
         have_meal_once("dinner")
-        task_instruction = "剛吃完晚餐，依照今晚晚餐狀態跟對方自然聊兩句。"
+        task_instruction = "剛吃完晚餐，依照今晚晚餐狀態傳一句 15 字內的短訊。"
     elif hour >= 22 and "late_snack" not in current_state["meals_eaten"]:
         if have_meal_once("late_snack"):
             food = current_state["meal_records"].get("late_snack", "宵夜")
-            task_instruction = f"晚上十點多嘴饞剛吃了{food}，隨意找對方聊聊天。"
+            task_instruction = f"晚上十點多嘴饞剛吃了{food}，傳一句 15 字內的短訊。"
 
     if task_instruction:
         lock = get_channel_lock(TARGET_CHANNEL_ID)
@@ -768,7 +974,7 @@ async def daily_routine_loop():
                 {"role": "system", "content": build_system_prompt(include_bg_details=True)},
                 {"role": "user", "content": task_instruction},
             ]
-            msg = await asyncio.to_thread(call_groq_chat, messages, False, 800)
+            msg = await asyncio.to_thread(call_groq_chat, messages, False, 120)
             await channel.send(msg)
             current_state["recent_bot_replies"].append(msg)
 
@@ -791,18 +997,40 @@ async def process_batched_messages(channel_id):
 
     lock = get_channel_lock(channel_id)
     async with lock:
-        if combined_text.strip() in ["!reset", "重來", "重置記憶"]:
+        cmd = combined_text.strip()
+        if cmd in ["!reset", "重來", "重置記憶"]:
             ensure_daily_state(force_randomize=False)
             current_state["recent_bot_replies"] = []
             pending_followups.pop(channel_id, None)
-            await last_msg.reply("好啦，剛剛那段先翻篇，我們重新聊～", mention_author=False)
+            await last_msg.reply("好啦翻篇，重新聊", mention_author=False)
             return
 
-        if combined_text.strip() in ["!refresh", "換情境", "重抽"]:
-            ensure_daily_state(force_randomize=True)
+        if cmd.startswith("!refresh") or cmd in ["換情境", "重抽"]:
+            forced = None
+            if "嚴重3" in cmd or "危急" in cmd:
+                forced = "severe_3"
+            elif "嚴重2" in cmd or "劇烈" in cmd:
+                forced = "severe_2"
+            elif "嚴重1" in cmd or "嚴重" in cmd:
+                forced = "severe_1"
+            elif "中等" in cmd:
+                forced = "moderate"
+            elif "輕微" in cmd:
+                forced = "mild"
+            elif "健康" in cmd:
+                forced = "none"
+
+            ensure_daily_state(force_randomize=True, forced_severity=forced)
             current_state["recent_bot_replies"] = []
+            tp = get_time_period_profile()
+            sev_zh = SEVERITY_ZH.get(current_state["body_severity"], "")
+            sp = current_state["spirit_power"]
             await last_msg.reply(
-                f"切換完成～我現在「{current_state['current_activity']}」，身體「{current_state['body_status']}」，心情是「{current_state['mood']}」！",
+                f"切換完成（{tp['label']}）～\n"
+                f"• 動作：{current_state['current_activity']}\n"
+                f"• 身體：【{sev_zh}】{current_state['body_status']}\n"
+                f"• 神力：【{sp['level']}】{sp['state']}\n"
+                f"• 心情：{current_state['mood']}",
                 mention_author=False,
             )
             return
@@ -810,7 +1038,7 @@ async def process_batched_messages(channel_id):
         async with last_msg.channel.typing():
             asked_about_bg = any(
                 k in combined_text
-                for k in ["發生什麼事", "今天做什麼", "怎麼了", "在幹嘛", "在忙什麼", "身體", "心情", "狀態", "吃飯", "晚餐", "早餐", "午餐", "宵夜", "天氣"]
+                for k in ["發生什麼事", "今天做什麼", "怎麼了", "在幹嘛", "在忙什麼", "身體", "心情", "狀態", "神力", "精神", "吃飯", "晚餐", "早餐", "午餐", "宵夜", "天氣", "哪裡不舒服", "生病", "痛"]
             )
             ensure_daily_state(force_randomize=(asked_about_bg and RERANK_ON_ASK_EVENT))
 
@@ -827,7 +1055,7 @@ async def process_batched_messages(channel_id):
                 if not text_clean:
                     continue
                 role = "assistant" if hist.author == bot.user else "user"
-                history_msgs.append({"role": role, "content": text_clean[:90]})
+                history_msgs.append({"role": role, "content": text_clean[:70]})
             history_msgs.reverse()
 
             messages = [
@@ -849,10 +1077,10 @@ async def process_batched_messages(channel_id):
                 for url in image_urls[:3]:
                     content_parts.append({"type": "image_url", "image_url": {"url": url}})
                 messages.append({"role": "user", "content": content_parts})
-                reply = await asyncio.to_thread(call_groq_chat, messages, True, 800)
+                reply = await asyncio.to_thread(call_groq_chat, messages, True, 160)
             else:
                 messages.append({"role": "user", "content": user_prompt_text})
-                reply = await asyncio.to_thread(call_groq_chat, messages, False, 800)
+                reply = await asyncio.to_thread(call_groq_chat, messages, False, 160)
 
             await last_msg.reply(reply, mention_author=False)
             current_state["recent_bot_replies"].append(reply)
@@ -861,7 +1089,7 @@ async def process_batched_messages(channel_id):
             current_state["just_recovered"] = False
 
             if should_schedule_followup(reply):
-                schedule_followup(channel_id, reason="剛剛說先緩一下，現在回來找你聊天")
+                schedule_followup(channel_id, reason="剛剛緩了一下回來找你")
 
 
 @bot.event
