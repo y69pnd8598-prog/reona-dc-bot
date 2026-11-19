@@ -1,31 +1,57 @@
-name: Run Reona Discord Bot
+name: Reona 24/7 Cloud Runner
 
 on:
+  # 1. 允許手動點擊 Run workflow 啟動
   workflow_dispatch:
+  # 2. 接收 Python 程式跑滿 5 小時 45 分時發出的「無縫接力」訊號
+  repository_dispatch:
+    types: [relay_reona]
+  # 3. 保底排程：萬一遇到 GitHub 伺服器異常中斷，每 6 小時自動補位重啟
   schedule:
-    # 每天 UTC 09:00（雪梨時間晚上 8 點左右）自動上線陪聊 3 小時
-    - cron: "0 9 * * *"
+    - cron: '15 */6 * * *'
+
+# 賦予自動把 reona_memory.json 存回倉庫與觸發下一個 Job 的權限
+permissions:
+  contents: write
 
 jobs:
-  run-bot:
+  run-reona:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+    # 避免兩個分身同時重複上線搶話（取消舊的或排隊機制）
+    concurrency:
+      group: reona-bot-instance
+      cancel-in-progress: false
 
-      - name: Set up Python
+    steps:
+      - name: 拉取最新程式碼與記憶檔
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 設定 Python 3.11 環境
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
+          cache: 'pip'
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+      - name: 安裝依賴套件
+        run: |
+          pip install -U discord.py groq aiohttp tzdata
 
-      - name: Run Discord Bot
+      - name: 啟動 Reona（含 5h45m 自動接力與記憶同步）
         env:
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
-          TARGET_CHANNEL_ID: ${{ secrets.TARGET_CHANNEL_ID }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          GROQ_MODEL: ${{ secrets.GROQ_MODEL }}
-        run: python reona_dc_bot.py
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          python bot.py
+
+      - name: 同步最新記憶檔回倉庫
+        if: always()
+        run: |
+          git config user.name "Reona-Memory-Bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add reona_memory.json
+          git commit -m "chore: sync Reona memory & state [skip ci]" || exit 0
+          git push
