@@ -606,7 +606,7 @@ async def generate_reona_reply(user_text: str, image_url: str | None = None, pro
         schedule_causal_aftermath(reply, now.timestamp())
         return reply
 
-   except Exception as e:
+    except Exception as e:
         print(f"[Groq API Error] {e}", flush=True)
         return f"唔…訊號卡住了（原因：{str(e)[:80]}）"
 
