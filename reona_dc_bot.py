@@ -23,12 +23,12 @@ DEFAULT_CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
 
 PREFERRED_TEXT_MODELS = [
     os.getenv("GROQ_TEXT_MODEL", "").strip(),
+    "qwen/qwen3.8-27b",
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
     "llama-3.3-70b-versatile",
     "llama-3.1-8b-instant",
-    "llama3-70b-8192",
-    "llama3-8b-8192",
-    "gemma2-9b-it",
-    "qwen/qwen3-32b",
+    "allam-2-7b",
 ]
 PREFERRED_TEXT_MODELS = [m for m in PREFERRED_TEXT_MODELS if m]
 
@@ -40,7 +40,7 @@ PREFERRED_VISION_MODELS = [
 ]
 PREFERRED_VISION_MODELS = [m for m in PREFERRED_VISION_MODELS if m]
 
-TEXT_MODEL = PREFERRED_TEXT_MODELS[0] if PREFERRED_TEXT_MODELS else "llama-3.1-8b-instant"
+TEXT_MODEL = PREFERRED_TEXT_MODELS[0] if PREFERRED_TEXT_MODELS else "qwen/qwen3.8-27b"
 VISION_MODEL = PREFERRED_VISION_MODELS[0] if PREFERRED_VISION_MODELS else "meta-llama/llama-4-scout-17b-16e-instruct"
 AVAILABLE_TEXT_MODELS = list(PREFERRED_TEXT_MODELS)
 
@@ -215,7 +215,10 @@ async def refresh_groq_models() -> None:
 
         chat_candidates = [
             mid for mid in model_ids
-            if not any(bad in mid.lower() for bad in ["whisper", "guard", "tts", "playai", "distil-whisper"])
+            if not any(
+                bad in mid.lower()
+                for bad in ["whisper", "guard", "safeguard", "tts", "playai", "distil-whisper", "orpheus"]
+            )
         ]
 
         matched_text = [m for m in PREFERRED_TEXT_MODELS if m in model_ids]
@@ -336,8 +339,16 @@ async def generate_reona_reply(
                     err_str = str(model_err)
                     print(f"[Model Candidate Failed] {candidate_model} -> {err_str[:120]}", flush=True)
                     if any(
-                        token in err_str
-                        for token in ["404", "model_not_found", "does not exist", "decommissioned"]
+                        token in err_str.lower()
+                        for token in [
+                            "404",
+                            "model_not_found",
+                            "does not exist",
+                            "decommissioned",
+                            "model_terms_required",
+                            "terms acceptance",
+                            "400",
+                        ]
                     ):
                         continue
                     raise
