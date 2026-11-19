@@ -9,7 +9,6 @@ import json
 import urllib.error
 
 # ================= 環境變數設定 =================
-# 雲端部署時請保持空字串 ""，金鑰放在 GitHub Secrets 或本機環境變數
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "")
 TARGET_CHANNEL_ID = int(os.getenv("TARGET_CHANNEL_ID", "1571035253974237219"))
 
@@ -20,10 +19,12 @@ GROQ_VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "meta-llama/llama-4-scout-17b
 # 本地時間時區（預設 UTC+8 台灣時間；若想用雪梨夏令時間可改為 timezone(timedelta(hours=11))）
 LOCAL_TZ = datetime.timezone(datetime.timedelta(hours=8))
 
-# 狀態抽取規則設定
+# 狀態與時間衰減規則設定
 RERANK_ON_ASK_EVENT = False
 HEALTHY_PROBABILITY = 0.72
 DEBOUNCE_SECONDS = 1.6
+STATE_RECOVER_SECONDS = 90    # 特殊狀態（如吃太飽、胃悶、小氣噗噗）經過幾秒後自動緩解（測試設 90 秒，日常可設 1800）
+FOLLOWUP_DELAY_SECONDS = 45   # 她說「等一下／先緩緩」後，幾秒鐘主動傳訊息回來找你
 # ===============================================
 
 intents = discord.Intents.default()
@@ -49,7 +50,7 @@ MOOD_POOL = [
     {"mood": "心裡有點小鹿亂撞", "note": "不知道為什麼今天特別在意對方的話，容易小害羞"},
 ]
 
-# 3. 感情與害羞慌張反應池（遇到直球、誇獎、關心或戳中心事時可自然帶入）
+# 3. 感情與害羞慌張反應池
 EMOTION_REACTION_POOL = [
     {
         "style": "害羞小慌張",
@@ -83,7 +84,7 @@ DAILY_EVENTS_POOL = [
     "今天原本想把事情做完，結果一滑手機就過了大半天，有點小罪惡感",
 ]
 
-# 5. 晚餐體驗變數池（影響飽足感、身體反應與當下態度）
+# 5. 晚餐體驗變數池
 DINNER_EXPERIENCE_POOL = [
     {
         "label": "好吃又吃很飽",
@@ -135,8 +136,11 @@ current_state = {
     "meals_eaten": [],
     "last_meal_detail": "",
     "dinner_state": None,
+    "state_updated_at": None,   # 記錄進入「撐／不適／情緒波動」的時間戳
+    "just_recovered": False,    # 標記是否剛從不適／太飽狀態恢復成「還好」
 }
 
+pending_followups = {}
 pending_messages = {}
 pending_tasks = {}
 
@@ -182,6 +186,48 @@ def randomize_all_state(avoid_repeat=True):
     current_state["mood_note"] = mood["note"]
     current_state["emotion_reaction"] = reaction
     current_state["daily_event"] = event
+    current_state["state_updated_at"] = now_local()
+    current_state["just_recovered"] = False
+
+
+def decay_temporary_states():
+    """讓「吃太飽、胃悶、小氣噗噗」等暫時狀態隨時間自動緩解成「還好／舒服多了」"""
+    updated_at = current_state.get("state_updated_at")
+    if not updated_at:
+        return
+
+    elapsed = (now_local() - updated_at).total_seconds()
+    if elapsed < STATE_RECOVER_SECONDS:
+        return
+
+    changed = False
+
+    # 1. 晚餐後的飽足感或負面體驗隨時間緩解
+    d = current_state.get("dinner_state")
+    if d and not d.get("recovered", False):
+        d["fullness"] = "剛剛好、消化得差不多了（已經不撐了）"
+        d["body_effect"] = "休息一陣子後身體舒服多了，現在精神還不錯"
+        d["attitude"] = "已經緩過來了，語氣自然放鬆、可以正常聊天"
+        d["recovered"] = True
+        changed = True
+
+    # 2. 身體狀態若還在「飽／撐／悶／累」，自動轉為「還好／舒服多了」
+    recover_keywords = ["飽", "撐", "悶", "酸", "累", "痛", "憋屈"]
+    if any(k in current_state["body_status"] for k in recover_keywords):
+        current_state["body_status"] = "還好、精神算不錯"
+        current_state["body_reason"] = "剛剛休息消化了一下，現在已經不撐也不難受了"
+        changed = True
+
+    # 3. 負面或過度慵懶的心情隨時間回復自然
+    if current_state["mood"] in ["好吃又吃很飽", "踩雷／難吃", "價格很貴", "店員態度很差", "稍微小煩躁"]:
+        current_state["mood"] = "自然放鬆"
+        current_state["mood_note"] = "剛才的狀態已經緩過來，現在像平常一樣隨性聊天"
+        changed = True
+
+    if changed:
+        current_state["state_updated_at"] = now_local()
+        current_state["just_recovered"] = True
+        print("🔄 狀態已隨時間自動緩解：從『飽/不適』恢復為『還好/自然放鬆』")
 
 
 def ensure_daily_state(force_randomize=False):
@@ -191,13 +237,15 @@ def ensure_daily_state(force_randomize=False):
         current_state["meals_eaten"] = []
         current_state["last_meal_detail"] = ""
         current_state["dinner_state"] = None
+        pending_followups.clear()
         randomize_all_state(avoid_repeat=False)
     elif force_randomize or not current_state["daily_event"]:
         randomize_all_state(avoid_repeat=True)
+    else:
+        decay_temporary_states()
 
 
 def have_meal_once(meal_key, custom_desc=None):
-    """同一天內同一餐只會吃一次，並記錄狀態；晚餐會額外抽用餐變數影響態度與身體"""
     ensure_daily_state(force_randomize=False)
     if meal_key in current_state["meals_eaten"]:
         return False
@@ -206,13 +254,16 @@ def have_meal_once(meal_key, custom_desc=None):
     meal_zh = MEAL_NAMES_ZH.get(meal_key, meal_key)
 
     if meal_key == "dinner":
-        exp = random.choice(DINNER_EXPERIENCE_POOL)
+        exp = dict(random.choice(DINNER_EXPERIENCE_POOL))
+        exp["recovered"] = False
         current_state["dinner_state"] = exp
         current_state["mood"] = exp["label"]
         current_state["mood_note"] = exp["attitude"]
         current_state["body_status"] = exp["fullness"]
         current_state["body_reason"] = exp["body_effect"]
         current_state["last_meal_detail"] = custom_desc or f"晚餐（{exp['label']}，{exp['fullness']}）"
+        current_state["state_updated_at"] = now_local()
+        current_state["just_recovered"] = False
         return True
 
     if meal_key == "late_snack":
@@ -228,12 +279,36 @@ def have_meal_once(meal_key, custom_desc=None):
 
 
 def detect_fluster_moment(text):
-    """偵測是否遇到容易害羞、慌張或心動的互動情境"""
     keywords = [
         "喜歡", "愛你", "可愛", "漂亮", "好看", "想你", "陪我", "抱", "親",
         "害羞", "慌", "心動", "在乎", "嫁", "男朋友", "女朋友", "暗戀", "撩"
     ]
     return any(k in text for k in keywords)
+
+
+def should_schedule_followup(reply_text):
+    triggers = ["等我", "等一下", "先休息", "趴著", "肚子撐", "晚點", "舒服一點", "等我不那麼飽"]
+    return any(t in reply_text for t in triggers)
+
+
+def schedule_followup(channel_id, reason="剛剛緩了一下，現在回來找你聊天"):
+    pending_followups[channel_id] = {
+        "send_at": now_local() + datetime.timedelta(seconds=FOLLOWUP_DELAY_SECONDS),
+        "reason": reason,
+    }
+
+
+def deduplicate_reply(text):
+    cleaned = text.strip()
+    if len(cleaned) >= 12:
+        half = len(cleaned) // 2
+        for cut in range(half - 3, half + 4):
+            if 0 < cut < len(cleaned):
+                left = cleaned[:cut].strip()
+                right = cleaned[cut:].strip()
+                if left and left == right:
+                    return left
+    return cleaned
 
 
 def build_system_prompt(fluster_trigger=False):
@@ -246,10 +321,18 @@ def build_system_prompt(fluster_trigger=False):
         d = current_state["dinner_state"]
         dinner_block = (
             f"\n【今晚晚餐狀態（已吃過晚餐，不可再吃晚餐）】\n"
-            f"- 用餐狀況：{d['label']}\n"
-            f"- 飽足感：{d['fullness']}\n"
-            f"- 身體反應：{d['body_effect']}\n"
-            f"- 當下態度：{d['attitude']}\n"
+            f"- 當時用餐體驗：{d['label']}\n"
+            f"- 現在飽足感：{d['fullness']}\n"
+            f"- 現在身體感受：{d['body_effect']}\n"
+            f"- 現在聊天態度：{d['attitude']}\n"
+        )
+
+    recovery_note = ""
+    if current_state.get("just_recovered"):
+        recovery_note = (
+            "\n【重要狀態切換提示】\n"
+            "你剛剛吃太飽或不舒服的狀態「已經緩解變還好了」！就算上面對話紀錄裡你剛才還在喊飽，"
+            "現在也絕對不要再說自己很撐或叫對方等一下，要自然表現出已經休息過來、可以好好聊天的樣子。\n"
         )
 
     fluster_block = ""
@@ -264,22 +347,21 @@ def build_system_prompt(fluster_trigger=False):
 你跟使用者的關係很熟、像日常會一起吐槽、分享生活的親近朋友，心裡其實對他有好感與在乎，但平常偏傲嬌或愛面子；說話要有台灣 25 歲女生的自然口語感（例如偶爾用「欸」、「啦」、「哈哈」、「其實」、「不知道欸」、「蛤」等自然語氣），絕對不要像客服、AI 或制式機器人。
 
 【核心行為準則】
-1. 每次回覆控制在 1～3 句自然口語，不要用書面腔、不要加引號，也不要每次都用同一套句型或重複上一句的比喻。
+1. 每次只說 1～2 句自然口語，絕對不要把同一句話重複講兩遍，也不要加引號。
 2. 聊天時可以自然帶出日常作息、偶爾出去玩的小事，或是突然想到什麼就聊什麼。
 3. 嚴格遵守三餐與宵夜紀錄：今天已經吃過【{eaten_text}】（最近一餐：{current_state['last_meal_detail'] or '無'}）。同一天內吃過的餐別絕對不能說「再去吃一次」或「還沒吃那餐」；若已吃過早餐，今天就不能再吃早餐。
-4. 若有【今晚晚餐狀態】，必須反映出當下的飽足感、身體反應與態度，不能晚餐剛吃飽又說好餓。
+4. 狀態會隨時間改變：一切以【你今天的狀態】裡寫的「現在身體／現在飽足感」為準，不要被前幾句對話裡舊的狀態卡死。
 5. 當你害羞或慌張時，是出於喜歡、在乎或被戳中心事，而不是生氣或冷漠。
 
 【你今天的狀態】
-- 身體狀況：{current_state['body_status']}（原因：{current_state['body_reason']}）
-- 目前心情：{current_state['mood']}（{current_state['mood_note']}）
+- 現在身體狀況：{current_state['body_status']}（原因：{current_state['body_reason']}）
+- 現在心情：{current_state['mood']}（{current_state['mood_note']}）
 - 感情／害羞底色：{react['style']}（{react['detail']}）
 - 今天發生的小事：{current_state['daily_event']}
-{dinner_block}{fluster_block}""".strip()
+{dinner_block}{recovery_note}{fluster_block}""".strip()
 
 
 def call_groq_chat(messages, use_vision=False, max_tokens=800):
-    """呼叫 Groq Chat Completions API（支援純文字與多模態圖片，並保留推理額度與空訊息保底）"""
     if not GROQ_API_KEY:
         print("❌ 尚未設定 GROQ_API_KEY")
         return "欸，你還沒把 GROQ_API_KEY 填好啦，我連不上大腦了！"
@@ -290,8 +372,8 @@ def call_groq_chat(messages, use_vision=False, max_tokens=800):
         "messages": messages,
         "temperature": 0.85,
         "top_p": 0.9,
-        "frequency_penalty": 0.65,
-        "presence_penalty": 0.55,
+        "frequency_penalty": 0.7,
+        "presence_penalty": 0.6,
         "max_tokens": max_tokens,
     }
 
@@ -301,7 +383,7 @@ def call_groq_chat(messages, use_vision=False, max_tokens=800):
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {GROQ_API_KEY}",
-            "User-Agent": "ReonaDiscordBot/2.2",
+            "User-Agent": "ReonaDiscordBot/2.4",
         },
         method="POST",
     )
@@ -312,6 +394,7 @@ def call_groq_chat(messages, use_vision=False, max_tokens=800):
             choice = data["choices"][0]
             raw_content = choice["message"].get("content") or ""
             reply = raw_content.strip().replace('"', "").replace("「", "").replace("」", "")
+            reply = deduplicate_reply(reply)
             if not reply:
                 print(f"⚠️ 模型回傳空內容 (model={model_to_use}, finish_reason={choice.get('finish_reason')})")
                 return "欸我剛剛腦袋突然閃神一秒，你剛剛說什麼再跟我講一次？"
@@ -346,11 +429,52 @@ async def on_ready():
     )
     if not daily_routine_loop.is_running():
         daily_routine_loop.start()
+    if not followup_watcher_loop.is_running():
+        followup_watcher_loop.start()
+
+
+@tasks.loop(seconds=10)
+async def followup_watcher_loop():
+    """檢查排程好的主動回訊，時間到就緩解狀態並主動傳訊息回來找你"""
+    now = now_local()
+    due_channels = [cid for cid, info in pending_followups.items() if now >= info["send_at"]]
+    for cid in due_channels:
+        info = pending_followups.pop(cid, None)
+        channel = bot.get_channel(cid)
+        if not channel or not info:
+            continue
+
+        # 強制把狀態從「飽/撐/不適」切換成「還好/舒服多了」
+        current_state["body_status"] = "還好、精神算不錯"
+        current_state["body_reason"] = "剛剛休息消化了一下，現在已經不撐也不難受了"
+        current_state["mood"] = "自然放鬆"
+        current_state["mood_note"] = "剛才的狀態已經緩過來，現在像平常一樣隨性聊天"
+        current_state["just_recovered"] = True
+        current_state["state_updated_at"] = now
+        if current_state.get("dinner_state"):
+            current_state["dinner_state"]["fullness"] = "剛剛好、消化得差不多了（已經不撐了）"
+            current_state["dinner_state"]["body_effect"] = "休息一陣子後身體舒服多了"
+            current_state["dinner_state"]["attitude"] = "已經緩過來了，語氣自然放鬆"
+            current_state["dinner_state"]["recovered"] = True
+
+        async with channel.typing():
+            messages = [
+                {"role": "system", "content": build_system_prompt(fluster_trigger=False)},
+                {
+                    "role": "user",
+                    "content": (
+                        f"【主動回訊任務】你剛剛說先緩一下／休息一下，現在已經緩過來覺得「還好、舒服多了」（{info['reason']}）。"
+                        f"請主動傳一則自然的訊息回來找對方聊天，接續剛剛的話題或問他現在在幹嘛。"
+                    ),
+                },
+            ]
+            msg = await asyncio.to_thread(call_groq_chat, messages, False, 800)
+            await channel.send(msg)
+            current_state["just_recovered"] = False
 
 
 @tasks.loop(minutes=30)
 async def daily_routine_loop():
-    """定時生活作息：早上吃早餐/午餐、晚上吃晚餐/宵夜（同一餐當天不重複）"""
     now = now_local()
     hour = now.hour
     channel = bot.get_channel(TARGET_CHANNEL_ID)
@@ -410,6 +534,7 @@ async def process_batched_messages(channel_id):
 
     if combined_text.strip() in ["!reset", "重來", "重置記憶"]:
         ensure_daily_state(force_randomize=False)
+        pending_followups.pop(channel_id, None)
         await last_msg.reply("好啦，剛剛那段對話先清掉，我們重新聊～", mention_author=False)
         return
 
@@ -420,17 +545,21 @@ async def process_batched_messages(channel_id):
         )
         ensure_daily_state(force_randomize=(asked_about_state and RERANK_ON_ASK_EVENT))
 
-        # 遇到直球或感情關鍵字高機率觸發害羞/慌張，平常也有小機率突然害羞一下
-        fluster_trigger = detect_fluster_moment(combined_text) and (random.random() < 0.8) or (random.random() < 0.12)
+        fluster_trigger = (detect_fluster_moment(combined_text) and (random.random() < 0.8)) or (random.random() < 0.12)
 
+        # 若剛從「飽/不適」恢復，先過濾掉前幾句還在喊飽的歷史對話，避免模型被舊對話帶偏
         history_msgs = []
         batch_ids = {m.id for m in batch}
         async for hist in last_msg.channel.history(limit=6):
             if hist.id in batch_ids:
                 continue
-            if hist.content.strip():
-                role = "assistant" if hist.author == bot.user else "user"
-                history_msgs.append({"role": role, "content": hist.content.strip()[:100]})
+            text_clean = hist.content.strip()
+            if not text_clean:
+                continue
+            if current_state.get("just_recovered") and hist.author == bot.user and any(w in text_clean for w in ["太飽", "肚子撐", "不那麼飽"]):
+                continue
+            role = "assistant" if hist.author == bot.user else "user"
+            history_msgs.append({"role": role, "content": text_clean[:100]})
         history_msgs.reverse()
 
         messages = [{"role": "system", "content": build_system_prompt(fluster_trigger=fluster_trigger)}]
@@ -440,7 +569,7 @@ async def process_batched_messages(channel_id):
         if asked_about_state:
             user_prompt_text += (
                 f"\n（補充背景：今天發生的事是「{current_state['daily_event']}」，"
-                f"目前身體「{current_state['body_status']}」，心情「{current_state['mood']}」。）"
+                f"現在身體「{current_state['body_status']}」，現在心情「{current_state['mood']}」。）"
             )
 
         if image_urls:
@@ -454,6 +583,10 @@ async def process_batched_messages(channel_id):
             reply = await asyncio.to_thread(call_groq_chat, messages, False, 800)
 
         await last_msg.reply(reply, mention_author=False)
+        current_state["just_recovered"] = False
+
+        if should_schedule_followup(reply):
+            schedule_followup(channel_id, reason="剛剛說先緩一下，現在回來找你聊天")
 
 
 @bot.event
