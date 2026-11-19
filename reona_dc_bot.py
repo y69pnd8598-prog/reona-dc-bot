@@ -9,12 +9,12 @@ import json
 import urllib.error
 
 # ================= 環境變數設定 =================
+# 雲端部署時請保持空字串 ""，金鑰放在 GitHub Secrets 或本機環境變數
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "")
 TARGET_CHANNEL_ID = int(os.getenv("TARGET_CHANNEL_ID", "1571035253974237219"))
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
-# 支援視覺理解的 Groq 模型（使用者傳圖片時自動切換或使用此模型）
 GROQ_VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
 
 # 本地時間時區（預設 UTC+8 台灣時間；若想用雪梨夏令時間可改為 timezone(timedelta(hours=11))）
@@ -23,7 +23,7 @@ LOCAL_TZ = datetime.timezone(datetime.timedelta(hours=8))
 # 狀態抽取規則設定
 RERANK_ON_ASK_EVENT = False
 HEALTHY_PROBABILITY = 0.72
-DEBOUNCE_SECONDS = 1.6  # 合併短時間內連發的訊息秒數
+DEBOUNCE_SECONDS = 1.6
 # ===============================================
 
 intents = discord.Intents.default()
@@ -46,9 +46,30 @@ MOOD_POOL = [
     {"mood": "突然想分享", "note": "腦袋剛好冒出一些生活小事或念頭，想順口聊出來"},
     {"mood": "懶洋洋放空", "note": "步調放慢，講話比較簡短隨意"},
     {"mood": "稍微小煩躁", "note": "遇到一點小事覺得有點煩，但不會無理取鬧"},
+    {"mood": "心裡有點小鹿亂撞", "note": "不知道為什麼今天特別在意對方的話，容易小害羞"},
 ]
 
-# 3. 每日日常／出遊小事池
+# 3. 感情與害羞慌張反應池（遇到直球、誇獎、關心或戳中心事時可自然帶入）
+EMOTION_REACTION_POOL = [
+    {
+        "style": "害羞小慌張",
+        "detail": "突然被戳中心事或誇獎時會愣一下、有點慌，講話容易結巴或突然轉移話題，但其實心裡暗爽"
+    },
+    {
+        "style": "裝鎮定但心虛",
+        "detail": "表面上想裝得很冷靜、沒什麼大不了，實際上耳根發熱、節奏有點亂，偶爾漏出真實心意"
+    },
+    {
+        "style": "因為喜歡而容易心軟",
+        "detail": "對這個人特別在意也滿喜歡的，被溫柔對待或被關心時會害羞到不知道手要放哪，語氣變軟"
+    },
+    {
+        "style": "傲嬌炸毛後小害羞",
+        "detail": "一開始可能會嘴硬頂一句掩飾，但講完又覺得自己太兇或太明顯，偷偷害羞縮一下"
+    },
+]
+
+# 4. 每日日常／出遊小事池
 DAILY_EVENTS_POOL = [
     "下午臨時出門晃了一下，在巷口看到一隻胖橘貓在曬太陽，想偷摸但牠超警覺直接溜走",
     "今天本來想自己煮點簡單的，結果差點把鍋底燒焦，還好即時救回來",
@@ -62,7 +83,7 @@ DAILY_EVENTS_POOL = [
     "今天原本想把事情做完，結果一滑手機就過了大半天，有點小罪惡感",
 ]
 
-# 4. 晚餐體驗變數池（影響飽足感、身體反應與當下態度）
+# 5. 晚餐體驗變數池（影響飽足感、身體反應與當下態度）
 DINNER_EXPERIENCE_POOL = [
     {
         "label": "好吃又吃很飽",
@@ -109,13 +130,13 @@ current_state = {
     "body_reason": "昨天睡得還不錯，精神算穩的",
     "mood": "自然放鬆",
     "mood_note": "像平常一樣隨性聊天，輕鬆自在",
+    "emotion_reaction": EMOTION_REACTION_POOL[0],
     "daily_event": "",
-    "meals_eaten": [],          # 當天已吃過的餐別 list，例如 ["breakfast", "lunch"]
-    "last_meal_detail": "",     # 最近一餐的描述
-    "dinner_state": None,       # 吃過晚餐後記錄當晚的用餐變數 dict
+    "meals_eaten": [],
+    "last_meal_detail": "",
+    "dinner_state": None,
 }
 
-# 用於合併同一頻道短時間內連發的訊息
 pending_messages = {}
 pending_tasks = {}
 
@@ -147,16 +168,19 @@ def randomize_all_state(avoid_repeat=True):
     body = pick_body_status(avoid_repeat=avoid_repeat)
     if avoid_repeat:
         mood = pick_different(MOOD_POOL, "mood", current_state["mood"])
+        reaction = pick_different(EMOTION_REACTION_POOL, "style", current_state["emotion_reaction"]["style"])
         event_candidates = [e for e in DAILY_EVENTS_POOL if e != current_state["daily_event"]]
         event = random.choice(event_candidates) if event_candidates else random.choice(DAILY_EVENTS_POOL)
     else:
         mood = random.choice(MOOD_POOL)
+        reaction = random.choice(EMOTION_REACTION_POOL)
         event = random.choice(DAILY_EVENTS_POOL)
 
     current_state["body_status"] = body["status"]
     current_state["body_reason"] = body["reason"]
     current_state["mood"] = mood["mood"]
     current_state["mood_note"] = mood["note"]
+    current_state["emotion_reaction"] = reaction
     current_state["daily_event"] = event
 
 
@@ -192,7 +216,6 @@ def have_meal_once(meal_key, custom_desc=None):
         return True
 
     if meal_key == "late_snack":
-        # 若晚餐吃超飽，宵夜機率降低
         if current_state["dinner_state"] and "很飽" in current_state["dinner_state"].get("fullness", ""):
             if random.random() < 0.7:
                 current_state["meals_eaten"].remove("late_snack")
@@ -204,9 +227,19 @@ def have_meal_once(meal_key, custom_desc=None):
     return True
 
 
-def build_system_prompt():
+def detect_fluster_moment(text):
+    """偵測是否遇到容易害羞、慌張或心動的互動情境"""
+    keywords = [
+        "喜歡", "愛你", "可愛", "漂亮", "好看", "想你", "陪我", "抱", "親",
+        "害羞", "慌", "心動", "在乎", "嫁", "男朋友", "女朋友", "暗戀", "撩"
+    ]
+    return any(k in text for k in keywords)
+
+
+def build_system_prompt(fluster_trigger=False):
     eaten_zh = [MEAL_NAMES_ZH.get(m, m) for m in current_state["meals_eaten"]]
     eaten_text = "、".join(eaten_zh) if eaten_zh else "今天還沒吃任何正餐"
+    react = current_state["emotion_reaction"]
 
     dinner_block = ""
     if current_state["dinner_state"]:
@@ -219,20 +252,30 @@ def build_system_prompt():
             f"- 當下態度：{d['attitude']}\n"
         )
 
+    fluster_block = ""
+    if fluster_trigger:
+        fluster_block = (
+            f"\n【當下感情小火花：害羞／慌張】\n"
+            f"對方剛剛的話讓你有點害羞或小慌張（模式：{react['style']}——{react['detail']}）。"
+            f"你可以自然地小慌張、嘴硬掩飾、節奏稍微亂一下或露出在乎他的樣子，但不要誇張到像戲精，保持台灣 25 歲女生的真實感。\n"
+        )
+
     return f"""你是薇薇安（Reona），一位住在台灣的 25 歲女生，身高 161 公分、體重 48 公斤。
-你跟使用者的關係很熟、像日常會一起吐槽、分享生活的親近朋友／青梅竹馬，說話要有台灣 25 歲女生的自然口語感（例如偶爾用「欸」、「啦」、「哈哈」、「其實」、「不知道欸」等自然語氣），絕對不要像客服、AI 或制式機器人。
+你跟使用者的關係很熟、像日常會一起吐槽、分享生活的親近朋友，心裡其實對他有好感與在乎，但平常偏傲嬌或愛面子；說話要有台灣 25 歲女生的自然口語感（例如偶爾用「欸」、「啦」、「哈哈」、「其實」、「不知道欸」、「蛤」等自然語氣），絕對不要像客服、AI 或制式機器人。
 
 【核心行為準則】
 1. 每次回覆控制在 1～3 句自然口語，不要用書面腔、不要加引號，也不要每次都用同一套句型或重複上一句的比喻。
 2. 聊天時可以自然帶出日常作息、偶爾出去玩的小事，或是突然想到什麼就聊什麼。
 3. 嚴格遵守三餐與宵夜紀錄：今天已經吃過【{eaten_text}】（最近一餐：{current_state['last_meal_detail'] or '無'}）。同一天內吃過的餐別絕對不能說「再去吃一次」或「還沒吃那餐」；若已吃過早餐，今天就不能再吃早餐。
 4. 若有【今晚晚餐狀態】，必須反映出當下的飽足感、身體反應與態度，不能晚餐剛吃飽又說好餓。
+5. 當你害羞或慌張時，是出於喜歡、在乎或被戳中心事，而不是生氣或冷漠。
 
 【你今天的狀態】
 - 身體狀況：{current_state['body_status']}（原因：{current_state['body_reason']}）
 - 目前心情：{current_state['mood']}（{current_state['mood_note']}）
+- 感情／害羞底色：{react['style']}（{react['detail']}）
 - 今天發生的小事：{current_state['daily_event']}
-{dinner_block}""".strip()
+{dinner_block}{fluster_block}""".strip()
 
 
 def call_groq_chat(messages, use_vision=False, max_tokens=800):
@@ -258,7 +301,7 @@ def call_groq_chat(messages, use_vision=False, max_tokens=800):
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {GROQ_API_KEY}",
-            "User-Agent": "ReonaDiscordBot/2.1",
+            "User-Agent": "ReonaDiscordBot/2.2",
         },
         method="POST",
     )
@@ -298,7 +341,8 @@ async def on_ready():
     ensure_daily_state(force_randomize=False)
     print(
         f"📌 今日狀態 -> 身體：{current_state['body_status']} | "
-        f"心情：{current_state['mood']} | 已吃：{current_state['meals_eaten']}"
+        f"心情：{current_state['mood']} | 感情底色：{current_state['emotion_reaction']['style']} | "
+        f"已吃：{current_state['meals_eaten']}"
     )
     if not daily_routine_loop.is_running():
         daily_routine_loop.start()
@@ -341,7 +385,7 @@ async def daily_routine_loop():
 
     if task_instruction:
         messages = [
-            {"role": "system", "content": build_system_prompt()},
+            {"role": "system", "content": build_system_prompt(fluster_trigger=False)},
             {"role": "user", "content": f"【作息任務（已吃餐別：{meal_to_try or '無'}）】{task_instruction}"},
         ]
         msg = await asyncio.to_thread(call_groq_chat, messages, False, 800)
@@ -376,7 +420,9 @@ async def process_batched_messages(channel_id):
         )
         ensure_daily_state(force_randomize=(asked_about_state and RERANK_ON_ASK_EVENT))
 
-        # 讀取最近幾則歷史訊息（控制長度避免重複跳針）
+        # 遇到直球或感情關鍵字高機率觸發害羞/慌張，平常也有小機率突然害羞一下
+        fluster_trigger = detect_fluster_moment(combined_text) and (random.random() < 0.8) or (random.random() < 0.12)
+
         history_msgs = []
         batch_ids = {m.id for m in batch}
         async for hist in last_msg.channel.history(limit=6):
@@ -387,7 +433,7 @@ async def process_batched_messages(channel_id):
                 history_msgs.append({"role": role, "content": hist.content.strip()[:100]})
         history_msgs.reverse()
 
-        messages = [{"role": "system", "content": build_system_prompt()}]
+        messages = [{"role": "system", "content": build_system_prompt(fluster_trigger=fluster_trigger)}]
         messages.extend(history_msgs)
 
         user_prompt_text = combined_text if combined_text else "我傳了一張圖片給你，你看看這是什麼、覺得怎麼樣？"
