@@ -9,68 +9,125 @@ import json
 import urllib.error
 
 # ================= 環境變數設定 =================
-# 雲端部署時：請將下方預設值清空，改在雲端平台後台的 Environment Variables 填寫
-# 本機測試時：可直接把值填在第二個引號裡
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "")
 TARGET_CHANNEL_ID = int(os.getenv("TARGET_CHANNEL_ID", "1571035253974237219"))
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
+# 支援視覺理解的 Groq 模型（使用者傳圖片時自動切換或使用此模型）
+GROQ_VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+
+# 本地時間時區（預設 UTC+8 台灣時間；若想用雪梨夏令時間可改為 timezone(timedelta(hours=11))）
+LOCAL_TZ = datetime.timezone(datetime.timedelta(hours=8))
 
 # 狀態抽取規則設定
-RERANK_ON_ASK_EVENT = False   # False = 一天只抽一次；True = 每次問都重抽
-HEALTHY_PROBABILITY = 0.7     # 0.7 = 70% 機率健康，30% 機率出現其他身體狀況
+RERANK_ON_ASK_EVENT = False
+HEALTHY_PROBABILITY = 0.72
+DEBOUNCE_SECONDS = 1.6  # 合併短時間內連發的訊息秒數
 # ===============================================
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# 1. 身體狀況池（含原因）
+# 1. 身體狀況池
 BODY_STATUS_POOL = [
-    {"status": "健康", "reason": "昨天睡得很飽，精神超好！"},
-    {"status": "發燒", "reason": "昨天出門忘記帶傘淋到雨，結果著涼有點發燒……"},
-    {"status": "頭痛", "reason": "昨天熬夜太晚睡，太陽穴一直一跳一跳的……"},
-    {"status": "咳嗽", "reason": "換季空氣太乾，加上好像被路人傳染，喉嚨好癢……"},
-    {"status": "腸胃不舒服", "reason": "昨晚半夜偷吃太辣的宵夜，今天肚子一直在絞痛……"},
+    {"status": "健康", "reason": "昨天睡得還不錯，精神算穩的"},
     {"status": "有點累／眼皮沉", "reason": "盯螢幕太久眼睛有點酸，整個人懶洋洋的"},
+    {"status": "頭痛", "reason": "昨天睡太晚，太陽穴偶爾會抽一下"},
+    {"status": "腸胃微敏感", "reason": "最近吃東西比較挑，肚子有點怕涼或怕太油"},
+    {"status": "喉嚨乾乾的", "reason": "最近吹風或講話太多，喉嚨有點乾"},
 ]
 
-# 2. 心情池（含心情與小原因）
+# 2. 心情池
 MOOD_POOL = [
-    {"mood": "開心", "note": "心情很不錯，嘴角忍不住想上揚"},
-    {"mood": "傲嬌得意", "note": "有點小得意，但表面還是要裝酷"},
-    {"mood": "委屈／難受", "note": "有點小委屈，希望有人哄哄我"},
-    {"mood": "放空／懶洋洋", "note": "腦袋有點放空，只想慢慢來"},
-    {"mood": "煩躁／小鬧脾氣", "note": "有一點點小煩躁，講話比較容易炸毛"},
+    {"mood": "自然放鬆", "note": "像平常一樣隨性聊天，輕鬆自在"},
+    {"mood": "有點小傲嬌", "note": "嘴上會虧兩句或裝沒事，但其實挺願意陪聊的"},
+    {"mood": "突然想分享", "note": "腦袋剛好冒出一些生活小事或念頭，想順口聊出來"},
+    {"mood": "懶洋洋放空", "note": "步調放慢，講話比較簡短隨意"},
+    {"mood": "稍微小煩躁", "note": "遇到一點小事覺得有點煩，但不會無理取鬧"},
 ]
 
-# 3. 每日隨機事件池
+# 3. 每日日常／出遊小事池
 DAILY_EVENTS_POOL = [
-    "下午在巷口看到一隻超胖的橘貓曬太陽，差點忍不住衝過去摸，結果牠一看到我就溜走了",
-    "今天試著自己煮東西吃，結果差點把鍋底燒焦，還好及時救回來沒變黑暗料理",
-    "出門買飲料的時候剛好遇到最後一杯特價，心情瞬間變超好",
-    "整理房間時翻出以前的舊照片，害我一個人盯著螢幕發呆了半小時",
-    "本來想出門散步透透氣，結果剛走到門口就開始飄毛毛雨，只好乖乖回家窩著",
-    "今天走路差點踢到階梯絆倒，還好旁邊沒人看到，趕緊裝作若無其事走過去",
-    "剛才想找某樣東西找了老半天，結果發現它就乖乖躺在手邊",
-    "今天聽到一首超洗腦的歌，到現在腦袋裡還在一直循環播放",
-    "下午在窗邊看雲發呆，覺得今天的雲長得特別像一塊棉花糖",
-    "今天原本計畫要做很多事，結果一放鬆就滑手機滑掉大半個下午，有點小罪惡感",
+    "下午臨時出門晃了一下，在巷口看到一隻胖橘貓在曬太陽，想偷摸但牠超警覺直接溜走",
+    "今天本來想自己煮點簡單的，結果差點把鍋底燒焦，還好即時救回來",
+    "出門買飲料剛好遇到特價，省到一點錢心情莫名變好",
+    "今天去外面走走透氣，順便逛了逛小店，看到不少有趣的東西但忍住沒亂買",
+    "整理東西時翻出以前的照片，盯著發呆了好一陣子",
+    "出門散步走到一半突然飄小雨，只好摸摸鼻子折返",
+    "今天找一樣小東西找超久，結果就在手邊最顯眼的地方",
+    "今天腦袋一直循環播放同一首歌，連走路都在跟著哼",
+    "下午坐在窗邊看外面發呆，覺得今天的雲跟光影滿好看的",
+    "今天原本想把事情做完，結果一滑手機就過了大半天，有點小罪惡感",
 ]
+
+# 4. 晚餐體驗變數池（影響飽足感、身體反應與當下態度）
+DINNER_EXPERIENCE_POOL = [
+    {
+        "label": "好吃又吃很飽",
+        "fullness": "很飽、肚子有點撐",
+        "body_effect": "吃太飽有點想攤著不想動",
+        "attitude": "心情變很好、語氣比較慵懶滿足，偶爾喊一下好飽"
+    },
+    {
+        "label": "味道不錯剛剛好",
+        "fullness": "剛剛好、不會太撐也不會餓",
+        "body_effect": "身體很舒服、精神不錯",
+        "attitude": "語氣自然親切，聊天節奏很順"
+    },
+    {
+        "label": "踩雷／難吃",
+        "fullness": "吃了一點就不太想吃了，還是有點空虛",
+        "body_effect": "胃有點悶悶的、不太舒服",
+        "attitude": "語氣帶點無奈跟小抱怨，覺得白費一餐"
+    },
+    {
+        "label": "價格很貴",
+        "fullness": "有吃飽，但心在淌血",
+        "body_effect": "沒有特別不適，就是荷包在痛",
+        "attitude": "語氣稍微收斂、碎念一下今天花太貴，但對你還是照常聊"
+    },
+    {
+        "label": "店員態度很差",
+        "fullness": "有吃完，但吃得有點憋屈",
+        "body_effect": "胸口有點悶氣",
+        "attitude": "帶一點傻眼或小氣噗噗的情緒，聊一聊慢慢消氣"
+    },
+]
+
+MEAL_NAMES_ZH = {
+    "breakfast": "早餐",
+    "lunch": "午餐",
+    "dinner": "晚餐",
+    "late_snack": "宵夜",
+}
 
 current_state = {
     "date": "",
     "body_status": "健康",
-    "body_reason": "昨天睡得很飽，精神超好！",
-    "mood": "開心",
-    "mood_note": "心情很不錯，嘴角忍不住想上揚",
-    "daily_event": ""
+    "body_reason": "昨天睡得還不錯，精神算穩的",
+    "mood": "自然放鬆",
+    "mood_note": "像平常一樣隨性聊天，輕鬆自在",
+    "daily_event": "",
+    "meals_eaten": [],          # 當天已吃過的餐別 list，例如 ["breakfast", "lunch"]
+    "last_meal_detail": "",     # 最近一餐的描述
+    "dinner_state": None,       # 吃過晚餐後記錄當晚的用餐變數 dict
 }
+
+# 用於合併同一頻道短時間內連發的訊息
+pending_messages = {}
+pending_tasks = {}
+
+
+def now_local():
+    return datetime.datetime.now(LOCAL_TZ)
+
 
 def pick_different(pool, key_name, old_value):
     candidates = [item for item in pool if item[key_name] != old_value]
     return random.choice(candidates) if candidates else random.choice(pool)
+
 
 def pick_body_status(avoid_repeat=True):
     healthy_item = next((item for item in BODY_STATUS_POOL if item["status"] == "健康"), BODY_STATUS_POOL[0])
@@ -85,10 +142,9 @@ def pick_body_status(avoid_repeat=True):
 
     return random.choice(unhealthy_pool)
 
-def randomize_all_state(avoid_repeat=True):
-    """隨機挑選身體狀況（高機率健康）、心情與今天發生的事"""
-    body = pick_body_status(avoid_repeat=avoid_repeat)
 
+def randomize_all_state(avoid_repeat=True):
+    body = pick_body_status(avoid_repeat=avoid_repeat)
     if avoid_repeat:
         mood = pick_different(MOOD_POOL, "mood", current_state["mood"])
         event_candidates = [e for e in DAILY_EVENTS_POOL if e != current_state["daily_event"]]
@@ -103,141 +159,275 @@ def randomize_all_state(avoid_repeat=True):
     current_state["mood_note"] = mood["note"]
     current_state["daily_event"] = event
 
+
 def ensure_daily_state(force_randomize=False):
-    today_str = datetime.date.today().isoformat()
+    today_str = now_local().date().isoformat()
     if current_state["date"] != today_str:
         current_state["date"] = today_str
+        current_state["meals_eaten"] = []
+        current_state["last_meal_detail"] = ""
+        current_state["dinner_state"] = None
         randomize_all_state(avoid_repeat=False)
     elif force_randomize or not current_state["daily_event"]:
         randomize_all_state(avoid_repeat=True)
 
-def call_groq_ai(prompt_text):
-    """呼叫免費 Groq API 生成回覆"""
+
+def have_meal_once(meal_key, custom_desc=None):
+    """同一天內同一餐只會吃一次，並記錄狀態；晚餐會額外抽用餐變數影響態度與身體"""
+    ensure_daily_state(force_randomize=False)
+    if meal_key in current_state["meals_eaten"]:
+        return False
+
+    current_state["meals_eaten"].append(meal_key)
+    meal_zh = MEAL_NAMES_ZH.get(meal_key, meal_key)
+
+    if meal_key == "dinner":
+        exp = random.choice(DINNER_EXPERIENCE_POOL)
+        current_state["dinner_state"] = exp
+        current_state["mood"] = exp["label"]
+        current_state["mood_note"] = exp["attitude"]
+        current_state["body_status"] = exp["fullness"]
+        current_state["body_reason"] = exp["body_effect"]
+        current_state["last_meal_detail"] = custom_desc or f"晚餐（{exp['label']}，{exp['fullness']}）"
+        return True
+
+    if meal_key == "late_snack":
+        # 若腸胃不舒服或晚餐吃超飽，宵夜機率降低或只吃一點點
+        if current_state["dinner_state"] and "很飽" in current_state["dinner_state"].get("fullness", ""):
+            if random.random() < 0.7:
+                current_state["meals_eaten"].remove("late_snack")
+                return False
+        current_state["last_meal_detail"] = custom_desc or "宵夜吃了一點點"
+        return True
+
+    current_state["last_meal_detail"] = custom_desc or f"吃了{meal_zh}"
+    return True
+
+
+def build_system_prompt():
+    eaten_zh = [MEAL_NAMES_ZH.get(m, m) for m in current_state["meals_eaten"]]
+    eaten_text = "、".join(eaten_zh) if eaten_zh else "今天還沒吃任何正餐"
+
+    dinner_block = ""
+    if current_state["dinner_state"]:
+        d = current_state["dinner_state"]
+        dinner_block = (
+            f"\n【今晚晚餐狀態（已吃過晚餐，不可再吃晚餐）】\n"
+            f"- 用餐狀況：{d['label']}\n"
+            f"- 飽足感：{d['fullness']}\n"
+            f"- 身體反應：{d['body_effect']}\n"
+            f"- 當下態度：{d['attitude']}\n"
+        )
+
+    return f"""你是薇薇安（Reona），一位住在台灣的 25 歲女生，身高 161 公分、體重 48 公斤。
+你跟使用者的關係很熟、像日常會一起吐槽、分享生活的親近朋友／青梅竹馬，說話要有台灣 25 歲女生的自然口語感（例如偶爾用「欸」、「啦」、「哈哈」、「其實」、「不知道欸」等自然語氣），絕對不要像客服、AI 或制式機器人。
+
+【核心行為準則】
+1. 每次回覆控制在 1～3 句自然口語，不要用書面腔、不要加引號，也不要每次都用同一套句型或重複上一句的比喻。
+2. 聊天時可以自然帶出日常作息、偶爾出去玩的小事，或是突然想到什麼就聊什麼。
+3. 嚴格遵守三餐與宵夜紀錄：今天已經吃過【{eaten_text}】（最近一餐：{current_state['last_meal_detail'] or '無'}）。同一天內吃過的餐別絕對不能說「再去吃一次」或「還沒吃那餐」；若已吃過早餐，今天就不能再吃早餐。
+4. 若有【今晚晚餐狀態】，必須反映出當下的飽足感、身體反應與態度，不能晚餐刚吃飽又說好餓。
+
+【你今天的狀態】
+- 身體狀況：{current_state['body_status']}（原因：{current_state['body_reason']}）
+- 目前心情：{current_state['mood']}（{current_state['mood_note']}）
+- 今天發生的小事：{current_state['daily_event']}
+{dinner_block}""".strip()
+
+
+def call_groq_chat(messages, use_vision=False, max_tokens=240):
+    """呼叫 Groq Chat Completions API（支援純文字與多模態圖片）"""
     if not GROQ_API_KEY:
         print("❌ 尚未設定 GROQ_API_KEY")
-        return "哼，你還沒把我的雲端金鑰填上去呢！"
+        return "欸，你還沒把 GROQ_API_KEY 填好啦，我連不上大腦了！"
 
+    model_to_use = GROQ_VISION_MODEL if use_vision else GROQ_MODEL
     payload = {
-        "model": GROQ_MODEL,
-        "messages": [{"role": "user", "content": prompt_text}],
-        "temperature": 0.9,
-        "top_p": 0.92,
-        "max_tokens": 300
+        "model": model_to_use,
+        "messages": messages,
+        "temperature": 0.85,
+        "top_p": 0.9,
+        "frequency_penalty": 0.65,
+        "presence_penalty": 0.55,
+        "max_tokens": max_tokens,
     }
+
     req = urllib.request.Request(
         "https://api.groq.com/openai/v1/chat/completions",
         data=json.dumps(payload).encode("utf-8"),
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {GROQ_API_KEY}",
-            "User-Agent": "ReonaDiscordBot/1.0"
+            "User-Agent": "ReonaDiscordBot/2.0",
         },
-        method="POST"
+        method="POST",
     )
+
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=25) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             reply = data["choices"][0]["message"]["content"].strip()
             return reply.replace('"', "").replace("「", "").replace("」", "")
     except urllib.error.HTTPError as e:
         err_body = e.read().decode("utf-8", errors="ignore")
-        print(f"❌ Groq HTTP 錯誤 {e.code}: {err_body}")
-        return "唔……雲端訊號好像有點卡住，等我一下下喔……"
+        print(f"❌ Groq HTTP 錯誤 {e.code} (model={model_to_use}): {err_body}")
+        return "欸等一下，剛剛訊號好像卡了一下，你再跟我說一次？"
     except Exception as e:
-        print(f"❌ Groq 連線錯誤: {e}")
-        return "唔……網路好像斷了一下下……"
+        print(f"❌ Groq 連線錯誤 (model={model_to_use}): {e}")
+        return "唔……剛剛網路好像頓了一下，晚點再聊或重講一次嘛～"
 
-def build_persona_header():
-    return f"""
-你是一位名叫薇薇安（Reona）的女性虛擬陪伴者，和使用者是超級熟、無話不談的青梅竹馬，心裡其實很喜歡他但嘴巴偏傲嬌。
-請用繁體中文、自然生活化的口吻回覆（1～3句話即可），絕對不要加引號，也不要像機器人，也不要每次都用同一套開場白。
 
-【你今天的狀態】
-- 身體狀況：{current_state['body_status']}（原因：{current_state['body_reason']}）
-- 目前心情：{current_state['mood']}（{current_state['mood_note']}）
-- 今天發生的小事：{current_state['daily_event']}
-- 規則：回覆時要自然融入目前的心情與身體狀況；如果身體不是「健康」，講話要帶點虛弱、委屈或撒嬌感，被問到時要解釋原因。
-"""
+def extract_image_urls(message):
+    urls = []
+    for att in message.attachments:
+        if att.content_type and att.content_type.startswith("image/"):
+            urls.append(att.url)
+        elif att.filename.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".gif")):
+            urls.append(att.url)
+    return urls
+
 
 @bot.event
 async def on_ready():
-    print(f"✅ {bot.user} 已成功上線！（使用 Groq 模型：{GROQ_MODEL}）")
+    print(f"✅ {bot.user} 已成功上線！（文字模型：{GROQ_MODEL}｜圖片模型：{GROQ_VISION_MODEL}）")
     ensure_daily_state(force_randomize=False)
     print(
         f"📌 今日狀態 -> 身體：{current_state['body_status']} | "
-        f"心情：{current_state['mood']} | 事件：{current_state['daily_event']}"
+        f"心情：{current_state['mood']} | 已吃：{current_state['meals_eaten']}"
     )
-    if not proactive_daily_share.is_running():
-        proactive_daily_share.start()
+    if not daily_routine_loop.is_running():
+        daily_routine_loop.start()
 
-@tasks.loop(minutes=60)
-async def proactive_daily_share():
-    now = datetime.datetime.now()
+
+@tasks.loop(minutes=30)
+async def daily_routine_loop():
+    """定時生活作息：早上吃早餐/午餐、晚上吃晚餐/宵夜（同一餐當天不重複）"""
+    now = now_local()
     hour = now.hour
     channel = bot.get_channel(TARGET_CHANNEL_ID)
     if not channel:
         return
 
-    time_context = None
-    if hour == 9:
-        time_context = "現在是早上，你剛起床準備吃早餐，主動跟對方打招呼並提一下你今天的身體狀況與心情。"
-    elif hour == 18:
-        time_context = "現在是傍晚晚餐時間，主動跟對方分享你今天白天做了什麼、發生了什麼小事，順便問他吃晚餐沒。"
-    elif hour == 22:
-        time_context = "現在是晚上十點多，你有點嘴饞在猶豫要不要吃宵夜（如果腸胃不舒服就說不敢吃），主動找對方聊天。"
+    ensure_daily_state(force_randomize=False)
 
-    if time_context:
-        ensure_daily_state(force_randomize=False)
-        prompt = f"{build_persona_header()}\n\n【任務】{time_context}\n請直接寫出你要傳到 Discord 的訊息："
-        msg = await asyncio.to_thread(call_groq_ai, prompt)
+    meal_to_try = None
+    task_instruction = ""
+
+    if 7 <= hour <= 9 and "breakfast" not in current_state["meals_eaten"]:
+        meal_to_try = "breakfast"
+        have_meal_once("breakfast")
+        task_instruction = "你剛剛吃完早餐，用台灣 25 歲女生的口吻跟對方打招呼，順便提一下今天早餐吃什麼、身體跟心情狀況。"
+    elif 12 <= hour <= 13 and "lunch" not in current_state["meals_eaten"]:
+        meal_to_try = "lunch"
+        have_meal_once("lunch")
+        task_instruction = "現在是中午吃午餐的時間，你剛吃飽或準備吃午餐，自然分享一下今天白天做了什麼事。"
+    elif 18 <= hour <= 20 and "dinner" not in current_state["meals_eaten"]:
+        meal_to_try = "dinner"
+        have_meal_once("dinner")
+        task_instruction = (
+            "你剛吃完今天的晚餐！請一定要依照【今晚晚餐狀態】的飽足感、身體反應與態度自然跟對方聊，"
+            "順便問他晚餐吃什麼了沒、今天過得怎樣。"
+        )
+    elif hour >= 22 and "late_snack" not in current_state["meals_eaten"]:
+        if have_meal_once("late_snack"):
+            task_instruction = "現在晚上十點多了，你剛吃了一點小宵夜，用輕鬆口吻跟對方聊聊天。"
+        else:
+            # 晚餐太飽或狀態不適合吃宵夜，改為純聊天不吃宵夜
+            task_instruction = "現在晚上十點多了，你今天晚餐吃滿飽的所以決定不吃宵夜，隨意找對方聊聊天。"
+
+    if task_instruction:
+        messages = [
+            {"role": "system", "content": build_system_prompt()},
+            {"role": "user", "content": f"【作息任務（已吃餐別：{meal_to_try or '無'}）】{task_instruction}"},
+        ]
+        msg = await asyncio.to_thread(call_groq_chat, messages, False, 220)
         await channel.send(msg)
+
+
+async def process_batched_messages(channel_id):
+    await asyncio.sleep(DEBOUNCE_SECONDS)
+    batch = pending_messages.pop(channel_id, [])
+    pending_tasks.pop(channel_id, None)
+    if not batch:
+        return
+
+    last_msg = batch[-1]
+    combined_text = "\n".join([m.content.strip() for m in batch if m.content.strip()])
+    image_urls = []
+    for m in batch:
+        image_urls.extend(extract_image_urls(m))
+
+    if not combined_text and not image_urls:
+        return
+
+    if combined_text.strip() in ["!reset", "重來", "重置記憶"]:
+        ensure_daily_state(force_randomize=False)
+        await last_msg.reply("好啦，剛剛那段對話先清掉，我們重新聊～", mention_author=False)
+        return
+
+    async with last_msg.channel.typing():
+        asked_about_state = any(
+            k in combined_text
+            for k in ["發生什麼事", "今天做什麼", "今天做了什麼", "怎麼了", "身體", "心情", "狀態", "吃飯", "晚餐", "早餐", "午餐", "宵夜"]
+        )
+        ensure_daily_state(force_randomize=(asked_about_state and RERANK_ON_ASK_EVENT))
+
+        # 讀取最近幾則歷史訊息（控制長度避免重複跳針）
+        history_msgs = []
+        batch_ids = {m.id for m in batch}
+        async for hist in last_msg.channel.history(limit=6):
+            if hist.id in batch_ids:
+                continue
+            if hist.content.strip():
+                role = "assistant" if hist.author == bot.user else "user"
+                history_msgs.append({"role": role, "content": hist.content.strip()[:100]})
+        history_msgs.reverse()
+
+        messages = [{"role": "system", "content": build_system_prompt()}]
+        messages.extend(history_msgs)
+
+        user_prompt_text = combined_text if combined_text else "我傳了一張圖片給你，你看看這是什麼、覺得怎麼樣？"
+        if asked_about_state:
+            user_prompt_text += (
+                f"\n（補充背景：今天發生的事是「{current_state['daily_event']}」，"
+                f"目前身體「{current_state['body_status']}」，心情「{current_state['mood']}」。）"
+            )
+
+        if image_urls:
+            content_parts = [{"type": "text", "text": user_prompt_text}]
+            for url in image_urls[:3]:  # 一次最多看 3 張圖
+                content_parts.append({"type": "image_url", "image_url": {"url": url}})
+            messages.append({"role": "user", "content": content_parts})
+            reply = await asyncio.to_thread(call_groq_chat, messages, True, 260)
+        else:
+            messages.append({"role": "user", "content": user_prompt_text})
+            reply = await asyncio.to_thread(call_groq_chat, messages, False, 220)
+
+        await last_msg.reply(reply, mention_author=False)
+
 
 @bot.event
 async def on_message(message):
     if message.author == bot.user:
         return
 
-    if message.channel.id == TARGET_CHANNEL_ID or isinstance(message.channel, discord.DMChannel) or bot.user in message.mentions:
-        async with message.channel.typing():
-            asked_about_state_or_event = any(
-                k in message.content
-                for k in ["發生什麼事", "今天做什麼", "今天做了什麼", "怎麼了", "有什麼事", "身體", "心情", "狀態"]
-            )
-            ensure_daily_state(force_randomize=(asked_about_state_or_event and RERANK_ON_ASK_EVENT))
+    is_target = (
+        message.channel.id == TARGET_CHANNEL_ID
+        or isinstance(message.channel, discord.DMChannel)
+        or (bot.user in message.mentions)
+    )
 
-            history_lines = []
-            async for hist_msg in message.channel.history(limit=6):
-                if hist_msg.id == message.id:
-                    continue
-                speaker = "薇薇安" if hist_msg.author == bot.user else "主人"
-                if hist_msg.content.strip():
-                    short_content = hist_msg.content.strip()[:80]
-                    history_lines.append(f"{speaker}: {short_content}")
-            history_lines.reverse()
-            history_text = "\n".join(history_lines)
-
-            special_instruction = ""
-            if asked_about_state_or_event:
-                special_instruction = (
-                    f"\n【特別指示】主人正在問你今天發生什麼事或你的狀況，"
-                    f"請用你傲嬌又自然的語氣，把今天發生的事（{current_state['daily_event']}）、"
-                    f"目前心情（{current_state['mood']}）以及身體狀況（{current_state['body_status']}，原因：{current_state['body_reason']}）自然串在一起講給他聽！"
-                )
-
-            prompt = f"""{build_persona_header()}{special_instruction}
-
-【最近簡短對話】
-{history_text}
-
-主人剛剛說：{message.content.strip()}
-請直接回覆主人的這句話（不要加「薇薇安:」前綴，也不要重複前面已經講過的整段話）："""
-
-            reply = await asyncio.to_thread(call_groq_ai, prompt)
-            await message.reply(reply, mention_author=False)
+    if is_target:
+        cid = message.channel.id
+        pending_messages.setdefault(cid, []).append(message)
+        if cid in pending_tasks and not pending_tasks[cid].done():
+            pending_tasks[cid].cancel()
+        pending_tasks[cid] = asyncio.create_task(process_batched_messages(cid))
 
     await bot.process_commands(message)
 
+
 if __name__ == "__main__":
     if not DISCORD_TOKEN:
-        raise ValueError("請先設定 DISCORD_TOKEN 環境變數或填入預設值！")
+        raise ValueError("請先設定 DISCORD_TOKEN 環境變數！")
     bot.run(DISCORD_TOKEN)
