@@ -192,7 +192,7 @@ def have_meal_once(meal_key, custom_desc=None):
         return True
 
     if meal_key == "late_snack":
-        # 若腸胃不舒服或晚餐吃超飽，宵夜機率降低或只吃一點點
+        # 若晚餐吃超飽，宵夜機率降低
         if current_state["dinner_state"] and "很飽" in current_state["dinner_state"].get("fullness", ""):
             if random.random() < 0.7:
                 current_state["meals_eaten"].remove("late_snack")
@@ -226,7 +226,7 @@ def build_system_prompt():
 1. 每次回覆控制在 1～3 句自然口語，不要用書面腔、不要加引號，也不要每次都用同一套句型或重複上一句的比喻。
 2. 聊天時可以自然帶出日常作息、偶爾出去玩的小事，或是突然想到什麼就聊什麼。
 3. 嚴格遵守三餐與宵夜紀錄：今天已經吃過【{eaten_text}】（最近一餐：{current_state['last_meal_detail'] or '無'}）。同一天內吃過的餐別絕對不能說「再去吃一次」或「還沒吃那餐」；若已吃過早餐，今天就不能再吃早餐。
-4. 若有【今晚晚餐狀態】，必須反映出當下的飽足感、身體反應與態度，不能晚餐刚吃飽又說好餓。
+4. 若有【今晚晚餐狀態】，必須反映出當下的飽足感、身體反應與態度，不能晚餐剛吃飽又說好餓。
 
 【你今天的狀態】
 - 身體狀況：{current_state['body_status']}（原因：{current_state['body_reason']}）
@@ -235,8 +235,8 @@ def build_system_prompt():
 {dinner_block}""".strip()
 
 
-def call_groq_chat(messages, use_vision=False, max_tokens=240):
-    """呼叫 Groq Chat Completions API（支援純文字與多模態圖片）"""
+def call_groq_chat(messages, use_vision=False, max_tokens=800):
+    """呼叫 Groq Chat Completions API（支援純文字與多模態圖片，並保留推理額度與空訊息保底）"""
     if not GROQ_API_KEY:
         print("❌ 尚未設定 GROQ_API_KEY")
         return "欸，你還沒把 GROQ_API_KEY 填好啦，我連不上大腦了！"
@@ -258,7 +258,7 @@ def call_groq_chat(messages, use_vision=False, max_tokens=240):
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {GROQ_API_KEY}",
-            "User-Agent": "ReonaDiscordBot/2.0",
+            "User-Agent": "ReonaDiscordBot/2.1",
         },
         method="POST",
     )
@@ -266,8 +266,13 @@ def call_groq_chat(messages, use_vision=False, max_tokens=240):
     try:
         with urllib.request.urlopen(req, timeout=25) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-            reply = data["choices"][0]["message"]["content"].strip()
-            return reply.replace('"', "").replace("「", "").replace("」", "")
+            choice = data["choices"][0]
+            raw_content = choice["message"].get("content") or ""
+            reply = raw_content.strip().replace('"', "").replace("「", "").replace("」", "")
+            if not reply:
+                print(f"⚠️ 模型回傳空內容 (model={model_to_use}, finish_reason={choice.get('finish_reason')})")
+                return "欸我剛剛腦袋突然閃神一秒，你剛剛說什麼再跟我講一次？"
+            return reply
     except urllib.error.HTTPError as e:
         err_body = e.read().decode("utf-8", errors="ignore")
         print(f"❌ Groq HTTP 錯誤 {e.code} (model={model_to_use}): {err_body}")
@@ -332,7 +337,6 @@ async def daily_routine_loop():
         if have_meal_once("late_snack"):
             task_instruction = "現在晚上十點多了，你剛吃了一點小宵夜，用輕鬆口吻跟對方聊聊天。"
         else:
-            # 晚餐太飽或狀態不適合吃宵夜，改為純聊天不吃宵夜
             task_instruction = "現在晚上十點多了，你今天晚餐吃滿飽的所以決定不吃宵夜，隨意找對方聊聊天。"
 
     if task_instruction:
@@ -340,7 +344,7 @@ async def daily_routine_loop():
             {"role": "system", "content": build_system_prompt()},
             {"role": "user", "content": f"【作息任務（已吃餐別：{meal_to_try or '無'}）】{task_instruction}"},
         ]
-        msg = await asyncio.to_thread(call_groq_chat, messages, False, 220)
+        msg = await asyncio.to_thread(call_groq_chat, messages, False, 800)
         await channel.send(msg)
 
 
@@ -395,13 +399,13 @@ async def process_batched_messages(channel_id):
 
         if image_urls:
             content_parts = [{"type": "text", "text": user_prompt_text}]
-            for url in image_urls[:3]:  # 一次最多看 3 張圖
+            for url in image_urls[:3]:
                 content_parts.append({"type": "image_url", "image_url": {"url": url}})
             messages.append({"role": "user", "content": content_parts})
-            reply = await asyncio.to_thread(call_groq_chat, messages, True, 260)
+            reply = await asyncio.to_thread(call_groq_chat, messages, True, 800)
         else:
             messages.append({"role": "user", "content": user_prompt_text})
-            reply = await asyncio.to_thread(call_groq_chat, messages, False, 220)
+            reply = await asyncio.to_thread(call_groq_chat, messages, False, 800)
 
         await last_msg.reply(reply, mention_author=False)
 
