@@ -21,7 +21,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 # 可在 GitHub Secrets 設定 DISCORD_CHANNEL_ID，或直接填在後方預設值（整數）
 DEFAULT_CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
 
-TEXT_MODEL = "llama-3.3-70b-versatile"
+TEXT_MODEL = "llama-3.1-8b-instant"
 VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
 SYDNEY_TZ = ZoneInfo("Australia/Sydney")
