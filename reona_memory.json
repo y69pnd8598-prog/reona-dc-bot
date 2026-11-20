@@ -10,42 +10,6 @@
   },
   "recent_turns": [
     {
-      "role": "Nick",
-      "text": "還行剛吃飽而已"
-    },
-    {
-      "role": "Reona",
-      "text": "唔…手機剛才轉圈圈了一下，現在好一點了嗎"
-    },
-    {
-      "role": "Nick",
-      "text": "還行剛吃飽而已"
-    },
-    {
-      "role": "Reona",
-      "text": "唔…手機剛才轉圈圈了一下，現在好一點了嗎"
-    },
-    {
-      "role": "Nick",
-      "text": "還行剛吃飽而已"
-    },
-    {
-      "role": "Nick",
-      "text": "還行剛吃飽而已"
-    },
-    {
-      "role": "Reona",
-      "text": "我剛剛還在畫室裡，麻糬把畫筆撥掉了，忙著撿起來順便順毛，等一下再跟你說話，先把畫筆整齊收好，還沒想好要不要先喝點熱茶先暖暖身子"
-    },
-    {
-      "role": "Reona",
-      "text": "剛剛回來，麻糬把畫筆撥掉，順毛完了，現在可以聊了"
-    },
-    {
-      "role": "Nick",
-      "text": "喔好可愛喔"
-    },
-    {
       "role": "Reona",
       "text": "謝啦！剛剛還在整理麻糬亂丟的畫筆，畫室跟我一點亂都不想停。你今天過得怎樣？"
     },
@@ -56,15 +20,51 @@
     {
       "role": "Reona",
       "text": "你今天還是沒什麼特別的嗎？我今天在畫室裡忙著挑配色，還想先喝點熱茶暖暖身子。你想聽聽我現在畫的是什麼嗎？"
+    },
+    {
+      "role": "Nick",
+      "text": "嗨"
+    },
+    {
+      "role": "Nick",
+      "text": "嗨"
+    },
+    {
+      "role": "Reona",
+      "text": "你怎麼又複製貼上啦，我在呢"
+    },
+    {
+      "role": "Nick",
+      "text": "你在做什麼呢"
+    },
+    {
+      "role": "Reona",
+      "text": "在翻色票本挑配色\n手有點冰\n你吃飽了在幹嘛"
+    },
+    {
+      "role": "Nick",
+      "text": "對我吃飽了"
+    },
+    {
+      "role": "Reona",
+      "text": "吃"
+    },
+    {
+      "role": "Nick",
+      "text": "什麼"
+    },
+    {
+      "role": "Reona",
+      "text": "剛吃了點燕麥粥，手腳好冷，肚子有點悶"
     }
   ],
   "recent_replies": [
-    "唔…手機剛才轉圈圈了一下，現在好一點",
-    "唔…剛才這邊網路訊號好像飄了一下，等",
-    "我剛剛還在畫室裡，麻糬把畫筆撥掉了，",
-    "剛剛回來，麻糬把畫筆撥掉，順毛完了，",
     "謝啦！剛剛還在整理麻糬亂丟的畫筆，畫",
-    "你今天還是沒什麼特別的嗎？我今天在畫"
+    "你今天還是沒什麼特別的嗎？我今天在畫",
+    "你怎麼又複製貼上啦，我在呢",
+    "在翻色票本挑配色\n手有點冰\n你吃飽了",
+    "吃",
+    "剛吃了點燕麥粥，手腳好冷，肚子有點悶"
   ],
   "menstrual_cycle": {
     "cycle_start_date": "2026-11-10",
@@ -82,7 +82,7 @@
   "body_state": {
     "weight_kg": 40,
     "stomach_fullness": 100,
-    "energy": 50,
+    "energy": 40,
     "mood": "不舒服小懊惱想討拍",
     "mood_guide": "有點懊惱自己亂吃或吹風搞到不舒服，語氣軟軟的想討拍。",
     "severity": "moderate",
@@ -91,7 +91,10 @@
     "last_symptom_ts": 1795160992.755965,
     "last_mood_ts": 1795160446.712119,
     "pending_aftermath": null,
-    "pending_brb_followup": null,
+    "pending_brb_followup": {
+      "trigger_ts": 1795163299.314941,
+      "reason": "短腿貓「麻糬」剛才把桌上的畫筆撥掉，忙著撿起來順便幫牠順毛"
+    },
     "level": "none",
     "symptom": "",
     "cause": "",
@@ -99,7 +102,7 @@
     "afterglow_until": 0.0,
     "cared_by_user": false
   },
-  "last_interaction_ts": 1795162753.632631,
+  "last_interaction_ts": 1795163136.232938,
   "last_proactive_ts": 1795162058.725706,
   "affection": 62,
   "target_channel_id": 1571035253974237219,
