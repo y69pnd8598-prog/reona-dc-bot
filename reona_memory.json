@@ -11,10 +11,6 @@
   "recent_turns": [
     {
       "role": "Reona",
-      "text": "麻糬把畫筆撥掉，我撿起來順毛，現在回來了"
-    },
-    {
-      "role": "Reona",
       "text": "還在被窩裡抱著熱水袋，你終於回我聲啦"
     },
     {
@@ -26,25 +22,41 @@
       "text": "今天還好嗎"
     },
     {
-      "role": "Reona",
-      "text": "今日還好嗨？「我喜於支拖"
-    },
-    {
       "role": "Nick",
       "text": "什麼"
     },
     {
+      "role": "Nick",
+      "text": "hi"
+    },
+    {
       "role": "Reona",
-      "text": "日於：今撸還嗎？"
+      "text": "才回個 hi 呀，我現在縮在被窩裡都冷到發抖了"
+    },
+    {
+      "role": "Nick",
+      "text": "why is that"
+    },
+    {
+      "role": "Nick",
+      "text": "why is that"
+    },
+    {
+      "role": "Nick",
+      "text": "why is that"
+    },
+    {
+      "role": "Reona",
+      "text": "欸剛才沒看清，再跟我說一次嘛"
     }
   ],
   "recent_replies": [
-    "奈蔌紁廛＝悫＝撕，想你：琉",
-    "麻糬把畫筆撥掉，我撿起來順毛，現在回",
-    "還在被窩裡抱著熱水袋，你終於回我聲啦",
-    "欸剛才螢幕滑太快沒看清，再說一次嘛",
     "今日還好嗨？「我喜於支拖",
-    "日於：今撸還嗎？"
+    "日於：今撸還嗎？",
+    "才回個 hi 呀，我現在縮在被窩裡都",
+    "唔…剛才在發呆慢了半拍，你剛說什麼",
+    "唔…有點頭暈放空了一下，怎麼啦",
+    "欸剛才沒看清，再跟我說一次嘛"
   ],
   "menstrual_cycle": {
     "cycle_start_date": "2026-11-20",
@@ -82,7 +94,7 @@
     "afterglow_until": 0.0,
     "cared_by_user": false
   },
-  "last_interaction_ts": 1795163892.715391,
+  "last_interaction_ts": 1795164249.31492,
   "last_proactive_ts": 1795162058.725706,
   "affection": 62,
   "target_channel_id": 1571035253974237219,
