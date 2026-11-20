@@ -10,38 +10,6 @@
   },
   "recent_turns": [
     {
-      "role": "Reona",
-      "text": "謝啦！剛剛還在整理麻糬亂丟的畫筆，畫室跟我一點亂都不想停。你今天過得怎樣？"
-    },
-    {
-      "role": "Nick",
-      "text": "沒做什麼"
-    },
-    {
-      "role": "Reona",
-      "text": "你今天還是沒什麼特別的嗎？我今天在畫室裡忙著挑配色，還想先喝點熱茶暖暖身子。你想聽聽我現在畫的是什麼嗎？"
-    },
-    {
-      "role": "Nick",
-      "text": "嗨"
-    },
-    {
-      "role": "Nick",
-      "text": "嗨"
-    },
-    {
-      "role": "Reona",
-      "text": "你怎麼又複製貼上啦，我在呢"
-    },
-    {
-      "role": "Nick",
-      "text": "你在做什麼呢"
-    },
-    {
-      "role": "Reona",
-      "text": "在翻色票本挑配色\n手有點冰\n你吃飽了在幹嘛"
-    },
-    {
       "role": "Nick",
       "text": "對我吃飽了"
     },
@@ -56,18 +24,50 @@
     {
       "role": "Reona",
       "text": "剛吃了點燕麥粥，手腳好冷，肚子有點悶"
+    },
+    {
+      "role": "Nick",
+      "text": "喔那個來嗎"
+    },
+    {
+      "role": "Reona",
+      "text": "嗯，第一天。\n肚子好悶，有點想哭"
+    },
+    {
+      "role": "Nick",
+      "text": "沒事我在這陪你"
+    },
+    {
+      "role": "Reona",
+      "text": "謝謝你，想你，手腳好冷"
+    },
+    {
+      "role": "Nick",
+      "text": "有沒有吃飯啊"
+    },
+    {
+      "role": "Reona",
+      "text": "還沒，手腳好冷"
+    },
+    {
+      "role": "Nick",
+      "text": "快取拿東西暖一下"
+    },
+    {
+      "role": "Reona",
+      "text": "我會找熱水袋暖手"
     }
   ],
   "recent_replies": [
-    "謝啦！剛剛還在整理麻糬亂丟的畫筆，畫",
-    "你今天還是沒什麼特別的嗎？我今天在畫",
-    "你怎麼又複製貼上啦，我在呢",
-    "在翻色票本挑配色\n手有點冰\n你吃飽了",
     "吃",
-    "剛吃了點燕麥粥，手腳好冷，肚子有點悶"
+    "剛吃了點燕麥粥，手腳好冷，肚子有點悶",
+    "嗯，第一天。\n肚子好悶，有點想哭",
+    "謝謝你，想你，手腳好冷",
+    "還沒，手腳好冷",
+    "我會找熱水袋暖手"
   ],
   "menstrual_cycle": {
-    "cycle_start_date": "2026-11-10",
+    "cycle_start_date": "2026-11-20",
     "cycle_length": 30
   },
   "weather_state": {
@@ -82,11 +82,11 @@
   "body_state": {
     "weight_kg": 40,
     "stomach_fullness": 100,
-    "energy": 40,
-    "mood": "不舒服小懊惱想討拍",
-    "mood_guide": "有點懊惱自己亂吃或吹風搞到不舒服，語氣軟軟的想討拍。",
-    "severity": "moderate",
-    "current_symptom": "40公斤胃口小、吃多一點就脹到只想攤在軟沙發上揉肚子",
+    "energy": 42,
+    "mood": "生理期虛軟撒嬌",
+    "mood_guide": "生理期不舒服整個人沒力氣、有點脆弱撒嬌想被哄，講話簡短軟綿綿的。",
+    "severity": "severe",
+    "current_symptom": "生理期第 1 天，下腹悶痛加上腰酸怕冷，抱著熱水袋縮在沙發或被窩裡",
     "daily_activity": "剛接到一個新的插畫接案，正興奮地翻色票本、挑主視覺配色",
     "last_symptom_ts": 1795160992.755965,
     "last_mood_ts": 1795160446.712119,
@@ -102,7 +102,7 @@
     "afterglow_until": 0.0,
     "cared_by_user": false
   },
-  "last_interaction_ts": 1795163136.232938,
+  "last_interaction_ts": 1795163205.705855,
   "last_proactive_ts": 1795162058.725706,
   "affection": 62,
   "target_channel_id": 1571035253974237219,
