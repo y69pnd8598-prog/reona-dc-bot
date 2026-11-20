@@ -1,10 +1,75 @@
 {
-  "affection": 62,
-  "target_channel_id": 1571035253974237219,
-  "last_interaction_ts": 1795117904.504178,
-  "last_interaction_date": "2026-11-20",
-  "last_night_vibe": "",
+  "user_profile": {
+    "nickname": "你",
+    "likes": [
+      "吃什麼"
+    ],
+    "dislikes": [],
+    "notes": []
+  },
+  "recent_turns": [
+    {
+      "role": "Reona",
+      "text": "切，還騙人，剛說馬上回來這都幾點了 🙄\n在那邊磨蹭什麼啦，快點！"
+    },
+    {
+      "role": "對方",
+      "text": "我回來了"
+    },
+    {
+      "role": "Reona",
+      "text": "人呢？人呢？🙄\n快過來讓我驗收一下，看有沒有偷吃"
+    },
+    {
+      "role": "對方",
+      "text": "我去拉肚子了"
+    },
+    {
+      "role": "Reona",
+      "text": "沒騙人就好啦，剛剛還不信呢 🙄\n別在那邊傻站了，快起來用溫水敷肚子，笨蛋"
+    },
+    {
+      "role": "對方",
+      "text": "可以陪著我嗎"
+    },
+    {
+      "role": "Reona",
+      "text": "才、才不是特意陪你的啦 🙄\n只是...剛好手癢想捏捏你的臉而已\n乖乖躺好別動，我去倒杯溫水過來"
+    },
+    {
+      "role": "對方",
+      "text": "我的肚子還在痛"
+    },
+    {
+      "role": "Reona",
+      "text": "小氣鬼，捂著冰塊居然還敢說痛 🙄\n快把腿蜷起來別亂動，再揉兩下保證好得快\n要是不舒服更嚴重了，我可不負責哦～"
+    },
+    {
+      "role": "Reona",
+      "text": "喂，你剛說不能吃冰的，現在肚子不舒服是不是活該呀 🙄\n不過...看你這麼慘，我就勉為難難再給你順順肚子吧"
+    },
+    {
+      "role": "對方",
+      "text": "沒事我拉拉肚子就可以了"
+    },
+    {
+      "role": "Reona",
+      "text": "什麼叫沒事啊，還嘴硬 🙄\n我看你是嫌我揉得不過癮\n快躺好別扯謊，信不信我捏你臉蛋子報復你"
+    }
+  ],
+  "recent_replies": [
+    "人呢？人呢？🙄\n快過來讓我驗收一下，",
+    "沒騙人就好啦，剛剛還不信呢 🙄\n別在",
+    "才、才不是特意陪你的啦 🙄\n只是..",
+    "小氣鬼，捂著冰塊居然還敢說痛 🙄\n快",
+    "喂，你剛說不能吃冰的，現在肚子不舒服",
+    "什麼叫沒事啊，還嘴硬 🙄\n我看你是嫌"
+  ],
   "body_state": {
+    "stomach_fullness": 96,
+    "energy": 85,
+    "mood": "午後懶洋洋",
+    "pending_aftermath": null,
     "level": "none",
     "symptom": "",
     "cause": "",
@@ -12,6 +77,12 @@
     "afterglow_until": 0.0,
     "cared_by_user": false
   },
+  "last_interaction_ts": 1795140768.043629,
+  "last_proactive_ts": 0.0,
+  "affection": 62,
+  "target_channel_id": 1571035253974237219,
+  "last_interaction_date": "2026-11-20",
+  "last_night_vibe": "",
   "pending_aftermath": null,
   "current_activity": {
     "text": "半夢半醒翻了個身",
@@ -21,7 +92,6 @@
   "recent_topics": [],
   "sweet_notes": [],
   "grudge_notes": [],
-  "recent_replies": [],
   "recent_photo_ids": [],
   "next_proactive_at": 0.0
 }
