@@ -1,7 +1,5 @@
 {
   "recent_turns": [
-    "Nick：你的馬甲線很明顯非常漂亮",
-    "你：誰要聽你講這個 快傳熱水袋照片我",
     "Nick：現在還在痛嗎",
     "你：還是好痛啊 冷到腳都凍硬了",
     "Nick：沒事我幫你煮紅豆湯",
@@ -9,13 +7,15 @@
     "Nick：不然你要自己煮嗎",
     "你：你還是自己煮吧 我還不想",
     "Nick：我要去睡覺了晚安寶寶",
-    "你：哼 晚安 記得蓋好被子"
+    "你：哼 晚安 記得蓋好被子",
+    "Nick：寶寶我愛你晚安",
+    "你：我也愛你 先好好睡"
   ],
   "menstrual_cycle": {
     "cycle_start_date": "2026-11-20",
     "cycle_length": 30
   },
-  "last_interaction_ts": 1795177790.513221,
+  "last_interaction_ts": 1795178663.058402,
   "last_proactive_ts": 1795162058.725706,
   "user_profile": {
     "nickname": "你",
