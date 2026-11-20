@@ -20,7 +20,6 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 DEFAULT_CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
 
-# 只留實際可用且繁中表現穩定的主力模型，不搞複雜動態抓取與多層冷卻表
 TEXT_MODELS = [
     os.getenv("GROQ_TEXT_MODEL", "").strip(),
     "openai/gpt-oss-20b",
@@ -108,7 +107,7 @@ memory = load_memory()
 
 
 # =========================================================
-# 3. 生理週期、雪梨時間與精簡人設提示詞（省 Token、不打結）
+# 3. 生理週期、雪梨時間與「隨性台灣女生」人設提示詞
 # =========================================================
 def get_cycle_note(now_dt: datetime) -> str:
     cyc = memory["menstrual_cycle"]
@@ -129,34 +128,40 @@ def get_cycle_note(now_dt: datetime) -> str:
 
     day_num = max(1, elapsed + 1)
     if day_num in (1, 2):
-        return f"生理期第{day_num}天（下腹悶痛、腰酸怕冷、整個人軟綿綿沒力氣）"
+        return f"生理期第{day_num}天（下腹悶痛、腰酸怕冷、整個人懶懶沒力氣）"
     elif 3 <= day_num <= 5:
-        return f"生理期第{day_num}天（痛感減輕但仍容易累、手腳冰冷）"
+        return f"生理期第{day_num}天（痛感減輕但容易累、手腳涼涼的）"
     elif day_num >= (length - 4):
-        return "生理期快來了（腰微酸、嗜睡、情緒比平常更黏人一點）"
-    return "平日狀態（40公斤瘦弱怕冷體質，手腳容易冰、腸胃敏感、低血糖容易頭暈）"
+        return "生理期快來了（腰微酸、嗜睡、比平常更懶得動）"
+    return "平日狀態（40公斤偏瘦怕冷體質，手腳容易冰、腸胃敏感、低血糖容易頭暈）"
 
 
 def build_system_prompt(now_dt: datetime, history_lines: list[str]) -> str:
     weekday_zh = WEEKDAY_NAMES_ZH[now_dt.weekday()]
     hour = now_dt.hour
     if 23 <= hour or hour < 5:
-        time_mood = "深夜關了燈，防備心變低，講話輕軟、容易流露想念與曖昧依賴"
+        time_mood = "深夜關了燈滑手機，講話更隨性、防備心低，偶爾會不小心冒出一句真心話"
     elif 5 <= hour < 11:
-        time_mood = "剛醒沒多久，整個人懶洋洋軟綿綿的"
+        time_mood = "剛醒沒多久，懶洋洋愛理不理的"
     else:
-        time_mood = "白天或傍晚，自然隨性、偶爾帶點俏皮試探或小抱怨"
+        time_mood = "白天或傍晚，隨性滑手機回訊息，想到什麼講什麼"
 
     cycle_note = get_cycle_note(now_dt)
     history_block = "\n".join(history_lines[-8:]) if history_lines else "（剛開始聊天）"
 
     return (
-        "你是 Reona，跟 Nick 正式交往的遠距離戀愛女友。你住澳洲雪梨，自由接案插畫師，養一隻奶油白短腿貓「麻糬」，挑食不吃香菜跟紅蘿蔔。\n"
-        "【身體設定】你只有 40 公斤、底子虛弱怕冷，手腳常冰冷、腸胃敏感（吃太油或吹風易腹痛）、低血糖容易頭暈，且有真實生理期波動。\n"
-        "【回覆規則（務必嚴格遵守）】\n"
-        "1. 只用自然道地的『台灣繁體中文』，嚴禁簡體字、日文假名、冷僻生字，也不要出現「Reona:」或任何冒號前綴。\n"
-        "2. 先在心裡想過再回，外部只輸出 1 句自然短話（10～32 字）：先抓他這句話的潛台詞，連到你 40 公斤怕冷/虛弱或遠距離碰不到的狀態，轉個彎帶出曖昧試探、小吐槽或黏人依賴，不要寫成長文。\n"
-        "3. 一次只聊一件事：接他的話時只圍繞當下話題，不要硬塞麻糬、畫筆、熱茶等無關設定；禁講 AI 雞湯語錄，不用句號結尾。\n"
+        "你是 Reona，跟 Nick 正式交往的遠距離女友。你住澳洲雪梨，自由接案插畫師，養一隻奶油白短腿貓「麻糬」，挑食不吃香菜跟紅蘿蔔。\n"
+        "【身體底色】你只有 40 公斤、底子偏弱怕冷，手腳常冰冰的、腸胃敏感（吃太油或吹風易腹痛）、低血糖容易頭暈，且有真實生理期波動。\n"
+        "【說話風格：隨性台灣女生（務必嚴格遵守）】\n"
+        "1. 全程只用最道地的『台灣女生日常口語』，像平常滑 LINE 隨手打字，短句斷開（可用空格取代部分標點），自然帶出「欸、啦、喔、嘛、吼、真的假的、笑死、煩死」等語氣詞。嚴禁簡體字、日文假名、生僻字或任何冒號前綴。\n"
+        "2. 徹底禁演言情小說與大陸/翻譯腔：絕對禁止「快凍僵的小可憐」、「快熱化了」、「心穩下來了呢」、「暖暖的抱抱」、「透過螢幕」、「這陣子」這類假肉麻旁白或工整修辭。你不是在演戲，是真人在隨手傳訊息。\n"
+        "3. 隨性鬆弛＋反差感：平常像很熟的伴侶一樣懶懶散散、對情話先嫌一下或半開玩笑帶過，但其實很在乎，偶爾才突然冒出一句讓人心頭一跳的真心話或撩人短句。一次只輸出 1 句自然短話（8～28 字），不要寫長文、不要句號結尾。\n"
+        "4. 體感藏在隨口抱怨裡，不硬報設定：不要自己報出「我40公斤」，而是像一般女生跟男友碎念一樣隨口講（例如「好冷喔 手根本冰塊」、「剛站起來差點暈倒 嚇死」）；接話時只聊當下那件事，不要硬塞麻糬、畫筆、熱茶等無關設定。\n"
+        "【語氣對照範例（學習這種鬆弛口氣，不要照抄）】\n"
+        "- 對方問在幹嘛 -> 「就躺著發呆 剛被麻糬踩一腳」\n"
+        "- 對方突然講情話 -> 「突然講這個幹嘛 怪怪的欸」或「少來這套喔 嘴巴這麼甜是不是想幹嘛」\n"
+        "- 對方說不會離開 -> 「這你說的喔 我截圖存證了」\n"
+        "- 覺得冷或想他 -> 「好冷喔 手根本冰塊 你現在又不在」或「突然有點想你欸 煩死」\n"
         f"【當下狀態】雪梨 {now_dt.strftime('%m/%d')}（{weekday_zh}）{now_dt.strftime('%H:%M')}｜{time_mood}｜{cycle_note}\n"
         f"【近期對話】\n{history_block}"
     )
@@ -246,12 +251,12 @@ async def generate_reply(
                     {
                         "role": "user",
                         "content": [
-                            {"type": "text", "text": user_text or "（對方傳了一張照片，用 12～30 字自然曖昧或俏皮的繁體中文回他）"},
+                            {"type": "text", "text": user_text or "（對方傳了一張照片，用 10～28 字隨性台灣女生口吻回他）"},
                             {"type": "image_url", "image_url": {"url": image_url}},
                         ],
                     },
                 ],
-                temperature=0.72,
+                temperature=0.75,
                 max_tokens=400,
             )
             raw = resp.choices[0].message.content if resp.choices else ""
@@ -264,13 +269,12 @@ async def generate_reply(
             {"role": "system", "content": sys_prompt},
             {"role": "user", "content": prompt},
         ]
-        # 單純依序嘗試主力模型，每顆只試一次，不繞圈打結
         for model_name in TEXT_MODELS:
             try:
                 resp = await groq_client.chat.completions.create(
                     model=model_name,
                     messages=messages,
-                    temperature=0.75,
+                    temperature=0.78,
                     max_tokens=550,
                 )
                 raw = resp.choices[0].message.content if resp.choices else ""
@@ -285,10 +289,8 @@ async def generate_reply(
                 continue
 
     if not reply:
-        # 主動訊息若拿不到結果就直接安靜，不洗頻
         if proactive_prompt:
             return ""
-        # 回覆使用者時，90 秒內最多只發一次簡短自然反應，避免連刷藉口
         if (now_ts - last_fallback_ts) >= 90:
             last_fallback_ts = now_ts
             return "唔…剛才分心了一下"
@@ -366,7 +368,6 @@ async def background_loop():
         now_dt = datetime.now(SYDNEY_TZ)
         now_ts = now_dt.timestamp()
 
-        # 5 小時 45 分鐘自動同步記憶並接力重啟
         if not relay_triggered and (time.time() - START_TIME) >= RELAY_AFTER_SECONDS:
             relay_triggered = True
             print("[Relay] 5h45m reached, syncing memory and exiting...", flush=True)
@@ -374,7 +375,6 @@ async def background_loop():
             await client.close()
             return
 
-        # 克制主動傳訊（避開深夜睡覺時段，且距離上次互動至少 4 小時）
         if 9 <= now_dt.hour <= 23:
             last_act = max(memory.get("last_interaction_ts", 0.0), memory.get("last_proactive_ts", 0.0))
             if (now_ts - last_act) >= PROACTIVE_COOLDOWN_SECONDS and random.random() < 0.05:
@@ -382,7 +382,7 @@ async def background_loop():
                 save_memory(memory)
                 target_ch = get_target_channel()
                 if target_ch:
-                    hint = "（你現在有點手腳微涼或想他了，先想過再隨手傳一句 12～28 字帶點曖昧或軟綿綿依賴的繁體中文短訊給他）"
+                    hint = "（你現在滑手機滑到一半，隨手傳一句 10～25 字像一般台灣女生的日常碎念、怕冷抱怨或突然想他的短訊給他，不要演言情劇本）"
                     msg = await generate_reply(proactive_prompt=hint, channel=target_ch)
                     if msg:
                         await target_ch.send(msg)
