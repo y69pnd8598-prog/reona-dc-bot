@@ -623,7 +623,7 @@ def build_system_prompt(
     body = memory["body_state"]
     prof = memory["user_profile"]
     weather = memory["weather_state"]
-    season_desc = get_sydney_season(now_dt)
+    season_desc = get_sydney_season_detail(now_dt)
     cycle_info = get_cycle_status(now_dt)
     proj_idx = int(memory["project_state"].get("stage_idx", 0)) % len(PROJECT_STAGES)
     proj_desc = PROJECT_STAGES[proj_idx]
