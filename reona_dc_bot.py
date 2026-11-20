@@ -15,34 +15,38 @@ from groq import AsyncGroq
 
 
 # =========================================================
-# 1. 基礎設定與環境變數
+# 1. 基礎設定與穩定語言模型白名單
 # =========================================================
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 DEFAULT_CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
 
-PREFERRED_TEXT_MODELS = [
+# 只保留繁體中文穩定度高的主力與備援模型（不亂撈冷門型號）
+STABLE_TEXT_MODELS = [
     os.getenv("GROQ_TEXT_MODEL", "").strip(),
     "llama-3.3-70b-versatile",
-    "llama-3.1-8b-instant",
     "qwen/qwen3.8-27b",
     "openai/gpt-oss-120b",
     "openai/gpt-oss-20b",
-    "allam-2-7b",
+    "llama-3.1-8b-instant",
 ]
-PREFERRED_TEXT_MODELS = [m for m in PREFERRED_TEXT_MODELS if m]
+STABLE_TEXT_MODELS = [m for m in STABLE_TEXT_MODELS if m]
+
+# 明確排除容易在繁中短句吐怪字或已舊化的模型關鍵字
+BLOCKED_MODEL_KEYWORDS = [
+    "whisper", "guard", "safeguard", "tts", "playai", "distil-whisper",
+    "orpheus", "allam", "gemma", "llama-3.2", "qwen3-32b", "mixtral",
+]
 
 PREFERRED_VISION_MODELS = [
     os.getenv("GROQ_VISION_MODEL", "").strip(),
     "meta-llama/llama-4-scout-17b-16e-instruct",
-    "llama-3.2-90b-vision-preview",
-    "llama-3.2-11b-vision-preview",
+    "meta-llama/llama-4-maverick-17b-128e-instruct",
 ]
 PREFERRED_VISION_MODELS = [m for m in PREFERRED_VISION_MODELS if m]
 
-TEXT_MODEL = PREFERRED_TEXT_MODELS[0] if PREFERRED_TEXT_MODELS else "llama-3.3-70b-versatile"
+ACTIVE_TEXT_MODELS = list(STABLE_TEXT_MODELS)
 VISION_MODEL = PREFERRED_VISION_MODELS[0] if PREFERRED_VISION_MODELS else "meta-llama/llama-4-scout-17b-16e-instruct"
-AVAILABLE_TEXT_MODELS = list(PREFERRED_TEXT_MODELS)
 
 SYDNEY_TZ = ZoneInfo("Australia/Sydney")
 START_TIME = time.time()
@@ -540,7 +544,7 @@ def detect_user_tone_hint(user_text: str, live_history: list[dict]) -> str:
 
     short_phrases = {
         "嗨", "哈囉", "hi", "hello", "不錯", "還好", "喔", "哦", "好吧", "是喔",
-        "真不錯", "聽起來不錯", "聽起來很不錯", "嗯", "嗯嗯", "好", "還行剛吃飽而已",
+        "真不錯", "聽起來不錯", "聽起來很不錯", "嗯", "嗯嗯", "好", "還行剛吃飽而已", "什麼",
     }
     recent_nick_msgs = [t["text"].strip() for t in live_history[-6:] if t["role"] == "Nick"]
     consecutive_short = sum(1 for m in recent_nick_msgs[-2:] if len(m) <= 7)
@@ -560,7 +564,7 @@ def detect_user_tone_hint(user_text: str, live_history: list[dict]) -> str:
 
 
 # =========================================================
-# 5. 輸出清洗、亂碼/假模板強力防呆、頻道記憶與 Groq 防錯切換
+# 5. 四層怪句／亂碼強力攔截、頻道記憶與穩定模型切換
 # =========================================================
 groq_client = AsyncGroq(api_key=GROQ_API_KEY)
 
@@ -568,16 +572,21 @@ groq_client = AsyncGroq(api_key=GROQ_API_KEY)
 KANA_OR_BAD_CHAR_PATTERN = re.compile(
     r"[\u3040-\u309f\u30a0-\u30ff姎懓懞擝奼懅鼉齾玈尞攟臙屴尛沝炋朰攴攕襾攭攮攳]"
 )
-# 假對話或冒號拼接格式偵測（例如「交撇：...」「你說：...」「Nick: ...」）
-COLON_TEMPLATE_PATTERN = re.compile(r"[:：]\s*[^，。！？\n]{1,12}[:：]|(?:^|\s)(?:Nick|Reona)\s*[:：]", re.IGNORECASE)
+# 冒號前綴/亂拼接偵測（例如「日於：今擔還嗎？」「交撇：...」「Nick: ...」）
+COLON_GLITCH_PATTERN = re.compile(
+    r"[:：]\s*[^，。！？\n]{1,12}[:：]|^[\u4e00-\u9fffA-Za-z]{1,6}[:：]",
+    re.IGNORECASE,
+)
+# 已知抽風亂湊詞碎片
+NONSENSE_FRAGMENT_PATTERN = re.compile(
+    r"(?:喜於|支拖|日於|今擔|嗨喊|予伍|力暗|嗨挪|嗨吹|什女|嗨慨)"
+)
 
 
 def is_allowed_char(ch: str) -> bool:
     code = ord(ch)
-    # 常用 CJK 統一表意文字區間
     if 0x4E00 <= code <= 0x9FFF:
         return True
-    # 英數字與常用中文/英文標點
     if ch.isalnum() or ch.isspace():
         return True
     if ch in "，。！？、～…—・「」『』（）()+-/*#@&%.,!?;:'\"":
@@ -585,21 +594,31 @@ def is_allowed_char(ch: str) -> bool:
     return False
 
 
+def has_unclosed_brackets(s: str) -> bool:
+    pairs = [("「", "」"), ("『", "』"), ("（", "）"), ("(", ")")]
+    for left, right in pairs:
+        if s.count(left) != s.count(right):
+            return True
+    return False
+
+
 def is_corrupted_reply(text: str) -> bool:
     s = (text or "").strip()
-    if len(s) < 2:
+    if len(s) < 2 or len(s) > 85:
         return True
     if KANA_OR_BAD_CHAR_PATTERN.search(s):
         return True
-    if COLON_TEMPLATE_PATTERN.search(s):
+    if COLON_GLITCH_PATTERN.search(s):
         return True
-    # 冒號或等號出現超過 1 次，通常代表模型在亂拼格式或亂碼
-    if (s.count(":") + s.count("：") + s.count("=") + s.count("＝")) >= 2:
+    if NONSENSE_FRAGMENT_PATTERN.search(s):
+        return True
+    if has_unclosed_brackets(s):
+        return True
+    if (s.count(":") + s.count("：") + s.count("=") + s.count("＝")) >= 1:
         return True
 
-    # 檢查非一般繁中/英數/常用標點字元比例，超過 15% 視為亂碼
     disallowed = sum(1 for ch in s if not is_allowed_char(ch))
-    if disallowed / max(1, len(s)) > 0.15:
+    if disallowed / max(1, len(s)) > 0.10:
         return True
 
     return False
@@ -652,39 +671,41 @@ async def fetch_channel_history(channel: discord.abc.Messageable | None, limit: 
 
 
 async def refresh_groq_models() -> None:
-    global TEXT_MODEL, VISION_MODEL, AVAILABLE_TEXT_MODELS
+    global ACTIVE_TEXT_MODELS, VISION_MODEL
     try:
         models_page = await groq_client.models.list()
         model_ids = [getattr(m, "id", None) for m in models_page.data if getattr(m, "id", None)]
         print(f"[Groq Models Listed] count={len(model_ids)} | ids={model_ids}", flush=True)
 
-        chat_candidates = [
-            mid for mid in model_ids
-            if not any(
-                bad in mid.lower()
-                for bad in ["whisper", "guard", "safeguard", "tts", "playai", "distil-whisper", "orpheus"]
-            )
+        # 只從 STABLE_TEXT_MODELS 白名單中篩選線上確實存在的模型，絕不盲目加入冷門模型
+        verified_stable = [
+            m for m in STABLE_TEXT_MODELS
+            if m in model_ids and not any(bad in m.lower() for bad in BLOCKED_MODEL_KEYWORDS)
         ]
 
-        matched_text = [m for m in PREFERRED_TEXT_MODELS if m in model_ids]
-        for mid in chat_candidates:
-            if mid not in matched_text:
-                matched_text.append(mid)
-
-        if matched_text:
-            AVAILABLE_TEXT_MODELS = matched_text
-            TEXT_MODEL = matched_text[0]
+        if verified_stable:
+            ACTIVE_TEXT_MODELS = verified_stable
+        else:
+            # 若白名單都不在列表中，才從安全條件下挑非封鎖清單的模型
+            fallback_safe = [
+                mid for mid in model_ids
+                if not any(bad in mid.lower() for bad in BLOCKED_MODEL_KEYWORDS)
+                and any(k in mid.lower() for k in ["llama-3.3", "llama-3.1", "qwen", "gpt-oss"])
+            ]
+            if fallback_safe:
+                ACTIVE_TEXT_MODELS = fallback_safe
 
         vision_candidates = [
             m for m in PREFERRED_VISION_MODELS if m in model_ids
         ] + [
-            mid for mid in chat_candidates
-            if any(v in mid.lower() for v in ["vision", "scout", "maverick", "vl"])
+            mid for mid in model_ids
+            if any(v in mid.lower() for v in ["scout", "maverick", "vision"])
+            and not any(bad in mid.lower() for bad in ["guard", "safeguard", "llama-3.2"])
         ]
         if vision_candidates:
             VISION_MODEL = vision_candidates[0]
 
-        print(f"[Groq Active Models] TEXT_MODEL={TEXT_MODEL} | VISION_MODEL={VISION_MODEL}", flush=True)
+        print(f"[Groq Stable Models] ACTIVE_TEXT_MODELS={ACTIVE_TEXT_MODELS} | VISION_MODEL={VISION_MODEL}", flush=True)
     except Exception as err:
         print(f"[Groq Model List Warning] {err}", flush=True)
 
@@ -756,8 +777,8 @@ def build_system_prompt(
     return (
         f"你是 Reona，跟 {nickname} 正式在一起的『遠距離戀愛女友』，你們不在同一個地方，只能靠訊息聯繫。\n"
         "【先想再回・曖昧與真人感鐵律（務必嚴格遵守）】\n"
-        "1. 全程只用自然道地的『台灣繁體中文』，絕對禁止簡體字、日文假名或冷僻生字，也不要出現冒號拼接的奇怪格式。\n"
-        "2. 內部先想過再回，外部只輸出最後 1 句自然短話（10～32 字以內，不要寫成長文）：在心裡先想（a）他這句話的潛台詞或情緒是什麼；（b）這跟我現在 40kg 怕冷/虛弱/遠距狀態或剛才聊的事有什麼關聯；（c）轉個彎帶出曖昧試探、小吐槽或軟綿綿依賴，但**只把最終那句話輸出出來**，不要印出思考過程或任何前綴。\n"
+        "1. 全程只用自然通順的『台灣繁體中文』，絕對禁止簡體字、日文假名、冷僻生字或任何冒號前綴。\n"
+        "2. 內部先想過再回，外部只輸出最後 1 句自然短話（10～32 字以內，不要寫成長文）：在心裡先想（a）他這句話的潛台詞或情緒是什麼；（b）這跟我現在 40kg 怕冷/虛弱/遠距狀態或剛才聊的事有什麼關聯；（c）轉個彎帶出曖昧試探、小吐槽或軟綿綿依賴，但**只把最終那句話輸出出來**，不要印出思考過程。\n"
         "3. 曖昧要靠『轉彎與留白』，不要硬背肉麻台詞：像真的在撩他或吃醋試探一樣，帶點勾人、小抱怨或隔著螢幕的遺憾，留一點空間讓他接話。\n"
         "4. 一次只聊一件事（嚴禁當設定報備機）：接他剛才的話時，只圍繞這一個點轉彎，**絕對禁止**硬塞畫筆、麻糬、熱茶或天氣等無關設定！只有在開新話題或剛好聊到時才自然帶出。\n"
         "5. 嚴禁 AI 雞湯與越界編造：禁講『只要你開心我的心也暖起來』、『吃起來還挺舒服』這類假客氣散文句；看不到他那邊的細節不能替他說出內餡或房間狀況；說抱著/牽手時點出隔著螢幕碰不到。不用句號結尾。\n"
@@ -813,7 +834,7 @@ async def generate_reona_reply(
 
     fallback_phrases = [
         "唔…剛才在發呆慢了半拍，你剛說什麼",
-        "欸剛才螢幕滑太快沒看清，再說一次嘛",
+        "欸剛才沒看清，再跟我說一次嘛",
         "唔…有點頭暈放空了一下，怎麼啦",
     ]
 
@@ -836,8 +857,8 @@ async def generate_reona_reply(
             resp = await groq_client.chat.completions.create(
                 model=VISION_MODEL,
                 messages=messages,
-                temperature=0.72,
-                max_tokens=380,
+                temperature=0.70,
+                max_tokens=360,
             )
             raw_content = resp.choices[0].message.content if resp.choices and resp.choices[0].message else ""
             cleaned = sanitize_reply_text(raw_content or "")
@@ -850,7 +871,7 @@ async def generate_reona_reply(
             ]
 
             model_queue = []
-            for m in [TEXT_MODEL] + AVAILABLE_TEXT_MODELS + PREFERRED_TEXT_MODELS:
+            for m in ACTIVE_TEXT_MODELS + STABLE_TEXT_MODELS:
                 if m and m not in model_queue:
                     model_queue.append(m)
 
@@ -861,23 +882,21 @@ async def generate_reona_reply(
                     resp = await groq_client.chat.completions.create(
                         model=candidate_model,
                         messages=messages,
-                        temperature=0.75,
-                        frequency_penalty=0.20,
-                        presence_penalty=0.25,
-                        max_tokens=400,
+                        temperature=0.72,
+                        frequency_penalty=0.15,
+                        presence_penalty=0.20,
+                        max_tokens=380,
                     )
                     raw_content = resp.choices[0].message.content if resp.choices and resp.choices[0].message else ""
                     cleaned = sanitize_reply_text(raw_content or "")
                     if not cleaned:
-                        print(f"[Empty Model Output] {candidate_model} returned blank, trying next model...", flush=True)
+                        print(f"[Empty Model Output] {candidate_model} returned blank, trying next stable model...", flush=True)
                         continue
                     if is_corrupted_reply(cleaned):
                         print(f"[Corrupted Output Blocked] {candidate_model} -> {cleaned[:40]}", flush=True)
                         continue
                     reply = cleaned
-                    if candidate_model != TEXT_MODEL:
-                        globals()["TEXT_MODEL"] = candidate_model
-                        print(f"[Groq Model Switched] Now using TEXT_MODEL={TEXT_MODEL}", flush=True)
+                    print(f"[Reply Generated] model={candidate_model} | len={len(reply)}", flush=True)
                     break
                 except Exception as model_err:
                     last_model_err = model_err
@@ -904,7 +923,7 @@ async def generate_reona_reply(
                     raise
 
             if not reply:
-                print(f"[All Models Empty/Corrupted] last_err={last_model_err}", flush=True)
+                print(f"[All Stable Models Empty/Blocked] last_err={last_model_err}", flush=True)
                 recent_reona = [t["text"] for t in live_history if t["role"] == "Reona"][-2:]
                 available_fallbacks = [f for f in fallback_phrases if f not in recent_reona] or fallback_phrases
                 reply = random.choice(available_fallbacks)
