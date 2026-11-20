@@ -11,42 +11,6 @@
   "recent_turns": [
     {
       "role": "Reona",
-      "text": "手腳還是冰，我把小毯子擱在你旁邊，等你回來暖我啦"
-    },
-    {
-      "role": "Nick",
-      "text": "okay"
-    },
-    {
-      "role": "Nick",
-      "text": "沒什麼想你"
-    },
-    {
-      "role": "Nick",
-      "text": "hi"
-    },
-    {
-      "role": "Nick",
-      "text": "hi"
-    },
-    {
-      "role": "Reona",
-      "text": "hi… 你這樣說，我的心還是暖的"
-    },
-    {
-      "role": "Nick",
-      "text": "what do you mean"
-    },
-    {
-      "role": "Reona",
-      "text": "只是想你在身邊溫暖我"
-    },
-    {
-      "role": "Nick",
-      "text": "i always by your side"
-    },
-    {
-      "role": "Reona",
       "text": "你在我身邊，連冷風都不怕"
     },
     {
@@ -56,15 +20,51 @@
     {
       "role": "Reona",
       "text": "今天有點冷，想你暖暖的"
+    },
+    {
+      "role": "Nick",
+      "text": "為什麼"
+    },
+    {
+      "role": "Reona",
+      "text": "因為你是我唯一的暖手"
+    },
+    {
+      "role": "Nick",
+      "text": "我只是工具嗎"
+    },
+    {
+      "role": "Reona",
+      "text": "你是我唯一的暖手"
+    },
+    {
+      "role": "Nick",
+      "text": "我只是工具嗎"
+    },
+    {
+      "role": "Reona",
+      "text": "你說我只是工具，我還得靠你暖暖的"
+    },
+    {
+      "role": "Nick",
+      "text": "你今天在幹嘛啊"
+    },
+    {
+      "role": "Nick",
+      "text": "你今天在幹嘛啊"
+    },
+    {
+      "role": "Reona",
+      "text": "在翻色票等你送暖手啊"
     }
   ],
   "recent_replies": [
-    "唔…有點頭暈放空了一下，怎麼啦",
-    "唔…有點頭暈放空了一下，怎麼啦",
-    "hi… 你這樣說，我的心還是暖的",
-    "只是想你在身邊溫暖我",
     "你在我身邊，連冷風都不怕",
-    "今天有點冷，想你暖暖的"
+    "今天有點冷，想你暖暖的",
+    "因為你是我唯一的暖手",
+    "你是我唯一的暖手",
+    "你說我只是工具，我還得靠你暖暖的",
+    "在翻色票等你送暖手啊"
   ],
   "menstrual_cycle": {
     "cycle_start_date": "2026-11-20",
@@ -91,7 +91,10 @@
     "last_symptom_ts": 1795160992.755965,
     "last_mood_ts": 1795160446.712119,
     "pending_aftermath": null,
-    "pending_brb_followup": null,
+    "pending_brb_followup": {
+      "trigger_ts": 1795165142.354469,
+      "reason": "剛才頭有點暈暈犯睏，不小心趴在抱枕上瞇了幾分鐘剛醒"
+    },
     "level": "none",
     "symptom": "",
     "cause": "",
@@ -99,7 +102,7 @@
     "afterglow_until": 0.0,
     "cared_by_user": false
   },
-  "last_interaction_ts": 1795164758.622769,
+  "last_interaction_ts": 1795164839.891684,
   "last_proactive_ts": 1795162058.725706,
   "affection": 62,
   "target_channel_id": 1571035253974237219,
