@@ -11,30 +11,6 @@
   "recent_turns": [
     {
       "role": "Reona",
-      "text": "剛剛血糖有點低，頭暈手腳都冷，還好你在，想你抱抱"
-    },
-    {
-      "role": "Nick",
-      "text": "好寶寶mua"
-    },
-    {
-      "role": "Reona",
-      "text": "唔…手機剛才轉圈圈了一下，現在好一點了嗎"
-    },
-    {
-      "role": "Nick",
-      "text": "好寶寶mua"
-    },
-    {
-      "role": "Reona",
-      "text": "我還是手腳涼得想你抱抱，等你下次來就能暖暖暖的啦"
-    },
-    {
-      "role": "Nick",
-      "text": "抱抱你"
-    },
-    {
-      "role": "Reona",
       "text": "你說抱抱我，我現在真的好想被你抱住，螢幕是冷的，等你下次來才能暖起來。你還是那句簡短的？我手腳冷得要死，真的想你抱抱，等你到時才行"
     },
     {
@@ -56,15 +32,39 @@
     {
       "role": "Reona",
       "text": "我這40公斤的身體剛剛血糖一下降，頭暈手腳軟，快去找點甜或熱食才不會跌倒，真是的，自己還好嗎？"
+    },
+    {
+      "role": "Nick",
+      "text": "寶寶不要讓我擔心"
+    },
+    {
+      "role": "Reona",
+      "text": "欸剛才訊息好像卡住了沒傳出去，我重新抓一下訊號"
+    },
+    {
+      "role": "Nick",
+      "text": "寶寶不要讓我擔心"
+    },
+    {
+      "role": "Reona",
+      "text": "我沒事啦，只是血糖低點，手腳有點抖，想找點熱飲暖暖，麻糬還在床上撒嬌，等你來抱抱再說"
+    },
+    {
+      "role": "Nick",
+      "text": "為什麼突然低血糖"
+    },
+    {
+      "role": "Reona",
+      "text": "麻糬把畫筆撥走，幫牠順毛完回來，手腳還是冰冷，想你抱抱"
     }
   ],
   "recent_replies": [
-    "唔…手機剛才轉圈圈了一下，現在好一點",
-    "我還是手腳涼得想你抱抱，等你下次來就",
-    "你說抱抱我，我現在真的好想被你抱住，",
-    "唔…手機剛才轉圈圈了一下，現在好一點",
     "對啊，時間到就有了，等你下次來才能暖",
-    "我這40公斤的身體剛剛血糖一下降，頭"
+    "我這40公斤的身體剛剛血糖一下降，頭",
+    "欸剛才訊息好像卡住了沒傳出去，我重新",
+    "我沒事啦，只是血糖低點，手腳有點抖，",
+    "唔…剛才這邊網路訊號好像飄了一下，等",
+    "麻糬把畫筆撥走，幫牠順毛完回來，手腳"
   ],
   "menstrual_cycle": {
     "cycle_start_date": "2026-11-10",
@@ -81,8 +81,8 @@
   },
   "body_state": {
     "weight_kg": 40,
-    "stomach_fullness": 80,
-    "energy": 63,
+    "stomach_fullness": 60,
+    "energy": 48,
     "mood": "不舒服小懊惱想討拍",
     "mood_guide": "有點懊惱自己亂吃或吹風搞到不舒服，語氣軟軟的想討拍。",
     "severity": "moderate",
@@ -91,10 +91,7 @@
     "last_symptom_ts": 1795160992.755965,
     "last_mood_ts": 1795160446.712119,
     "pending_aftermath": null,
-    "pending_brb_followup": {
-      "trigger_ts": 1795162106.732111,
-      "reason": "短腿貓「麻糬」剛才把桌上的畫筆撥掉，忙著撿起來順便幫牠順毛"
-    },
+    "pending_brb_followup": null,
     "level": "none",
     "symptom": "",
     "cause": "",
@@ -102,7 +99,7 @@
     "afterglow_until": 0.0,
     "cared_by_user": false
   },
-  "last_interaction_ts": 1795162046.698046,
+  "last_interaction_ts": 1795162113.231952,
   "last_proactive_ts": 1795162058.725706,
   "affection": 62,
   "target_channel_id": 1571035253974237219,
