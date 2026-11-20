@@ -21,22 +21,26 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 DEFAULT_CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
 
-# 只保留繁體中文穩定度高的主力與備援模型（不亂撈冷門型號）
 STABLE_TEXT_MODELS = [
     os.getenv("GROQ_TEXT_MODEL", "").strip(),
-    "llama-3.3-70b-versatile",
+    "openai/gpt-oss-20b",
     "qwen/qwen3.8-27b",
     "openai/gpt-oss-120b",
-    "openai/gpt-oss-20b",
+    "llama-3.3-70b-versatile",
     "llama-3.1-8b-instant",
 ]
 STABLE_TEXT_MODELS = [m for m in STABLE_TEXT_MODELS if m]
 
-# 明確排除容易在繁中短句吐怪字或已舊化的模型關鍵字
 BLOCKED_MODEL_KEYWORDS = [
     "whisper", "guard", "safeguard", "tts", "playai", "distil-whisper",
     "orpheus", "allam", "gemma", "llama-3.2", "qwen3-32b", "mixtral",
 ]
+
+REASONING_MODELS = {
+    "openai/gpt-oss-20b",
+    "openai/gpt-oss-120b",
+    "qwen/qwen3.8-27b",
+}
 
 PREFERRED_VISION_MODELS = [
     os.getenv("GROQ_VISION_MODEL", "").strip(),
@@ -56,6 +60,11 @@ PROACTIVE_COOLDOWN_SECONDS = int(os.getenv("PROACTIVE_COOLDOWN_SECONDS", "10800"
 MEMORY_FILE = "reona_memory.json"
 TEMP_IMAGE_PATH = "temp_latest_image.jpg"
 turns_since_last_git_sync = 0
+
+# 模型冷卻表與保底降頻追蹤（記憶體內執行期狀態）
+model_cooldowns: dict[str, float] = {}
+last_fallback_ts: float = 0.0
+consecutive_fallback_count: int = 0
 
 WEEKDAY_NAMES_ZH = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
 
@@ -564,23 +573,68 @@ def detect_user_tone_hint(user_text: str, live_history: list[dict]) -> str:
 
 
 # =========================================================
-# 5. 四層怪句／亂碼強力攔截、頻道記憶與穩定模型切換
+# 5. 冷卻管理、四層怪句攔截、頻道記憶與穩定模型排隊
 # =========================================================
 groq_client = AsyncGroq(api_key=GROQ_API_KEY)
 
-# 日文平假名/片假名 + 已知罕見亂碼字元
 KANA_OR_BAD_CHAR_PATTERN = re.compile(
     r"[\u3040-\u309f\u30a0-\u30ff姎懓懞擝奼懅鼉齾玈尞攟臙屴尛沝炋朰攴攕襾攭攮攳]"
 )
-# 冒號前綴/亂拼接偵測（例如「日於：今擔還嗎？」「交撇：...」「Nick: ...」）
 COLON_GLITCH_PATTERN = re.compile(
     r"[:：]\s*[^，。！？\n]{1,12}[:：]|^[\u4e00-\u9fffA-Za-z]{1,6}[:：]",
     re.IGNORECASE,
 )
-# 已知抽風亂湊詞碎片
 NONSENSE_FRAGMENT_PATTERN = re.compile(
     r"(?:喜於|支拖|日於|今擔|嗨喊|予伍|力暗|嗨挪|嗨吹|什女|嗨慨)"
 )
+
+
+def set_model_cooldown(model_name: str, err_str: str, now_ts: float) -> None:
+    lower = err_str.lower()
+    if any(k in lower for k in ["tokens per day", "requests per day", "tpd", "rpd", "per day"]):
+        cooldown_sec = 3600  # 日額度耗盡：冷卻 1 小時
+        reason = "TPD/RPD daily limit"
+    elif "429" in lower or "rate limit" in lower or "rate_limit" in lower:
+        cooldown_sec = 240   # 短時限流：冷卻 4 分鐘
+        reason = "429 RPM rate limit"
+    else:
+        cooldown_sec = 180
+        reason = "model error"
+
+    model_cooldowns[model_name] = now_ts + cooldown_sec
+    print(f"[Model Cooldown] {model_name} cooled for {cooldown_sec}s ({reason})", flush=True)
+
+
+def clear_model_cooldown(model_name: str) -> None:
+    if model_name in model_cooldowns:
+        model_cooldowns.pop(model_name, None)
+
+
+def build_ordered_candidate_queue(now_ts: float) -> list[str]:
+    raw_queue: list[str] = []
+    for m in ACTIVE_TEXT_MODELS + STABLE_TEXT_MODELS:
+        if m and m not in raw_queue and not any(bad in m.lower() for bad in BLOCKED_MODEL_KEYWORDS):
+            raw_queue.append(m)
+
+    active_ready: list[str] = []
+    cooling_models: list[tuple[float, str]] = []
+
+    for m in raw_queue:
+        exp_ts = model_cooldowns.get(m, 0.0)
+        if exp_ts > now_ts:
+            cooling_models.append((exp_ts, m))
+        else:
+            active_ready.append(m)
+
+    if active_ready:
+        return active_ready
+
+    # 若全部都在冷卻中，只挑最快解凍的那一顆做最後嘗試，避免全打一遍
+    if cooling_models:
+        cooling_models.sort(key=lambda item: item[0])
+        return [cooling_models[0][1]]
+
+    return raw_queue
 
 
 def is_allowed_char(ch: str) -> bool:
@@ -658,7 +712,7 @@ async def fetch_channel_history(channel: discord.abc.Messageable | None, limit: 
                     continue
             if any(
                 content.startswith(prefix)
-                for prefix in ["唔…剛才在發呆", "欸剛才螢幕滑太快", "唔…有點頭暈放空"]
+                for prefix in ["唔…剛才在發呆", "欸剛才沒看清", "唔…有點頭暈放空"]
             ) or is_corrupted_reply(content):
                 continue
             role = "Reona" if (client.user and m.author.id == client.user.id) else "Nick"
@@ -677,7 +731,6 @@ async def refresh_groq_models() -> None:
         model_ids = [getattr(m, "id", None) for m in models_page.data if getattr(m, "id", None)]
         print(f"[Groq Models Listed] count={len(model_ids)} | ids={model_ids}", flush=True)
 
-        # 只從 STABLE_TEXT_MODELS 白名單中篩選線上確實存在的模型，絕不盲目加入冷門模型
         verified_stable = [
             m for m in STABLE_TEXT_MODELS
             if m in model_ids and not any(bad in m.lower() for bad in BLOCKED_MODEL_KEYWORDS)
@@ -686,7 +739,6 @@ async def refresh_groq_models() -> None:
         if verified_stable:
             ACTIVE_TEXT_MODELS = verified_stable
         else:
-            # 若白名單都不在列表中，才從安全條件下挑非封鎖清單的模型
             fallback_safe = [
                 mid for mid in model_ids
                 if not any(bad in mid.lower() for bad in BLOCKED_MODEL_KEYWORDS)
@@ -798,13 +850,37 @@ def build_system_prompt(
     )
 
 
+def pick_smart_fallback(live_history: list[dict], now_ts: float) -> str | None:
+    global last_fallback_ts, consecutive_fallback_count
+
+    # 若 30 秒內連續發生保底，第二三次改採安靜降級不連續刷屏
+    if (now_ts - last_fallback_ts) < 35:
+        consecutive_fallback_count += 1
+        if consecutive_fallback_count >= 2:
+            print("[Fallback Throttled] Suppressing repeated fallback spam.", flush=True)
+            return None
+    else:
+        consecutive_fallback_count = 1
+
+    last_fallback_ts = now_ts
+
+    fallback_phrases = [
+        "唔…剛才在發呆慢了半拍，你剛說什麼",
+        "欸剛才沒看清，再跟我說一次嘛",
+        "唔…有點頭暈放空了一下，怎麼啦",
+    ]
+    recent_reona = [t["text"] for t in live_history if t["role"] == "Reona"][-2:]
+    available = [f for f in fallback_phrases if f not in recent_reona] or fallback_phrases
+    return random.choice(available)
+
+
 async def generate_reona_reply(
     user_text: str = "",
     image_url: str | None = None,
     proactive_hint: str | None = None,
     channel: discord.abc.Messageable | None = None,
 ) -> str:
-    global turns_since_last_git_sync
+    global turns_since_last_git_sync, consecutive_fallback_count
     now_dt = datetime.now(SYDNEY_TZ)
     now_ts = now_dt.timestamp()
 
@@ -832,12 +908,6 @@ async def generate_reona_reply(
     if user_text:
         memory["last_interaction_ts"] = now_ts
 
-    fallback_phrases = [
-        "唔…剛才在發呆慢了半拍，你剛說什麼",
-        "欸剛才沒看清，再跟我說一次嘛",
-        "唔…有點頭暈放空了一下，怎麼啦",
-    ]
-
     try:
         if image_url:
             messages = [
@@ -858,11 +928,15 @@ async def generate_reona_reply(
                 model=VISION_MODEL,
                 messages=messages,
                 temperature=0.70,
-                max_tokens=360,
+                max_tokens=450,
             )
             raw_content = resp.choices[0].message.content if resp.choices and resp.choices[0].message else ""
             cleaned = sanitize_reply_text(raw_content or "")
-            reply = cleaned if (cleaned and not is_corrupted_reply(cleaned)) else random.choice(fallback_phrases)
+            if cleaned and not is_corrupted_reply(cleaned):
+                consecutive_fallback_count = 0
+                reply = cleaned
+            else:
+                return pick_smart_fallback(live_history, now_ts) or ""
         else:
             prompt_content = proactive_hint if proactive_hint else user_text
             messages = [
@@ -870,64 +944,66 @@ async def generate_reona_reply(
                 {"role": "user", "content": prompt_content},
             ]
 
-            model_queue = []
-            for m in ACTIVE_TEXT_MODELS + STABLE_TEXT_MODELS:
-                if m and m not in model_queue:
-                    model_queue.append(m)
-
+            model_queue = build_ordered_candidate_queue(now_ts)
             reply = ""
             last_model_err = None
+
             for candidate_model in model_queue:
-                try:
-                    resp = await groq_client.chat.completions.create(
-                        model=candidate_model,
-                        messages=messages,
-                        temperature=0.72,
-                        frequency_penalty=0.15,
-                        presence_penalty=0.20,
-                        max_tokens=380,
-                    )
-                    raw_content = resp.choices[0].message.content if resp.choices and resp.choices[0].message else ""
-                    cleaned = sanitize_reply_text(raw_content or "")
-                    if not cleaned:
-                        print(f"[Empty Model Output] {candidate_model} returned blank, trying next stable model...", flush=True)
-                        continue
-                    if is_corrupted_reply(cleaned):
-                        print(f"[Corrupted Output Blocked] {candidate_model} -> {cleaned[:40]}", flush=True)
-                        continue
-                    reply = cleaned
-                    print(f"[Reply Generated] model={candidate_model} | len={len(reply)}", flush=True)
+                is_reasoning = candidate_model in REASONING_MODELS
+                max_tok = 650 if is_reasoning else 360
+                attempts = 2 if is_reasoning else 1
+
+                model_succeeded = False
+                for attempt_idx in range(attempts):
+                    try:
+                        temp_val = 0.72 if attempt_idx == 0 else 0.65
+                        resp = await groq_client.chat.completions.create(
+                            model=candidate_model,
+                            messages=messages,
+                            temperature=temp_val,
+                            frequency_penalty=0.15,
+                            presence_penalty=0.20,
+                            max_tokens=max_tok,
+                        )
+                        raw_content = resp.choices[0].message.content if resp.choices and resp.choices[0].message else ""
+                        cleaned = sanitize_reply_text(raw_content or "")
+
+                        if not cleaned:
+                            print(
+                                f"[Empty Model Output] {candidate_model} (attempt {attempt_idx + 1}/{attempts}) returned blank",
+                                flush=True,
+                            )
+                            continue
+
+                        if is_corrupted_reply(cleaned):
+                            print(
+                                f"[Corrupted Output Blocked] {candidate_model} (attempt {attempt_idx + 1}/{attempts}) -> {cleaned[:40]}",
+                                flush=True,
+                            )
+                            continue
+
+                        reply = cleaned
+                        clear_model_cooldown(candidate_model)
+                        consecutive_fallback_count = 0
+                        model_succeeded = True
+                        print(f"[Reply Generated] model={candidate_model} | len={len(reply)}", flush=True)
+                        break
+
+                    except Exception as model_err:
+                        last_model_err = model_err
+                        err_str = str(model_err)
+                        print(f"[Model Candidate Failed] {candidate_model} -> {err_str[:140]}", flush=True)
+                        set_model_cooldown(candidate_model, err_str, now_ts)
+                        break
+
+                if model_succeeded:
                     break
-                except Exception as model_err:
-                    last_model_err = model_err
-                    err_str = str(model_err)
-                    print(f"[Model Candidate Failed] {candidate_model} -> {err_str[:140]}", flush=True)
-                    if any(
-                        token in err_str.lower()
-                        for token in [
-                            "429",
-                            "rate_limit",
-                            "rate limit",
-                            "tokens per day",
-                            "requests per day",
-                            "404",
-                            "model_not_found",
-                            "does not exist",
-                            "decommissioned",
-                            "model_terms_required",
-                            "terms acceptance",
-                            "400",
-                        ]
-                    ):
-                        continue
-                    raise
 
             if not reply:
                 print(f"[All Stable Models Empty/Blocked] last_err={last_model_err}", flush=True)
-                recent_reona = [t["text"] for t in live_history if t["role"] == "Reona"][-2:]
-                available_fallbacks = [f for f in fallback_phrases if f not in recent_reona] or fallback_phrases
-                reply = random.choice(available_fallbacks)
+                return pick_smart_fallback(live_history, now_ts) or ""
 
+        # 僅在通過所有檢查拿到有效回覆後才寫入記憶
         if live_history:
             memory["recent_turns"] = (live_history + [{"role": "Reona", "text": reply}])[-12:]
         else:
@@ -949,7 +1025,7 @@ async def generate_reona_reply(
 
     except Exception as e:
         print(f"[Groq API Error] {e}", flush=True)
-        return random.choice(fallback_phrases)
+        return pick_smart_fallback(live_history, now_ts) or ""
 
 
 # =========================================================
@@ -1069,80 +1145,86 @@ async def on_message(message: discord.Message):
     if not user_text and not image_url:
         return
 
-    async with message.channel.typing():
-        reply = await generate_reona_reply(
-            user_text=user_text,
-            image_url=image_url,
-            channel=message.channel,
-        )
+    try:
+        async with message.channel.typing():
+            reply = await generate_reona_reply(
+                user_text=user_text,
+                image_url=image_url,
+                channel=message.channel,
+            )
         if reply and reply.strip():
             await message.channel.send(reply.strip())
+    except Exception as err:
+        print(f"[on_message Error] {err}", flush=True)
 
 
 @tasks.loop(seconds=60)
 async def background_loop():
     global relay_triggered
-    now_dt = datetime.now(SYDNEY_TZ)
-    now_ts = now_dt.timestamp()
+    try:
+        now_dt = datetime.now(SYDNEY_TZ)
+        now_ts = now_dt.timestamp()
 
-    # 0. 生活小斷點回歸
-    brb = memory["body_state"].get("pending_brb_followup")
-    if brb and now_ts >= brb.get("trigger_ts", 0):
-        memory["body_state"]["pending_brb_followup"] = None
-        save_memory(memory)
-        target_ch = get_target_channel()
-        if target_ch:
-            hint = (
-                f"你剛才因為「{brb.get('reason', '')}」暫時離開了一下，現在忙完了回到手機前，"
-                "先想過再自然帶點俏皮或黏人地用 15～28 字繁體中文告訴他你回來了"
-            )
-            msg = await generate_reona_reply(proactive_hint=hint, channel=target_ch)
-            if msg and msg.strip():
-                await target_ch.send(msg.strip())
-                print(f"[BRB Followup Sent] {msg}", flush=True)
+        # 0. 生活小斷點回歸
+        brb = memory["body_state"].get("pending_brb_followup")
+        if brb and now_ts >= brb.get("trigger_ts", 0):
+            memory["body_state"]["pending_brb_followup"] = None
+            save_memory(memory)
+            target_ch = get_target_channel()
+            if target_ch:
+                hint = (
+                    f"你剛才因為「{brb.get('reason', '')}」暫時離開了一下，現在忙完了回到手機前，"
+                    "先想過再自然帶點俏皮或黏人地用 15～28 字繁體中文告訴他你回來了"
+                )
+                msg = await generate_reona_reply(proactive_hint=hint, channel=target_ch)
+                if msg and msg.strip():
+                    await target_ch.send(msg.strip())
+                    print(f"[BRB Followup Sent] {msg}", flush=True)
 
-    # 1. 食物餘韻 / 40kg 脆弱體質主動傳訊觸發
-    aftermath = memory["body_state"].get("pending_aftermath")
-    if aftermath and now_ts >= aftermath.get("trigger_ts", 0):
-        memory["body_state"]["pending_aftermath"] = None
-        memory["last_proactive_ts"] = now_ts
-        save_memory(memory)
-        target_ch = get_target_channel()
-        if target_ch:
-            symptom = memory["body_state"].get("current_symptom", "")
-            hint = (
-                f"你剛剛碰了「{aftermath.get('item', '')}」，加上你40公斤底子偏弱，現在「{symptom}」，"
-                "先想過再把這份虛弱轉化成軟綿綿想討拍或依賴的曖昧語氣，15～30 字繁體中文跟他說"
-            )
-            msg = await generate_reona_reply(proactive_hint=hint, channel=target_ch)
-            if msg and msg.strip():
-                await target_ch.send(msg.strip())
-                print(f"[Proactive Aftermath Sent] {msg}", flush=True)
-
-    # 2. 全天候主動分享日常 & 深夜露餡主動敲人
-    last_inter = memory.get("last_interaction_ts", 0.0)
-    last_pro = memory.get("last_proactive_ts", 0.0)
-    idle_since_last = now_ts - max(last_inter, last_pro)
-
-    if idle_since_last >= PROACTIVE_COOLDOWN_SECONDS:
-        hint = build_proactive_hint(now_dt)
-        trigger_prob = 0.08 if (now_dt.hour >= 23 or now_dt.hour < 2) else 0.04
-        if hint and random.random() < trigger_prob:
+        # 1. 食物餘韻 / 40kg 脆弱體質主動傳訊觸發
+        aftermath = memory["body_state"].get("pending_aftermath")
+        if aftermath and now_ts >= aftermath.get("trigger_ts", 0):
+            memory["body_state"]["pending_aftermath"] = None
             memory["last_proactive_ts"] = now_ts
             save_memory(memory)
             target_ch = get_target_channel()
             if target_ch:
+                symptom = memory["body_state"].get("current_symptom", "")
+                hint = (
+                    f"你剛剛碰了「{aftermath.get('item', '')}」，加上你40公斤底子偏弱，現在「{symptom}」，"
+                    "先想過再把這份虛弱轉化成軟綿綿想討拍或依賴的曖昧語氣，15～30 字繁體中文跟他說"
+                )
                 msg = await generate_reona_reply(proactive_hint=hint, channel=target_ch)
                 if msg and msg.strip():
                     await target_ch.send(msg.strip())
-                    print(f"[Proactive Message Sent] {msg}", flush=True)
+                    print(f"[Proactive Aftermath Sent] {msg}", flush=True)
 
-    # 3. 5h45m 自動接力與記憶同步
-    if not relay_triggered and (time.time() - START_TIME) >= RELAY_AFTER_SECONDS:
-        relay_triggered = True
-        print("[Relay Triggered] Reached 5h45m, syncing memory and exiting cleanly...", flush=True)
-        sync_memory_to_git("relay: sync memory before restart")
-        await client.close()
+        # 2. 全天候主動分享日常 & 深夜露餡主動敲人
+        last_inter = memory.get("last_interaction_ts", 0.0)
+        last_pro = memory.get("last_proactive_ts", 0.0)
+        idle_since_last = now_ts - max(last_inter, last_pro)
+
+        if idle_since_last >= PROACTIVE_COOLDOWN_SECONDS:
+            hint = build_proactive_hint(now_dt)
+            trigger_prob = 0.08 if (now_dt.hour >= 23 or now_dt.hour < 2) else 0.04
+            if hint and random.random() < trigger_prob:
+                memory["last_proactive_ts"] = now_ts
+                save_memory(memory)
+                target_ch = get_target_channel()
+                if target_ch:
+                    msg = await generate_reona_reply(proactive_hint=hint, channel=target_ch)
+                    if msg and msg.strip():
+                        await target_ch.send(msg.strip())
+                        print(f"[Proactive Message Sent] {msg}", flush=True)
+
+        # 3. 5h45m 自動接力與記憶同步
+        if not relay_triggered and (time.time() - START_TIME) >= RELAY_AFTER_SECONDS:
+            relay_triggered = True
+            print("[Relay Triggered] Reached 5h45m, syncing memory and exiting cleanly...", flush=True)
+            await asyncio.to_thread(sync_memory_to_git, "relay: sync memory before restart")
+            await client.close()
+    except Exception as loop_err:
+        print(f"[Background Loop Error] {loop_err}", flush=True)
 
 
 if __name__ == "__main__":
