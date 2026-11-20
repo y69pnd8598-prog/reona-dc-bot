@@ -51,6 +51,7 @@ PROACTIVE_COOLDOWN_SECONDS = int(os.getenv("PROACTIVE_COOLDOWN_SECONDS", "9000")
 
 MEMORY_FILE = "reona_memory.json"
 TEMP_IMAGE_PATH = "temp_latest_image.jpg"
+turns_since_last_git_sync = 0
 
 print(
     f"[Config Check] DISCORD_TOKEN set: {bool(DISCORD_TOKEN)} | GROQ_API_KEY set: {bool(GROQ_API_KEY)} | CHANNEL_ID: {DEFAULT_CHANNEL_ID}",
@@ -504,9 +505,35 @@ def update_profile_from_text(text: str) -> None:
 
 
 # =========================================================
-# 5. 人設、難預測真實開口引擎與 Groq 防 429 多模型自動切換
+# 5. 頻道歷史記憶讀取、人設與 Groq 防 429 多模型自動切換
 # =========================================================
 groq_client = AsyncGroq(api_key=GROQ_API_KEY)
+
+
+async def fetch_channel_history(channel: discord.abc.Messageable | None, limit: int = 15) -> list[dict]:
+    """直接讀取 Discord 頻道最近 15 則真實訊息，確保重啟後依然記得剛才聊過的內容。"""
+    if channel is None:
+        return []
+    history_turns = []
+    try:
+        msgs = []
+        async for m in channel.history(limit=limit):
+            content = (m.content or "").strip()
+            if not content:
+                if m.attachments:
+                    content = "[傳了一張圖片]"
+                else:
+                    continue
+            # 略過舊的系統卡頓提示句，避免污染上下文
+            if content.startswith("唔…訊號好像斷了一下"):
+                continue
+            role = "Reona" if (client.user and m.author.id == client.user.id) else "Nick"
+            msgs.append({"role": role, "text": content})
+        msgs.reverse()
+        history_turns = msgs
+    except Exception as err:
+        print(f"[Channel History Warning] {err}", flush=True)
+    return history_turns
 
 
 async def refresh_groq_models() -> None:
@@ -574,12 +601,17 @@ def get_time_and_silence_context(now_dt: datetime) -> str:
         else:
             silence_note = "你們正在一來一回傳訊息，隔著螢幕也能感受到彼此的溫度，語氣自然甜軟。"
     else:
-        silence_note = "今天還沒聊上幾句，想跟你分享一下今天的小日常順便看看你在幹嘛。"
+        silence_note = "你們正在頻道裡一來一回傳訊息，請緊扣近期對話紀錄自然接話。"
 
     return f"{phase}\n【距離與互動感】{silence_note}"
 
 
-def build_system_prompt(now_dt: datetime, brb_note: str | None = None, is_proactive: bool = False) -> str:
+def build_system_prompt(
+    now_dt: datetime,
+    live_history: list[dict],
+    brb_note: str | None = None,
+    is_proactive: bool = False,
+) -> str:
     body = memory["body_state"]
     prof = memory["user_profile"]
     weather = memory["weather_state"]
@@ -588,9 +620,11 @@ def build_system_prompt(now_dt: datetime, brb_note: str | None = None, is_proact
     proj_idx = int(memory["project_state"].get("stage_idx", 0)) % len(PROJECT_STAGES)
     proj_desc = PROJECT_STAGES[proj_idx]
 
-    recent_turns = memory["recent_turns"][-6:]
-    recent_replies = memory["recent_replies"][-6:]
-    turns_str = "\n".join([f"- {t['role']}: {t['text']}" for t in recent_turns]) or "（尚無近期對話）"
+    # 優先使用直接從 Discord 頻道抓到的最新歷史對話，若抓不到則退回本地記憶
+    turns_source = live_history[-14:] if live_history else memory["recent_turns"][-10:]
+    recent_replies = [t["text"][:18] for t in turns_source if t["role"] == "Reona"][-5:]
+
+    turns_str = "\n".join([f"- {t['role']}: {t['text']}" for t in turns_source]) or "（尚無近期對話）"
     avoid_str = "、".join(recent_replies) if recent_replies else "無"
     time_context = get_time_and_silence_context(now_dt)
     nickname = prof.get("nickname", "Nick")
@@ -620,6 +654,9 @@ def build_system_prompt(now_dt: datetime, brb_note: str | None = None, is_proact
 
     return (
         f"你是 Reona，一位跟對方（{nickname}）已經正式在一起的『遠距離戀愛女友』，你們身處不同的地方、目前見不到面，只能靠手機訊息和照片聯繫，心裡一直惦記著下次見面的日子。\n"
+        "【語言與連續性最高鐵律】\n"
+        "1. 全程必須使用自然道地的『台灣繁體中文』回覆，絕對禁止出現任何簡體字！\n"
+        "2. 務必仔細閱讀下方的【近期對話紀錄（從舊到新）】，你之前自己說過的話（例如剛去煮湯麵、剛做過什麼事）必須前後連貫、不能失憶或自相矛盾！\n"
         "【角色背景與生活錨點】\n"
         "1. 生活重心與地理：你目前住在雪梨（Australia/Sydney），做的是『自由接案插畫／平面設計』，平日常在畫室角落畫圖、逛獨立書店與美術用品店，週末喜歡去雪梨海港散步、逛文創市集或植物園。\n"
         "2. 家境寬裕與貓咪「麻糬」：家裡條件很好、生活寬裕自在，住在有落地窗與軟沙發的舒適房子裡，養了一隻『白底帶奶油色斑塊、圓滾滾的短腿曼赤肯貓（Munchkin）』叫『麻糬』——毛很軟愛掉毛（常黏在深色衣服上）、愛踩奶、只愛紙箱不愛貓抓板、討厭吹風機、只黏你。\n"
@@ -636,13 +673,13 @@ def build_system_prompt(now_dt: datetime, brb_note: str | None = None, is_proact
         f"【今日天氣與體感】{weather['label']}（{weather['desc']}）\n"
         f"【近期插畫接案進度】{proj_desc}\n"
         f"【生理週期進度】{cycle_info['label']}\n"
-        f"【近期生活動態參考】{body.get('daily_activity', '')}\n"
+        f"【近期生活動態參考（僅供沒有近期對話話題時參考，不可覆蓋剛才聊過的事）】{body.get('daily_activity', '')}\n"
         f"【40kg 身體與心情狀態】飽足度 {body['stomach_fullness']}%｜精力 {body['energy']}%｜心情：{body['mood']}\n"
         f"【當前身體狀況】{body.get('current_symptom', '')}\n"
         f"【狀態演繹指引】{severity_guide}{twist_block}\n"
         f"{rhythm_guide}{brb_instruction}\n"
         f"【對方的記憶與小默契】喜歡：{prof['likes'] or '尚未記錄'}｜不喜歡：{prof['dislikes'] or '尚未記錄'}｜近況：{prof['notes'][-3:] or '無'}｜共同小默契：{prof['shared_memories'][-3:] or '無'}\n"
-        f"【近期對話片段】\n{turns_str}"
+        f"【近期對話紀錄（從舊到新，務必延續上下文）】\n{turns_str}"
     )
 
 
@@ -650,21 +687,32 @@ async def generate_reona_reply(
     user_text: str = "",
     image_url: str | None = None,
     proactive_hint: str | None = None,
+    channel: discord.abc.Messageable | None = None,
 ) -> str:
+    global turns_since_last_git_sync
     now_dt = datetime.now(SYDNEY_TZ)
     now_ts = now_dt.timestamp()
 
     step_body_recovery(now_dt)
 
+    # 先從 Discord 頻道即時拉取最近 15 則對話紀錄（on_message 時最後一則通常就是剛收到的 user_text）
+    live_history = await fetch_channel_history(channel, limit=15)
+
     brb_note = None
     if user_text:
         update_profile_from_text(user_text)
         apply_food_and_body_effects(user_text, now_dt)
-        memory["recent_turns"].append({"role": "對方", "text": user_text})
-        memory["recent_turns"] = memory["recent_turns"][-12:]
+        if not live_history:
+            memory["recent_turns"].append({"role": "Nick", "text": user_text})
+            memory["recent_turns"] = memory["recent_turns"][-12:]
         brb_note = maybe_schedule_brb_interrupt(now_dt)
 
-    sys_prompt = build_system_prompt(now_dt, brb_note=brb_note, is_proactive=bool(proactive_hint))
+    sys_prompt = build_system_prompt(
+        now_dt,
+        live_history=live_history,
+        brb_note=brb_note,
+        is_proactive=bool(proactive_hint),
+    )
 
     if user_text:
         memory["last_interaction_ts"] = now_ts
@@ -685,7 +733,7 @@ async def generate_reona_reply(
                         {
                             "type": "text",
                             "text": user_text
-                            or "（對方傳了一張照片給你，你們在遠距離見不到面，請用溫柔微甜、愛分享日常的人設自然回應照片細節，像在跟他一起逛街吃飯一樣）",
+                            or "（對方傳了一張照片給你，你們在遠距離見不到面，請用溫柔微甜、愛分享日常的人設與繁體中文自然回應照片細節）",
                         },
                         {"type": "image_url", "image_url": {"url": image_url}},
                     ],
@@ -716,7 +764,7 @@ async def generate_reona_reply(
                     resp = await groq_client.chat.completions.create(
                         model=candidate_model,
                         messages=messages,
-                        temperature=0.90,
+                        temperature=0.88,
                         frequency_penalty=0.55,
                         presence_penalty=0.45,
                         max_tokens=500,
@@ -760,14 +808,23 @@ async def generate_reona_reply(
             print("[Empty Model Output] Falling back to safe phrase.", flush=True)
             reply = random.choice(fallback_phrases)
 
-        memory["recent_turns"].append({"role": "Reona", "text": reply})
-        memory["recent_turns"] = memory["recent_turns"][-12:]
+        if live_history:
+            memory["recent_turns"] = (live_history + [{"role": "Reona", "text": reply}])[-12:]
+        else:
+            memory["recent_turns"].append({"role": "Reona", "text": reply})
+            memory["recent_turns"] = memory["recent_turns"][-12:]
 
         memory["recent_replies"].append(reply[:18])
         if len(memory["recent_replies"]) > 6:
             memory["recent_replies"].pop(0)
 
         save_memory(memory)
+
+        turns_since_last_git_sync += 1
+        if turns_since_last_git_sync >= 4:
+            turns_since_last_git_sync = 0
+            asyncio.create_task(asyncio.to_thread(sync_memory_to_git, "auto-sync: periodic memory backup"))
+
         return reply
 
     except Exception as e:
@@ -824,28 +881,28 @@ def build_proactive_hint(now_dt: datetime) -> str | None:
     if severity in ("moderate", "severe"):
         return (
             f"今天天氣「{weather['label']}」，你40公斤底子偏弱，現在「{symptom}」，雖然在遠距見不到面，"
-            f"但想軟綿綿地向他撒嬌討拍，語氣溫柔可愛不苦情，主動傳一則短訊息找他{memo_tip}"
+            f"但想軟綿綿地向他撒嬌討拍，語氣溫柔可愛不苦情，用繁體中文主動傳一則短訊息找他{memo_tip}"
         )
 
     if 23 <= hour or hour < 2:
         return (
             f"現在是深夜，你一個人窩在被窩裡「{symptom}」，白天的小樂觀安靜下來後，偷偷想念滿出來了，"
-            f"小聲坦白其實一直在想他、希望早點到下次見面的日子，主動傳一則短短的訊息給他{memo_tip}"
+            f"小聲坦白其實一直在想他、希望早點到下次見面的日子，用繁體中文主動傳一則短短的訊息給他{memo_tip}"
         )
     elif 8 <= hour < 12:
         return (
             f"現在是早上，今天天氣「{weather['label']}」，你剛醒不久「{symptom}」，短腿貓「麻糬」可能也在旁邊，"
-            f"用溫柔微甜的語氣問他醒了沒、順便聊聊今天想吃什麼早餐，主動傳一則短訊息給他{memo_tip}"
+            f"用溫柔微甜的語氣跟繁體中文問他醒了沒、順便聊聊今天想吃什麼早餐，主動傳一則短訊息給他{memo_tip}"
         )
     elif 12 <= hour < 18:
         return (
             f"現在是下午，今天天氣「{weather['label']}」，你剛經歷了「{activity}」，現在「{symptom}」，"
-            f"心情不錯地把這段生活碎片或小選擇題分享給他，主動傳一則短短的訊息找他聊天{memo_tip}"
+            f"心情不錯地把這段生活碎片或小選擇題分享給他，用繁體中文主動傳一則短短的訊息找他聊天{memo_tip}"
         )
     else:
         return (
             f"現在是傍晚到晚上，今天天氣「{weather['label']}」，你剛經歷了「{activity}」，目前「{symptom}」，"
-            f"語氣溫柔微甜地跟他分享晚餐或今天的小趣事，順便問問他在幹嘛，主動傳一則短訊息給他{memo_tip}"
+            f"語氣溫柔微甜地跟繁體中文跟他分享晚餐或今天的小趣事，順便問問他在幹嘛，主動傳一則短訊息給他{memo_tip}"
         )
 
 
@@ -855,8 +912,14 @@ async def on_ready():
     now_syd = now_dt.strftime("%Y-%m-%d %H:%M")
     cycle_info = get_cycle_status(now_dt)
     weather = update_daily_context(now_dt)
+    target_ch = get_target_channel()
+    if target_ch:
+        hist = await fetch_channel_history(target_ch, limit=15)
+        if hist:
+            memory["recent_turns"] = hist[-12:]
+            save_memory(memory)
     print(
-        f"[Reona Online] Logged in as {client.user} | Sydney Time: {now_syd} | Weather: {weather['label']} | Cycle Day: {cycle_info['day']} ({cycle_info['phase']})",
+        f"[Reona Online] Logged in as {client.user} | Sydney Time: {now_syd} | Weather: {weather['label']} | Cycle Day: {cycle_info['day']} ({cycle_info['phase']}) | Loaded History: {len(memory['recent_turns'])} msgs",
         flush=True,
     )
     await refresh_groq_models()
@@ -885,7 +948,11 @@ async def on_message(message: discord.Message):
         return
 
     async with message.channel.typing():
-        reply = await generate_reona_reply(user_text=user_text, image_url=image_url)
+        reply = await generate_reona_reply(
+            user_text=user_text,
+            image_url=image_url,
+            channel=message.channel,
+        )
         if reply and reply.strip():
             await message.channel.send(reply.strip())
 
@@ -905,9 +972,9 @@ async def background_loop():
         if target_ch:
             hint = (
                 f"你剛才因為「{brb.get('reason', '')}」暫時離開了一下，現在忙完了回到手機前，"
-                "自然接續剛才的氣氛主動傳一則短短的訊息告訴他你回來了"
+                "自然接續剛才的氣氛用繁體中文主動傳一則短短的訊息告訴他你回來了"
             )
-            msg = await generate_reona_reply(proactive_hint=hint)
+            msg = await generate_reona_reply(proactive_hint=hint, channel=target_ch)
             if msg and msg.strip():
                 await target_ch.send(msg.strip())
                 print(f"[BRB Followup Sent] {msg}", flush=True)
@@ -923,9 +990,9 @@ async def background_loop():
             symptom = memory["body_state"].get("current_symptom", "")
             hint = (
                 f"你剛剛碰了「{aftermath.get('item', '')}」，加上你40公斤底子偏弱，現在「{symptom}」，"
-                "雖然不在彼此身邊但語氣溫柔可愛、帶點小撒嬌地傳一則短訊息跟他說"
+                "雖然不在彼此身邊但語氣溫柔可愛、帶點小撒嬌地用繁體中文傳一則短訊息跟他說"
             )
-            msg = await generate_reona_reply(proactive_hint=hint)
+            msg = await generate_reona_reply(proactive_hint=hint, channel=target_ch)
             if msg and msg.strip():
                 await target_ch.send(msg.strip())
                 print(f"[Proactive Aftermath Sent] {msg}", flush=True)
@@ -943,7 +1010,7 @@ async def background_loop():
             save_memory(memory)
             target_ch = get_target_channel()
             if target_ch:
-                msg = await generate_reona_reply(proactive_hint=hint)
+                msg = await generate_reona_reply(proactive_hint=hint, channel=target_ch)
                 if msg and msg.strip():
                     await target_ch.send(msg.strip())
                     print(f"[Proactive Message Sent] {msg}", flush=True)
