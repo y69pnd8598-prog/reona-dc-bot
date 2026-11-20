@@ -48,11 +48,14 @@ SYDNEY_TZ = ZoneInfo("Australia/Sydney")
 START_TIME = time.time()
 RELAY_AFTER_SECONDS = 5 * 3600 + 45 * 60  # 5 小時 45 分鐘 (20700 秒)
 
+# 主動傳訊最短冷卻時間（秒）：預設 2.5 小時，避免洗版又能保持每天自然主動 2~4 次
+PROACTIVE_COOLDOWN_SECONDS = int(os.getenv("PROACTIVE_COOLDOWN_SECONDS", "9000"))
+
 MEMORY_FILE = "reona_memory.json"
 TEMP_IMAGE_PATH = "temp_latest_image.jpg"
 
 print(
-    f"[Config Check] DISCORD_TOKEN set: {bool(DISCORD_TOKEN)} | GROQ_API_KEY set: {bool(GROQ_API_KEY)}",
+    f"[Config Check] DISCORD_TOKEN set: {bool(DISCORD_TOKEN)} | GROQ_API_KEY set: {bool(GROQ_API_KEY)} | CHANNEL_ID: {DEFAULT_CHANNEL_ID}",
     flush=True,
 )
 
@@ -163,7 +166,6 @@ def roll_body_condition(now_ts: float, force_escalate: bool = False) -> None:
     body = memory["body_state"]
     last_sym_ts = body.get("last_symptom_ts", 0.0)
 
-    # 距離上次狀況更新超過 90 分鐘，或觸發飲食/熬夜誘因時重新抽取狀態
     if not force_escalate and (now_ts - last_sym_ts) < 5400:
         return
 
@@ -171,7 +173,6 @@ def roll_body_condition(now_ts: float, force_escalate: bool = False) -> None:
     r = random.random()
 
     if force_escalate:
-        # 踩到冰/辣/熬夜等誘因：65% 進中等不適、20% 進嚴重狀況、15% 維持小毛病
         if r < 0.20:
             body["severity"] = "severe"
             body["current_symptom"] = random.choice(SEVERE_CONDITIONS)
@@ -186,7 +187,7 @@ def roll_body_condition(now_ts: float, force_escalate: bool = False) -> None:
             body["severity"] = "minor"
             body["current_symptom"] = random.choice(MINOR_AILMENTS)
     else:
-        # 平常自然波動：65% 高頻日常小毛病、25% 中等狀況（提高機率）、10% 嚴重狀況（偶爾）
+        # 65% 高頻日常小毛病、25% 中等狀況（提高機率）、10% 嚴重狀況（偶爾）
         if r < 0.10:
             body["severity"] = "severe"
             body["current_symptom"] = random.choice(SEVERE_CONDITIONS)
@@ -244,7 +245,6 @@ def step_body_recovery(now_dt: datetime) -> None:
         if elapsed_mins >= 15:
             steps = int(elapsed_mins // 15)
             body["stomach_fullness"] = max(20, body["stomach_fullness"] - steps * 5)
-            # 40kg 體質精力上限偏低，最多恢復到 80%
             body["energy"] = min(80, body["energy"] + steps * 2)
 
     roll_body_condition(now_ts, force_escalate=False)
@@ -347,7 +347,7 @@ def get_time_and_silence_context(now_dt: datetime) -> str:
         else:
             silence_note = "你們正在一來一回傳訊息，嘴上傲嬌但心裡因為你秒回而偷偷開心。"
     else:
-        silence_note = "剛開始今天的對話，自然用日常小事切入。"
+        silence_note = "今天還沒正式聊上幾句，你因為偷偷想念而找個自然小藉口敲他。"
 
     return f"{phase}\n【距離與間隔感】{silence_note}"
 
@@ -498,7 +498,7 @@ async def generate_reona_reply(
 
 
 # =========================================================
-# 6. Discord Client、主動關懷與 5h45m 自動接力
+# 6. Discord Client、全天候主動敲人與 5h45m 自動接力
 # =========================================================
 intents = discord.Intents.default()
 intents.message_content = True
@@ -529,6 +529,43 @@ def get_target_channel():
                 if ch.permissions_for(g.me).send_messages:
                     return ch
     return target_ch
+
+
+def build_proactive_hint(now_dt: datetime) -> str | None:
+    hour = now_dt.hour
+    symptom = memory["body_state"].get("current_symptom", "")
+    severity = memory["body_state"].get("severity", "minor")
+
+    # 凌晨 02:00 ~ 07:59 休眠不主動打擾
+    if 2 <= hour < 8:
+        return None
+
+    if severity in ("moderate", "severe"):
+        return (
+            f"你40公斤底子偏弱，現在「{symptom}」，一個人待著有點委屈又想他，"
+            "主動傳一則短短的訊息到頻道找他，語氣軟綿綿帶點撒嬌或討拍"
+        )
+
+    if 23 <= hour or hour < 2:
+        return (
+            f"現在是深夜，周圍很安靜，你縮在被窩裡「{symptom}」，白天撐著的嘴硬鬆動了，"
+            "忍不住主動傳一則短短的訊息給他，偷偷流露一點想念但又帶點害羞"
+        )
+    elif 8 <= hour < 12:
+        return (
+            f"現在是早上，你剛醒不久「{symptom}」，嘴上不承認在等他起床，"
+            "找個自然的小藉口（例如喝熱水、天氣、或問他醒了沒）主動傳一則短訊息給他"
+        )
+    elif 12 <= hour < 18:
+        return (
+            f"現在是下午，你「{symptom}」，突然想起他卻不想表現得太黏，"
+            "用日常小事或身體小毛病當藉口，主動傳一則短短的訊息找他搭話"
+        )
+    else:
+        return (
+            f"現在是傍晚到晚上，天色暗下來最容易偷偷想念，你目前「{symptom}」，"
+            "假裝隨口問問他在幹嘛或吃了沒，主動傳一則短短的訊息靠近他"
+        )
 
 
 @client.event
@@ -575,6 +612,7 @@ async def background_loop():
     aftermath = memory["body_state"].get("pending_aftermath")
     if aftermath and now_ts >= aftermath.get("trigger_ts", 0):
         memory["body_state"]["pending_aftermath"] = None
+        memory["last_proactive_ts"] = now_ts
         save_memory(memory)
         target_ch = get_target_channel()
         if target_ch:
@@ -585,25 +623,25 @@ async def background_loop():
             )
             msg = await generate_reona_reply(proactive_hint=hint)
             await target_ch.send(msg)
+            print(f"[Proactive Aftermath Sent] {msg}", flush=True)
 
-    # 2. 深夜露餡主動敲人（23:15 ~ 01:30 之間、距上次互動超過 2.5 小時且今日尚未主動深夜露餡）
-    hour = now_dt.hour
+    # 2. 全天候自然找藉口 & 深夜露餡主動敲人（距上次互動與上次主動傳訊皆超過冷卻時間）
     last_inter = memory.get("last_interaction_ts", 0.0)
     last_pro = memory.get("last_proactive_ts", 0.0)
-    if (
-        (hour == 23 and now_dt.minute >= 15) or (hour == 0)
-    ) and last_inter > 0 and (now_ts - last_inter) >= 9000 and (now_ts - last_pro) >= 21600:
-        if random.random() < 0.08:  # 每分鐘 8% 機率，約 10~15 分鐘內自然觸發一次
+    idle_since_last = now_ts - max(last_inter, last_pro)
+
+    if idle_since_last >= PROACTIVE_COOLDOWN_SECONDS:
+        hint = build_proactive_hint(now_dt)
+        # 深夜露餡時段觸發機率稍高 (10%/分)，白天找藉口約 (5%/分)，平均進入冷卻後 10~20 分鐘內會自然傳訊
+        trigger_prob = 0.10 if (now_dt.hour >= 23 or now_dt.hour < 2) else 0.05
+        if hint and random.random() < trigger_prob:
             memory["last_proactive_ts"] = now_ts
             save_memory(memory)
             target_ch = get_target_channel()
             if target_ch:
-                hint = (
-                    "現在是深夜，周圍好安靜，你縮在被窩裡有點手腳微涼，白天撐著的嘴硬鬆動了，"
-                    "忍不住傳一則短短的訊息給他，偷偷流露一點想念但又帶點害羞"
-                )
                 msg = await generate_reona_reply(proactive_hint=hint)
                 await target_ch.send(msg)
+                print(f"[Proactive Message Sent] {msg}", flush=True)
 
     # 3. 5h45m 自動接力與記憶同步
     if not relay_triggered and (time.time() - START_TIME) >= RELAY_AFTER_SECONDS:
