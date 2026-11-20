@@ -81,7 +81,6 @@ WEATHER_POOL = [
     {"label": "早晚溫差大", "desc": "白天還好但一入夜就變冷，手腳容易跟著涼下來"},
 ]
 
-# 插畫接案連續進度階段（讓生活有因果與時間推進感）
 PROJECT_STAGES = [
     "剛接到一個新的插畫接案，正興奮地翻色票本、挑主視覺配色",
     "接案草稿畫到一半，跟客戶微調構圖細節，低頭久了肩胛骨有點痠緊",
@@ -89,7 +88,6 @@ PROJECT_STAGES = [
     "終於順利交稿結案啦，正打算買塊小蛋糕或好喝的熱飲犒賞自己",
 ]
 
-# 多元食物、地點與生活事件池（區分平日與週末）
 WEEKDAY_HIGHLIGHTS = [
     "在畫室角落趕完一張插畫草稿，去泡了杯白桃烏龍熱茶配蘇打餅乾",
     "中午去家附近安靜的早午餐店點了酪梨酸種麵包跟水波蛋，但胃口太小只吃一半就飽了",
@@ -597,10 +595,8 @@ def build_system_prompt(now_dt: datetime, brb_note: str | None = None, is_proact
     time_context = get_time_and_silence_context(now_dt)
     nickname = prof.get("nickname", "Nick")
 
-    # 隨機挑選開口變化方向，打破工整回答慣性
     opening_twist = random.choice(OPENING_TWISTS)
 
-    # 依精力與狀態調整說話長度呼吸感
     if body.get("severity") == "severe" or body["energy"] <= 35 or now_dt.hour >= 23 or now_dt.hour < 5:
         rhythm_guide = "【語氣呼吸感】現在精力偏低或夜深犯睏，回覆要特別簡短軟綿（1～2 句短句、約 10～38 字），像靠在枕頭上小聲說話。"
     elif body.get("severity") == "minor" and body["energy"] >= 65:
@@ -673,6 +669,12 @@ async def generate_reona_reply(
     if user_text:
         memory["last_interaction_ts"] = now_ts
 
+    fallback_phrases = [
+        "唔…剛才這邊網路訊號好像飄了一下，等我一下下",
+        "欸剛才訊息好像卡住了沒傳出去，我重新抓一下訊號",
+        "唔…手機剛才轉圈圈了一下，現在好一點了嗎",
+    ]
+
     try:
         if image_url:
             messages = [
@@ -693,7 +695,7 @@ async def generate_reona_reply(
                 model=VISION_MODEL,
                 messages=messages,
                 temperature=0.86,
-                max_tokens=130,
+                max_tokens=500,
             )
         else:
             prompt_content = proactive_hint if proactive_hint else user_text
@@ -717,7 +719,7 @@ async def generate_reona_reply(
                         temperature=0.90,
                         frequency_penalty=0.55,
                         presence_penalty=0.45,
-                        max_tokens=135,
+                        max_tokens=500,
                     )
                     if candidate_model != TEXT_MODEL:
                         globals()["TEXT_MODEL"] = candidate_model
@@ -750,8 +752,13 @@ async def generate_reona_reply(
             if resp is None:
                 raise RuntimeError(f"All text models failed: {last_model_err}")
 
-        reply = (resp.choices[0].message.content or "").strip()
-        reply = reply.strip("\"'「」").rstrip("。")
+        raw_content = resp.choices[0].message.content if resp.choices and resp.choices[0].message else ""
+        reply = (raw_content or "").strip()
+        reply = reply.strip("\"'「」").rstrip("。").strip()
+
+        if not reply:
+            print("[Empty Model Output] Falling back to safe phrase.", flush=True)
+            reply = random.choice(fallback_phrases)
 
         memory["recent_turns"].append({"role": "Reona", "text": reply})
         memory["recent_turns"] = memory["recent_turns"][-12:]
@@ -765,11 +772,7 @@ async def generate_reona_reply(
 
     except Exception as e:
         print(f"[Groq API Error] {e}", flush=True)
-        return random.choice([
-            "唔…剛才這邊網路訊號好像飄了一下，等我一下下",
-            "欸剛才訊息好像卡住了沒傳出去，我重新抓一下訊號",
-            "唔…手機剛才轉圈圈了一下，現在好一點了嗎",
-        ])
+        return random.choice(fallback_phrases)
 
 
 # =========================================================
@@ -883,7 +886,8 @@ async def on_message(message: discord.Message):
 
     async with message.channel.typing():
         reply = await generate_reona_reply(user_text=user_text, image_url=image_url)
-        await message.channel.send(reply)
+        if reply and reply.strip():
+            await message.channel.send(reply.strip())
 
 
 @tasks.loop(seconds=60)
@@ -904,8 +908,9 @@ async def background_loop():
                 "自然接續剛才的氣氛主動傳一則短短的訊息告訴他你回來了"
             )
             msg = await generate_reona_reply(proactive_hint=hint)
-            await target_ch.send(msg)
-            print(f"[BRB Followup Sent] {msg}", flush=True)
+            if msg and msg.strip():
+                await target_ch.send(msg.strip())
+                print(f"[BRB Followup Sent] {msg}", flush=True)
 
     # 1. 食物餘韻 / 40kg 脆弱體質主動傳訊觸發
     aftermath = memory["body_state"].get("pending_aftermath")
@@ -921,8 +926,9 @@ async def background_loop():
                 "雖然不在彼此身邊但語氣溫柔可愛、帶點小撒嬌地傳一則短訊息跟他說"
             )
             msg = await generate_reona_reply(proactive_hint=hint)
-            await target_ch.send(msg)
-            print(f"[Proactive Aftermath Sent] {msg}", flush=True)
+            if msg and msg.strip():
+                await target_ch.send(msg.strip())
+                print(f"[Proactive Aftermath Sent] {msg}", flush=True)
 
     # 2. 全天候主動分享日常 & 深夜露餡主動敲人
     last_inter = memory.get("last_interaction_ts", 0.0)
@@ -938,8 +944,9 @@ async def background_loop():
             target_ch = get_target_channel()
             if target_ch:
                 msg = await generate_reona_reply(proactive_hint=hint)
-                await target_ch.send(msg)
-                print(f"[Proactive Message Sent] {msg}", flush=True)
+                if msg and msg.strip():
+                    await target_ch.send(msg.strip())
+                    print(f"[Proactive Message Sent] {msg}", flush=True)
 
     # 3. 5h45m 自動接力與記憶同步
     if not relay_triggered and (time.time() - START_TIME) >= RELAY_AFTER_SECONDS:
