@@ -11,14 +11,6 @@
   "recent_turns": [
     {
       "role": "Reona",
-      "text": "你在我身邊，連冷風都不怕"
-    },
-    {
-      "role": "Nick",
-      "text": "你今天還好嗎"
-    },
-    {
-      "role": "Reona",
       "text": "今天有點冷，想你暖暖的"
     },
     {
@@ -56,15 +48,23 @@
     {
       "role": "Reona",
       "text": "在翻色票等你送暖手啊"
+    },
+    {
+      "role": "Nick",
+      "text": "什麼那是什麼"
+    },
+    {
+      "role": "Reona",
+      "text": "你還不懂我這小小暖手需求嗎"
     }
   ],
   "recent_replies": [
-    "你在我身邊，連冷風都不怕",
     "今天有點冷，想你暖暖的",
     "因為你是我唯一的暖手",
     "你是我唯一的暖手",
     "你說我只是工具，我還得靠你暖暖的",
-    "在翻色票等你送暖手啊"
+    "在翻色票等你送暖手啊",
+    "你還不懂我這小小暖手需求嗎"
   ],
   "menstrual_cycle": {
     "cycle_start_date": "2026-11-20",
@@ -91,10 +91,7 @@
     "last_symptom_ts": 1795160992.755965,
     "last_mood_ts": 1795160446.712119,
     "pending_aftermath": null,
-    "pending_brb_followup": {
-      "trigger_ts": 1795165142.354469,
-      "reason": "剛才頭有點暈暈犯睏，不小心趴在抱枕上瞇了幾分鐘剛醒"
-    },
+    "pending_brb_followup": null,
     "level": "none",
     "symptom": "",
     "cause": "",
@@ -102,7 +99,7 @@
     "afterglow_until": 0.0,
     "cared_by_user": false
   },
-  "last_interaction_ts": 1795164839.891684,
+  "last_interaction_ts": 1795164947.767001,
   "last_proactive_ts": 1795162058.725706,
   "affection": 62,
   "target_channel_id": 1571035253974237219,
