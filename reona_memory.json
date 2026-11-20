@@ -10,22 +10,6 @@
   },
   "recent_turns": [
     {
-      "role": "Reona",
-      "text": "還在被窩裡抱著熱水袋，你終於回我聲啦"
-    },
-    {
-      "role": "Nick",
-      "text": "今天還好嗎"
-    },
-    {
-      "role": "Nick",
-      "text": "今天還好嗎"
-    },
-    {
-      "role": "Nick",
-      "text": "什麼"
-    },
-    {
       "role": "Nick",
       "text": "hi"
     },
@@ -48,15 +32,31 @@
     {
       "role": "Reona",
       "text": "欸剛才沒看清，再跟我說一次嘛"
+    },
+    {
+      "role": "Reona",
+      "text": "手腳還是冰，我把小毯子擱在你旁邊，等你回來暖我啦"
+    },
+    {
+      "role": "Nick",
+      "text": "okay"
+    },
+    {
+      "role": "Nick",
+      "text": "沒什麼想你"
+    },
+    {
+      "role": "Reona",
+      "text": "唔…有點頭暈放空了一下，怎麼啦"
     }
   ],
   "recent_replies": [
-    "今日還好嗨？「我喜於支拖",
-    "日於：今撸還嗎？",
-    "才回個 hi 呀，我現在縮在被窩裡都",
-    "唔…剛才在發呆慢了半拍，你剛說什麼",
     "唔…有點頭暈放空了一下，怎麼啦",
-    "欸剛才沒看清，再跟我說一次嘛"
+    "欸剛才沒看清，再跟我說一次嘛",
+    "手腳還是冰，我把小毯子擱在你旁邊，等",
+    "唔…有點頭暈放空了一下，怎麼啦",
+    "唔…有點頭暈放空了一下，怎麼啦",
+    "唔…有點頭暈放空了一下，怎麼啦"
   ],
   "menstrual_cycle": {
     "cycle_start_date": "2026-11-20",
@@ -83,10 +83,7 @@
     "last_symptom_ts": 1795160992.755965,
     "last_mood_ts": 1795160446.712119,
     "pending_aftermath": null,
-    "pending_brb_followup": {
-      "trigger_ts": 1795164239.137387,
-      "reason": "手腳太冰剛才起身去倒了杯熱水、順便拿條小毯子披上"
-    },
+    "pending_brb_followup": null,
     "level": "none",
     "symptom": "",
     "cause": "",
@@ -94,7 +91,7 @@
     "afterglow_until": 0.0,
     "cared_by_user": false
   },
-  "last_interaction_ts": 1795164249.31492,
+  "last_interaction_ts": 1795164458.682557,
   "last_proactive_ts": 1795162058.725706,
   "affection": 62,
   "target_channel_id": 1571035253974237219,
