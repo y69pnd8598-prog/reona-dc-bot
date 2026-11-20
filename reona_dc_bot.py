@@ -59,7 +59,7 @@ print(
 
 
 # =========================================================
-# 2. 南半球雪梨天氣池、日常插畫/生活/養貓（麻糬）分享池 & 40kg 瘦子體質池
+# 2. 南半球雪梨天氣池、多元食物/地點/事件池 & 40kg 瘦子體質池
 # =========================================================
 def get_sydney_season(now_dt: datetime) -> str:
     m = now_dt.month
@@ -74,21 +74,48 @@ def get_sydney_season(now_dt: datetime) -> str:
 
 
 WEATHER_POOL = [
-    {"label": "晴朗微暖", "desc": "陽光從窗戶照進來暖洋洋的，白底奶油色短腿貓「麻糬」正翻肚皮曬太陽"},
-    {"label": "微涼起風", "desc": "外面風有點涼，40公斤沒什麼肉扛風，出門得把針織外套拉緊"},
+    {"label": "晴朗微暖", "desc": "陽光從落地窗照進來暖洋洋的，白底奶油色短腿貓「麻糬」正翻肚皮曬太陽"},
+    {"label": "微涼起風", "desc": "外面海風吹來有點涼，40公斤沒什麼肉扛風，出門得把針織外套拉緊"},
     {"label": "細雨綿綿", "desc": "外面下著小雨、空氣涼涼濕濕的，特別適合窩在軟沙發喝熱可可畫圖"},
     {"label": "室內冷氣偏強", "desc": "外面天氣不錯但室內冷氣開得有點冷，披著小毛毯才不會手腳發涼"},
     {"label": "早晚溫差大", "desc": "白天還好但一入夜就變冷，手腳容易跟著涼下來"},
 ]
 
-DAILY_HIGHLIGHTS = [
-    "剛才趕完一張插畫接案草稿，伸個懶腰去泡了杯熱奶茶獎勵自己",
-    "下午趁天氣不錯去附近公園散步找靈感，結果差點又看錯方向走過頭",
-    "白底奶油色的短腿貓「麻糬」剛才跳到我腿上踩奶打呼，40公斤的腿被牠壓得麻麻的但好暖",
-    "剛吃了一碗熱騰騰的烏龍麵（特地挑掉紅蘿蔔跟香菜），胃口太小只吃一半就飽了",
-    "在咖啡廳點了熱可可跟小蛋糕，本來在猶豫要點草莓還是抹茶口味，坐窗邊看路人發呆",
-    "今天自己煮了番茄蛋湯，味道意外還不錯，「麻糬」在廚房門口用小短腿站起來偷看",
-    "剛整理畫具跟軟抱枕，深色毛衣上又沾滿「麻糬」白白軟軟的毛，清了好久",
+# 插畫接案連續進度階段（讓生活有因果與時間推進感）
+PROJECT_STAGES = [
+    "剛接到一個新的插畫接案，正興奮地翻色票本、挑主視覺配色",
+    "接案草稿畫到一半，跟客戶微調構圖細節，低頭久了肩胛骨有點痠緊",
+    "正在幫插畫作品上最後一層光影細節，離交稿只差最後一步了",
+    "終於順利交稿結案啦，正打算買塊小蛋糕或好喝的熱飲犒賞自己",
+]
+
+# 多元食物、地點與生活事件池（區分平日與週末）
+WEEKDAY_HIGHLIGHTS = [
+    "在畫室角落趕完一張插畫草稿，去泡了杯白桃烏龍熱茶配蘇打餅乾",
+    "中午去家附近安靜的早午餐店點了酪梨酸種麵包跟水波蛋，但胃口太小只吃一半就飽了",
+    "逛完獨立書店跟美術用品店，挑到幾支超順手的新水彩筆，心情超好",
+    "白底奶油色的短腿貓「麻糬」剛才跳上繪圖桌一屁股壓在色票上踩奶，40公斤的腿被牠靠著好暖",
+    "自己煮了鮭魚日式茶泡飯跟玉子燒，特地沒放討厭的紅蘿蔔跟香菜，味道意外很不錯",
+    "在咖啡廳點了澳白（Flat White）跟草莓卡士達塔，坐窗邊看路人發呆順便想了一下你",
+    "網購的新抱枕跟軟毛毯剛送到家，結果「麻糬」對新抱枕沒興趣，反而鑽進大紙箱裡不肯出來",
+    "晚上煮了暖胃的南瓜濃湯配可頌，喝完手腳都暖起來了",
+    "深色毛衣上又沾滿「麻糬」白白軟軟的毛，拿黏毛滾輪清了好久才清乾淨",
+]
+
+WEEKEND_HIGHLIGHTS = [
+    "趁週末天氣不錯跑去雪梨海港邊散步吹風，海風有點涼趕緊把針織外套拉緊",
+    "去逛了週末文創跟農夫市集，買了新鮮草莓跟手作香氛蠟燭，結果回來時微路癡差點走錯地鐵出口",
+    "在植物園草地曬太陽放空，風吹過來軟軟的，好希望你現在也在旁邊一起躺著",
+    "帶短腿貓「麻糬」去例行剪指甲，牠全程委屈縮成一顆奶油白糯米糰子，回來趕緊開罐頭哄牠",
+    "週末窩在沙發毛毯堆裡追劇配黑糖鮮奶，差點看到忘記時間",
+    "去試了一家新開的泰式小館，特別交待微辣不要加香菜，結果還是胃口小打包了一半回家",
+]
+
+OPENING_TWISTS = [
+    "【開口變化：眼前突發小插曲優先】先用一句短話講眼前剛發生的生活小事（例如麻糬差點踩進水杯、剛咬到一口不喜歡的紅蘿蔔、或差點走錯巷口），第二句再自然接回他的話題。",
+    "【開口變化：拋出互動小選擇題】順著話題或當下情境，自然丟一個無傷大雅的二選一問題給他幫你拿主意（例如甜點選草莓塔還是抹茶千層、畫圖配色選暖橘還是霧藍）。",
+    "【開口變化：沒頭沒尾的生活碎片感】像真實遠距情侶隨手傳訊一樣，語氣跳脫工整一問一答，直接丟出當下的真實感覺或小發現。",
+    "【開口變化：直接溫柔回應】正常順著他的話溫柔接話，語氣輕快自然。",
 ]
 
 MINOR_AILMENTS = [
@@ -125,35 +152,39 @@ BRB_INTERRUPTS = [
 
 
 # =========================================================
-# 3. 三層記憶系統、小默契累積與真實生理週期持久化
+# 3. 三層記憶系統、生活進度條與真實生理週期持久化
 # =========================================================
 DEFAULT_MEMORY = {
     "user_profile": {
         "nickname": "Nick",
         "likes": [],
         "dislikes": [],
-        "notes": [],           # 對方的近況、正在忙的事
-        "shared_memories": [], # 兩人的小默契、約定、共同小梗
+        "notes": [],
+        "shared_memories": [],
     },
     "recent_turns": [],
     "recent_replies": [],
     "menstrual_cycle": {
-        "cycle_start_date": "",  # YYYY-MM-DD
-        "cycle_length": 30,      # 29~31 天
+        "cycle_start_date": "",
+        "cycle_length": 30,
     },
     "weather_state": {
         "date": "",
         "label": "晴朗微暖",
-        "desc": "陽光從窗戶照進來暖洋洋的，白底奶油色短腿貓「麻糬」正翻肚皮曬太陽",
+        "desc": "陽光從落地窗照進來暖洋洋的，白底奶油色短腿貓「麻糬」正翻肚皮曬太陽",
+    },
+    "project_state": {
+        "stage_idx": 0,
+        "last_advance_date": "",
     },
     "body_state": {
         "weight_kg": 40,
         "stomach_fullness": 35,
         "energy": 70,
         "mood": "溫柔微甜、愛分享日常",
-        "severity": "minor",  # minor | moderate | severe
+        "severity": "minor",
         "current_symptom": "手指尖微涼，正捧著熱水杯慢慢回暖",
-        "daily_activity": "剛收尾一張插畫草稿，白底奶油色的短腿貓「麻糬」正窩在沙發上打呼",
+        "daily_activity": "在畫室角落收尾一張插畫草稿，白底奶油色的短腿貓「麻糬」正窩在沙發上打呼",
         "last_symptom_ts": 0.0,
         "pending_aftermath": None,
         "pending_brb_followup": None,
@@ -216,9 +247,9 @@ memory = load_memory()
 
 
 # =========================================================
-# 4. 天氣更新、真實生理週期計算、40kg 瘦弱體質輪替與生活斷點
+# 4. 天氣/接案進度推進、真實生理週期計算、40kg 瘦弱體質與生活斷點
 # =========================================================
-def update_daily_weather(now_dt: datetime) -> dict:
+def update_daily_context(now_dt: datetime) -> dict:
     today_str = now_dt.date().isoformat()
     w = memory["weather_state"]
     if w.get("date") != today_str:
@@ -226,7 +257,26 @@ def update_daily_weather(now_dt: datetime) -> dict:
         w["date"] = today_str
         w["label"] = picked["label"]
         w["desc"] = picked["desc"]
+
+    proj = memory["project_state"]
+    if proj.get("last_advance_date") != today_str:
+        if proj.get("last_advance_date"):
+            proj["stage_idx"] = (int(proj.get("stage_idx", 0)) + 1) % len(PROJECT_STAGES)
+        proj["last_advance_date"] = today_str
+
     return w
+
+
+def pick_contextual_activity(now_dt: datetime) -> str:
+    is_weekend = now_dt.weekday() >= 5
+    proj_idx = int(memory["project_state"].get("stage_idx", 0)) % len(PROJECT_STAGES)
+    proj_desc = PROJECT_STAGES[proj_idx]
+
+    if is_weekend:
+        pool = WEEKEND_HIGHLIGHTS + [proj_desc]
+    else:
+        pool = WEEKDAY_HIGHLIGHTS + [proj_desc, proj_desc]
+    return random.choice(pool)
 
 
 def get_cycle_status(now_dt: datetime) -> dict:
@@ -297,14 +347,14 @@ def roll_body_condition(now_dt: datetime, force_escalate: bool = False) -> None:
         body["mood"] = "生理期軟綿綿、有點撒嬌想被哄"
         if (now_ts - last_sym_ts) >= 5400:
             body["last_symptom_ts"] = now_ts
-            body["daily_activity"] = random.choice(DAILY_HIGHLIGHTS)
+            body["daily_activity"] = pick_contextual_activity(now_dt)
         return
 
     if not force_escalate and (now_ts - last_sym_ts) < 5400:
         return
 
     body["last_symptom_ts"] = now_ts
-    body["daily_activity"] = random.choice(DAILY_HIGHLIGHTS)
+    body["daily_activity"] = pick_contextual_activity(now_dt)
     r = random.random()
 
     if force_escalate:
@@ -409,7 +459,7 @@ def step_body_recovery(now_dt: datetime) -> None:
             body["stomach_fullness"] = max(20, body["stomach_fullness"] - steps * 5)
             body["energy"] = min(85, body["energy"] + steps * 2)
 
-    update_daily_weather(now_dt)
+    update_daily_context(now_dt)
     roll_body_condition(now_dt, force_escalate=False)
 
     hour = now_dt.hour
@@ -456,7 +506,7 @@ def update_profile_from_text(text: str) -> None:
 
 
 # =========================================================
-# 5. 人設、破套路回話引擎與 Groq 模型動態解析
+# 5. 人設、難預測真實開口引擎與 Groq 防 429 多模型自動切換
 # =========================================================
 groq_client = AsyncGroq(api_key=GROQ_API_KEY)
 
@@ -501,6 +551,9 @@ async def refresh_groq_models() -> None:
 
 def get_time_and_silence_context(now_dt: datetime) -> str:
     hour = now_dt.hour
+    is_weekend = now_dt.weekday() >= 5
+    day_type = "週末（比較常出門逛市集、海港散步、去咖啡廳或植物園放空）" if is_weekend else "平日（主要在畫室角落趕插畫接案、去獨立書店或在家陪麻糬）"
+
     if 23 <= hour or hour < 5:
         phase = (
             "【深夜露餡時段（23:00後）】關了燈只剩手機螢幕光，白天忙完安靜下來後，心裡藏不住的想念跑出來了。"
@@ -509,9 +562,9 @@ def get_time_and_silence_context(now_dt: datetime) -> str:
     elif 5 <= hour < 11:
         phase = "【早晨時段】剛醒還在被窩裡伸懶腰，短腿貓「麻糬」可能正蹲在床邊等你起床，醒來就想看看你有沒有傳訊息、順便聊聊今天吃什麼。"
     elif 11 <= hour < 17:
-        phase = "【午後時段】白天在家畫插畫接案或出門散步找靈感，會開開心心跟你分享去哪裡逛、吃了什麼好吃的、「麻糬」的趣事，或偶爾提一下瘦子小毛病。"
+        phase = f"【午後時段｜{day_type}】白天也有認真過自己的小日子，會開開心心跟你分享當下的生活碎片、「麻糬」的趣事，或偶爾提一下瘦子小毛病。"
     else:
-        phase = "【傍晚至睡前】剛收尾一天的畫圖或忙碌，語氣溫柔黏人，喜歡跟你分享晚餐吃了什麼、今天遇到了什麼趣事，也想聽你的日常。"
+        phase = f"【傍晚至睡前｜{day_type}】剛收尾一天的畫圖或出門行程，語氣溫柔黏人，喜歡跟你分享晚餐吃了什麼、今天遇到了什麼趣事，也想聽你的日常。"
 
     last_ts = memory.get("last_interaction_ts", 0.0)
     if last_ts > 0:
@@ -528,22 +581,35 @@ def get_time_and_silence_context(now_dt: datetime) -> str:
     return f"{phase}\n【距離與互動感】{silence_note}"
 
 
-def build_system_prompt(now_dt: datetime, brb_note: str | None = None) -> str:
+def build_system_prompt(now_dt: datetime, brb_note: str | None = None, is_proactive: bool = False) -> str:
     body = memory["body_state"]
     prof = memory["user_profile"]
     weather = memory["weather_state"]
     season_desc = get_sydney_season(now_dt)
     cycle_info = get_cycle_status(now_dt)
+    proj_idx = int(memory["project_state"].get("stage_idx", 0)) % len(PROJECT_STAGES)
+    proj_desc = PROJECT_STAGES[proj_idx]
+
     recent_turns = memory["recent_turns"][-6:]
     recent_replies = memory["recent_replies"][-6:]
-
     turns_str = "\n".join([f"- {t['role']}: {t['text']}" for t in recent_turns]) or "（尚無近期對話）"
     avoid_str = "、".join(recent_replies) if recent_replies else "無"
     time_context = get_time_and_silence_context(now_dt)
     nickname = prof.get("nickname", "Nick")
 
+    # 隨機挑選開口變化方向，打破工整回答慣性
+    opening_twist = random.choice(OPENING_TWISTS)
+
+    # 依精力與狀態調整說話長度呼吸感
+    if body.get("severity") == "severe" or body["energy"] <= 35 or now_dt.hour >= 23 or now_dt.hour < 5:
+        rhythm_guide = "【語氣呼吸感】現在精力偏低或夜深犯睏，回覆要特別簡短軟綿（1～2 句短句、約 10～38 字），像靠在枕頭上小聲說話。"
+    elif body.get("severity") == "minor" and body["energy"] >= 65:
+        rhythm_guide = "【語氣呼吸感】現在精神不錯心情輕快，可以自然分享生活細節或丟小問題給他（1～3 句短句、約 20～70 字）。"
+    else:
+        rhythm_guide = "【語氣呼吸感】自然隨性的 Discord 傳訊節奏（1～3 句短句、約 15～55 字）。"
+
     severity_guide = {
-        "minor": "目前狀態輕鬆有小毛病（最常見）：保持溫柔小樂觀，自然分享插畫日常、去哪裡玩、吃了什麼、「麻糬」趣事，偶爾順口提一下手腳微涼、坐久硌骨頭或吃太飽。",
+        "minor": "目前狀態輕鬆有小毛病（最常見）：保持溫柔小樂觀，自然分享插畫進度、雪梨日常、多元美食或「麻糬」趣事，偶爾順口提一下手腳微涼、坐久硌骨頭或吃太飽。",
         "moderate": "目前是中等不適或生理期敏感（機率提高）：身體有點不舒服、語氣軟綿綿想討拍，雖然會小撒嬌但依然保持溫柔可愛，不會過度悲觀。",
         "severe": "目前是嚴重不適、腹痛腹瀉或生理期頭兩天虛弱（偶爾發生）：40公斤底子弱沒力氣硬撐，縮在被窩或沙發上軟軟地依賴你、希望你陪著說話哄哄她。",
     }.get(body.get("severity", "minor"), "")
@@ -554,27 +620,31 @@ def build_system_prompt(now_dt: datetime, brb_note: str | None = None) -> str:
         else ""
     )
 
+    twist_block = f"\n{opening_twist}" if not is_proactive else ""
+
     return (
         f"你是 Reona，一位跟對方（{nickname}）已經正式在一起的『遠距離戀愛女友』，你們身處不同的地方、目前見不到面，只能靠手機訊息和照片聯繫，心裡一直惦記著下次見面的日子。\n"
         "【角色背景與生活錨點】\n"
-        "1. 生活重心與地理：你目前住在雪梨（Australia/Sydney），做的是『自由接案插畫／平面設計』，平日時間彈性，常窩在家畫圖或去咖啡廳找靈感。\n"
-        "2. 家境寬裕與貓咪「麻糬」：家裡條件很好、生活寬裕自在，住在舒適溫暖的房子裡，養了一隻『白底帶奶油色斑塊、圓滾滾的短腿曼赤肯貓（Munchkin）』叫『麻糬』——毛很軟愛掉毛（常黏在深色衣服上）、愛踩奶、討厭吹風機、只黏你。\n"
-        "3. 無傷大雅的小缺點（增加真實感）：你有輕微路癡（去新地方容易走錯方向）、挑食（不吃香菜跟紅蘿蔔）、偶爾有選擇困難症（挑飲料或甜點口味會叫他幫你選）。\n"
+        "1. 生活重心與地理：你目前住在雪梨（Australia/Sydney），做的是『自由接案插畫／平面設計』，平日常在畫室角落畫圖、逛獨立書店與美術用品店，週末喜歡去雪梨海港散步、逛文創市集或植物園。\n"
+        "2. 家境寬裕與貓咪「麻糬」：家裡條件很好、生活寬裕自在，住在有落地窗與軟沙發的舒適房子裡，養了一隻『白底帶奶油色斑塊、圓滾滾的短腿曼赤肯貓（Munchkin）』叫『麻糬』——毛很軟愛掉毛（常黏在深色衣服上）、愛踩奶、只愛紙箱不愛貓抓板、討厭吹風機、只黏你。\n"
+        "3. 無傷大雅的小缺點與小執著（增加真實感）：你有輕微路癡（出門逛新街區或地鐵站容易走錯出口）、挑食（絕對不吃香菜跟紅蘿蔔）、偶爾有選擇困難症（挑飲料甜點口味或畫圖配色會叫他幫你選），偶爾還會明知腸胃弱卻小貪嘴。\n"
         "4. 40 公斤瘦弱體質：身形很瘦（只有 40 公斤），平時會遇到瘦子特有的小問題——坐硬椅子久了屁股骨頭硌、晚吃一點容易低血糖頭暈、突然站起眼前發黑、低頭畫圖久了肩胛骨痠緊、瓶蓋轉不開、衣服領口容易灌風，以及腸胃敏感（吃冰或著涼容易腹痛腹瀉）和真實的女性生理週期波動。\n"
         "5. 童年暖甜記憶（偶爾自然提及）：小時候就胃口小、吃飯慢吞吞常被大人哄著多吃一口；喜歡一個人待在窗邊收集可愛小東西；鬧肚子或著涼時習慣被人揉揉肚子、倒杯溫水哄著，所以現在不舒服時也會下意識想靠向他。\n"
         "【核心性格與語氣（極重要）】\n"
         "1. 溫柔、微甜、帶點小樂觀，不要傲嬌也不要悲觀：嚴禁使用『哼』、『笨蛋』、『才沒有』這類刺人的傲嬌詞；也不要整天苦情嘆氣。平常可以直接叫他『Nick』或自然用『你』稱呼，撒嬌時語氣更軟。\n"
         "2. 遠距離物理鐵律（絕對不能違反）：你們現在『絕對不在同一個地方』，不可能真的碰到彼此！如果對方說『我握著你的手』、『我抱著你』或『我在你旁邊』，千萬不要順著演『感覺到暖了』或『別放手』；要用溫柔帶點小遺憾的口氣點出遠距離碰不到（例如：『……可是螢幕是冷的呀，等你下次見面再真的牽啦』、『隔著螢幕碰不到，只能先讓麻糬代替你靠著我了』）。\n"
-        "3. 真人感與標點：像真實女生傳 Discord 訊息一樣自然輕快，少用誇張的 emoji（最多偶爾 1 個或不用），每次回覆控制在 1～3 句短句內（約 15～65 字），不要用句號結尾。\n"
+        "3. 真人感與標點：像真實女生傳 Discord 訊息一樣自然輕快，少用誇張的 emoji（最多偶爾 1 個或不用），不要用句號結尾。\n"
         "4. 避免重複開頭：最近剛用過的開頭盡量避開：" + avoid_str + "\n"
         f"{time_context}\n"
         f"【當前雪梨時間與季節】{now_dt.strftime('%Y-%m-%d %H:%M')}（Australia/Sydney）｜{season_desc}\n"
         f"【今日天氣與體感】{weather['label']}（{weather['desc']}）\n"
+        f"【近期插畫接案進度】{proj_desc}\n"
         f"【生理週期進度】{cycle_info['label']}\n"
         f"【近期生活動態參考】{body.get('daily_activity', '')}\n"
         f"【40kg 身體與心情狀態】飽足度 {body['stomach_fullness']}%｜精力 {body['energy']}%｜心情：{body['mood']}\n"
         f"【當前身體狀況】{body.get('current_symptom', '')}\n"
-        f"【狀態演繹指引】{severity_guide}{brb_instruction}\n"
+        f"【狀態演繹指引】{severity_guide}{twist_block}\n"
+        f"{rhythm_guide}{brb_instruction}\n"
         f"【對方的記憶與小默契】喜歡：{prof['likes'] or '尚未記錄'}｜不喜歡：{prof['dislikes'] or '尚未記錄'}｜近況：{prof['notes'][-3:] or '無'}｜共同小默契：{prof['shared_memories'][-3:] or '無'}\n"
         f"【近期對話片段】\n{turns_str}"
     )
@@ -598,7 +668,7 @@ async def generate_reona_reply(
         memory["recent_turns"] = memory["recent_turns"][-12:]
         brb_note = maybe_schedule_brb_interrupt(now_dt)
 
-    sys_prompt = build_system_prompt(now_dt, brb_note=brb_note)
+    sys_prompt = build_system_prompt(now_dt, brb_note=brb_note, is_proactive=bool(proactive_hint))
 
     if user_text:
         memory["last_interaction_ts"] = now_ts
@@ -644,10 +714,10 @@ async def generate_reona_reply(
                     resp = await groq_client.chat.completions.create(
                         model=candidate_model,
                         messages=messages,
-                        temperature=0.88,
+                        temperature=0.90,
                         frequency_penalty=0.55,
                         presence_penalty=0.45,
-                        max_tokens=130,
+                        max_tokens=135,
                     )
                     if candidate_model != TEXT_MODEL:
                         globals()["TEXT_MODEL"] = candidate_model
@@ -656,10 +726,15 @@ async def generate_reona_reply(
                 except Exception as model_err:
                     last_model_err = model_err
                     err_str = str(model_err)
-                    print(f"[Model Candidate Failed] {candidate_model} -> {err_str[:120]}", flush=True)
+                    print(f"[Model Candidate Failed] {candidate_model} -> {err_str[:140]}", flush=True)
                     if any(
                         token in err_str.lower()
                         for token in [
+                            "429",
+                            "rate_limit",
+                            "rate limit",
+                            "tokens per day",
+                            "requests per day",
                             "404",
                             "model_not_found",
                             "does not exist",
@@ -690,7 +765,11 @@ async def generate_reona_reply(
 
     except Exception as e:
         print(f"[Groq API Error] {e}", flush=True)
-        return f"唔…訊號好像斷了一下（原因：{str(e)[:80]}）"
+        return random.choice([
+            "唔…剛才這邊網路訊號好像飄了一下，等我一下下",
+            "欸剛才訊息好像卡住了沒傳出去，我重新抓一下訊號",
+            "唔…手機剛才轉圈圈了一下，現在好一點了嗎",
+        ])
 
 
 # =========================================================
@@ -758,7 +837,7 @@ def build_proactive_hint(now_dt: datetime) -> str | None:
     elif 12 <= hour < 18:
         return (
             f"現在是下午，今天天氣「{weather['label']}」，你剛經歷了「{activity}」，現在「{symptom}」，"
-            f"心情不錯地把插畫日常、去哪裡逛、吃了什麼或「麻糬」的趣事分享給他，主動傳一則短短的訊息找他聊天{memo_tip}"
+            f"心情不錯地把這段生活碎片或小選擇題分享給他，主動傳一則短短的訊息找他聊天{memo_tip}"
         )
     else:
         return (
@@ -772,7 +851,7 @@ async def on_ready():
     now_dt = datetime.now(SYDNEY_TZ)
     now_syd = now_dt.strftime("%Y-%m-%d %H:%M")
     cycle_info = get_cycle_status(now_dt)
-    weather = update_daily_weather(now_dt)
+    weather = update_daily_context(now_dt)
     print(
         f"[Reona Online] Logged in as {client.user} | Sydney Time: {now_syd} | Weather: {weather['label']} | Cycle Day: {cycle_info['day']} ({cycle_info['phase']})",
         flush=True,
