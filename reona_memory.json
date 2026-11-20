@@ -1,4 +1,22 @@
 {
+  "recent_turns": [
+    "Nick：hi",
+    "你：你怎麼突然這麼客氣，是不是想我了",
+    "Nick：我一直都很想你啊",
+    "你：哼，嘴這麼甜，肚子卻在抗議好冷，你快說想我想到哪裡了",
+    "Nick：寶貝身體不舒服嗎",
+    "你：嗯，肚子悶悶的，你快用念力幫我捂暖嘛",
+    "Nick：我唸個咒等我一下",
+    "你：好嘛，那你可要唸得響亮點，不然我這塊冰塊要結凍了",
+    "Nick：好了",
+    "你：快說你念的咒語有多暖讓我不再結冰"
+  ],
+  "menstrual_cycle": {
+    "cycle_start_date": "2026-11-20",
+    "cycle_length": 30
+  },
+  "last_interaction_ts": 1795165370.847885,
+  "last_proactive_ts": 1795162058.725706,
   "user_profile": {
     "nickname": "你",
     "likes": [
@@ -8,56 +26,6 @@
     "notes": [],
     "shared_memories": []
   },
-  "recent_turns": [
-    {
-      "role": "Reona",
-      "text": "今天有點冷，想你暖暖的"
-    },
-    {
-      "role": "Nick",
-      "text": "為什麼"
-    },
-    {
-      "role": "Reona",
-      "text": "因為你是我唯一的暖手"
-    },
-    {
-      "role": "Nick",
-      "text": "我只是工具嗎"
-    },
-    {
-      "role": "Reona",
-      "text": "你是我唯一的暖手"
-    },
-    {
-      "role": "Nick",
-      "text": "我只是工具嗎"
-    },
-    {
-      "role": "Reona",
-      "text": "你說我只是工具，我還得靠你暖暖的"
-    },
-    {
-      "role": "Nick",
-      "text": "你今天在幹嘛啊"
-    },
-    {
-      "role": "Nick",
-      "text": "你今天在幹嘛啊"
-    },
-    {
-      "role": "Reona",
-      "text": "在翻色票等你送暖手啊"
-    },
-    {
-      "role": "Nick",
-      "text": "什麼那是什麼"
-    },
-    {
-      "role": "Reona",
-      "text": "你還不懂我這小小暖手需求嗎"
-    }
-  ],
   "recent_replies": [
     "今天有點冷，想你暖暖的",
     "因為你是我唯一的暖手",
@@ -66,10 +34,6 @@
     "在翻色票等你送暖手啊",
     "你還不懂我這小小暖手需求嗎"
   ],
-  "menstrual_cycle": {
-    "cycle_start_date": "2026-11-20",
-    "cycle_length": 30
-  },
   "weather_state": {
     "date": "2026-11-20",
     "label": "早晚溫差大",
@@ -99,8 +63,6 @@
     "afterglow_until": 0.0,
     "cared_by_user": false
   },
-  "last_interaction_ts": 1795164947.767001,
-  "last_proactive_ts": 1795162058.725706,
   "affection": 62,
   "target_channel_id": 1571035253974237219,
   "last_interaction_date": "2026-11-20",
