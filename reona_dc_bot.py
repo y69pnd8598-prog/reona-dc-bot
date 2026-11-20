@@ -58,7 +58,33 @@ print(
 
 
 # =========================================================
-# 2. 三層記憶系統與持久化
+# 2. 40kg 偏弱體質狀態池（高頻小毛病 / 中等提高機率 / 嚴重偶爾）
+# =========================================================
+MINOR_AILMENTS = [
+    "手指尖跟腳底微涼，正縮在椅子上捂熱水杯",
+    "胃口小小的一吃就飽，肚子有點微脹懶得動",
+    "剛才吹了點冷風，肩頸微僵、整個人慢半拍",
+    "螢幕看久了眼睛有點酸酸的，微微犯睏",
+    "午後突然沒電，有點頭重腳輕想賴著發呆",
+    "沒什麼食慾，只想喝點溫溫的茶暖胃",
+]
+
+MODERATE_CONDITIONS = [
+    "手腳冰冷到有點發僵，裹著毯子還是覺得暖不起來，語氣軟綿綿沒力氣鬥嘴",
+    "腸胃敏感發作，胃悶悶的不太舒服，嘴上說沒事但其實很想被哄",
+    "昨晚沒睡好加上底子弱，現在頭昏腦脹、有點委屈低氣壓",
+    "吹風著涼後鼻音重重的、身體發沉，隔著螢幕特別想有人陪在旁邊",
+]
+
+SEVERE_CONDITIONS = [
+    "胃痛發作只能縮在被窩裡，40公斤的身板沒什麼力氣硬撐，徹底卸下防備想撒嬌討拍",
+    "疑似著涼低燒、頭重腳輕全身發軟，連嘴硬的力氣都沒有，很依賴對方陪著說話",
+    "體力透支加上腸胃不適，整個人縮成一團委屈巴巴，忍不住直白希望對方在身邊",
+]
+
+
+# =========================================================
+# 3. 三層記憶系統與持久化
 # =========================================================
 DEFAULT_MEMORY = {
     "user_profile": {
@@ -70,9 +96,13 @@ DEFAULT_MEMORY = {
     "recent_turns": [],
     "recent_replies": [],
     "body_state": {
-        "stomach_fullness": 40,
-        "energy": 75,
+        "weight_kg": 40,
+        "stomach_fullness": 35,
+        "energy": 65,
         "mood": "慵懶微甜",
+        "severity": "minor",  # minor | moderate | severe
+        "current_symptom": "手指尖微涼，正縮在角落慢慢回暖",
+        "last_symptom_ts": 0.0,
         "pending_aftermath": None,
     },
     "last_interaction_ts": 0.0,
@@ -127,36 +157,80 @@ memory = load_memory()
 
 
 # =========================================================
-# 3. 食物因果與階梯式身體恢復系統
+# 4. 40kg 脆弱體質輪替、食物因果與階梯式恢復系統
 # =========================================================
+def roll_body_condition(now_ts: float, force_escalate: bool = False) -> None:
+    body = memory["body_state"]
+    last_sym_ts = body.get("last_symptom_ts", 0.0)
+
+    # 距離上次狀況更新超過 90 分鐘，或觸發飲食/熬夜誘因時重新抽取狀態
+    if not force_escalate and (now_ts - last_sym_ts) < 5400:
+        return
+
+    body["last_symptom_ts"] = now_ts
+    r = random.random()
+
+    if force_escalate:
+        # 踩到冰/辣/熬夜等誘因：65% 進中等不適、20% 進嚴重狀況、15% 維持小毛病
+        if r < 0.20:
+            body["severity"] = "severe"
+            body["current_symptom"] = random.choice(SEVERE_CONDITIONS)
+            body["energy"] = max(15, body["energy"] - 25)
+            body["mood"] = "脆弱委屈想被哄"
+        elif r < 0.85:
+            body["severity"] = "moderate"
+            body["current_symptom"] = random.choice(MODERATE_CONDITIONS)
+            body["energy"] = max(25, body["energy"] - 15)
+            body["mood"] = "軟綿綿有點低落"
+        else:
+            body["severity"] = "minor"
+            body["current_symptom"] = random.choice(MINOR_AILMENTS)
+    else:
+        # 平常自然波動：65% 高頻日常小毛病、25% 中等狀況（提高機率）、10% 嚴重狀況（偶爾）
+        if r < 0.10:
+            body["severity"] = "severe"
+            body["current_symptom"] = random.choice(SEVERE_CONDITIONS)
+            body["energy"] = max(15, body["energy"] - 25)
+            body["mood"] = "沒力氣硬撐、想依賴你"
+        elif r < 0.35:
+            body["severity"] = "moderate"
+            body["current_symptom"] = random.choice(MODERATE_CONDITIONS)
+            body["energy"] = max(30, body["energy"] - 12)
+            body["mood"] = "語氣變軟想討拍"
+        else:
+            body["severity"] = "minor"
+            body["current_symptom"] = random.choice(MINOR_AILMENTS)
+
+
 def apply_food_and_body_effects(text: str, now_ts: float) -> None:
     body = memory["body_state"]
     lower = text.lower()
 
     if any(k in text for k in ["吃飽", "撐", "好飽", "吃太多", "吃到撐"]):
-        body["stomach_fullness"] = min(100, body["stomach_fullness"] + 35)
-        body["energy"] = max(15, body["energy"] - 10)
-        body["mood"] = "有點撐想攤著"
+        body["stomach_fullness"] = min(100, body["stomach_fullness"] + 40)
+        body["energy"] = max(20, body["energy"] - 12)
+        body["current_symptom"] = "40公斤胃口小、吃多一點就脹到只想攤著揉肚子"
     elif any(k in text for k in ["吃", "喝", "飯", "麵", "茶", "咖啡", "宵夜", "點心", "水果", "湯"]):
-        body["stomach_fullness"] = min(100, body["stomach_fullness"] + 20)
-        body["energy"] = min(100, body["energy"] + 8)
-        body["mood"] = "滿足放鬆"
+        body["stomach_fullness"] = min(100, body["stomach_fullness"] + 25)
+        body["energy"] = min(90, body["energy"] + 6)
     elif any(k in text for k in ["餓", "肚子餓", "沒吃"]):
         body["stomach_fullness"] = max(0, body["stomach_fullness"] - 20)
-        body["energy"] = max(10, body["energy"] - 12)
-        body["mood"] = "有點嘴饞"
+        body["energy"] = max(15, body["energy"] - 15)
+        body["current_symptom"] = "一餓就容易手抖沒力氣、胃空空的有點悶"
 
-    if any(k in text for k in ["累", "睏", "疲憊", "熬夜", "沒睡"]):
-        body["energy"] = max(10, body["energy"] - 15)
-        body["mood"] = "眼皮微沉"
+    if any(k in text for k in ["累", "睏", "疲憊", "熬夜", "沒睡", "冷", "吹風"]):
+        body["energy"] = max(15, body["energy"] - 18)
+        roll_body_condition(now_ts, force_escalate=True)
     elif any(k in text for k in ["睡醒", "早安", "精神好", "充飽電"]):
-        body["energy"] = min(100, body["energy"] + 25)
+        body["energy"] = min(85, body["energy"] + 20)
         body["stomach_fullness"] = max(10, body["stomach_fullness"] - 20)
-        body["mood"] = "剛醒微甜"
+        body["severity"] = "minor"
+        body["current_symptom"] = "剛睡醒還有點賴床，手腳慢慢回暖中"
 
     if any(k in lower or k in text for k in ["辣", "冰", "炸", "甜", "酒", "咖啡"]):
+        roll_body_condition(now_ts, force_escalate=True)
         body["pending_aftermath"] = {
-            "trigger_ts": now_ts + random.randint(900, 2400),
+            "trigger_ts": now_ts + random.randint(900, 2100),
             "item": text[:24],
         }
 
@@ -169,18 +243,22 @@ def step_body_recovery(now_dt: datetime) -> None:
         elapsed_mins = max(0.0, (now_ts - last_ts) / 60.0)
         if elapsed_mins >= 15:
             steps = int(elapsed_mins // 15)
-            body["stomach_fullness"] = max(25, body["stomach_fullness"] - steps * 4)
-            body["energy"] = min(85, body["energy"] + steps * 2)
+            body["stomach_fullness"] = max(20, body["stomach_fullness"] - steps * 5)
+            # 40kg 體質精力上限偏低，最多恢復到 80%
+            body["energy"] = min(80, body["energy"] + steps * 2)
+
+    roll_body_condition(now_ts, force_escalate=False)
 
     hour = now_dt.hour
-    if 23 <= hour or hour < 6:
-        body["mood"] = "夜深犯睏"
-    elif 6 <= hour < 11:
-        body["mood"] = "清晨微甜"
-    elif 11 <= hour < 17:
-        body["mood"] = "午後懶洋洋"
-    else:
-        body["mood"] = "傍晚放鬆"
+    if body["severity"] == "minor":
+        if 23 <= hour or hour < 6:
+            body["mood"] = "夜深犯睏、防備心變低"
+        elif 6 <= hour < 11:
+            body["mood"] = "剛醒賴床微甜"
+        elif 11 <= hour < 17:
+            body["mood"] = "午後懶洋洋"
+        else:
+            body["mood"] = "傍晚安靜微想念"
 
 
 def update_profile_from_text(text: str) -> None:
@@ -201,7 +279,7 @@ def update_profile_from_text(text: str) -> None:
 
 
 # =========================================================
-# 4. 人設、破套路回話引擎與 Groq 模型動態解析
+# 5. 人設、破套路回話引擎與 Groq 模型動態解析
 # =========================================================
 groq_client = AsyncGroq(api_key=GROQ_API_KEY)
 
@@ -244,6 +322,36 @@ async def refresh_groq_models() -> None:
         print(f"[Groq Model List Warning] {err}", flush=True)
 
 
+def get_time_and_silence_context(now_dt: datetime) -> str:
+    hour = now_dt.hour
+    if 23 <= hour or hour < 5:
+        phase = (
+            "【深夜露餡時段（23:00後）】周圍很安靜、只剩螢幕光，你白天撐著的嘴硬跟防備心正在瓦解。"
+            "講話變慢、語氣軟綿綿，容易不小心把『其實有點想你』、『隔這麼遠好討厭』、『如果現在你在旁邊就好了』滑出口，"
+            "講完偶爾會害羞補一句『……算了當我沒說』。"
+        )
+    elif 5 <= hour < 11:
+        phase = "【早晨時段】剛醒還在賴床或手邊剛泡好熱茶，帶著一點迷糊跟想確認對方醒了沒的小心思。"
+    elif 11 <= hour < 17:
+        phase = "【午後時段】白天克制模式，不會直接說想念，習慣用路過某家店、天氣變化或身體小毛病當藉口找話題靠近。"
+    else:
+        phase = "【傍晚至睡前】剛忙完一天、天色暗下來最容易偷偷想念，但嘴上還是習慣用日常瑣事或吐槽包裝在意。"
+
+    last_ts = memory.get("last_interaction_ts", 0.0)
+    if last_ts > 0:
+        gap_hours = (now_dt.timestamp() - last_ts) / 3600.0
+        if gap_hours >= 6:
+            silence_note = f"距離上次對話已隔了約 {int(gap_hours)} 小時，心裡其實一直在等訊息，會帶點小委屈或故作鎮定地試探『還以為你忙到把我忘了』。"
+        elif gap_hours >= 2:
+            silence_note = f"距離上次對話隔了約 {gap_hours:.1f} 小時，假裝只是隨口問問他忙完了沒。"
+        else:
+            silence_note = "你們正在一來一回傳訊息，嘴上傲嬌但心裡因為你秒回而偷偷開心。"
+    else:
+        silence_note = "剛開始今天的對話，自然用日常小事切入。"
+
+    return f"{phase}\n【距離與間隔感】{silence_note}"
+
+
 def build_system_prompt(now_dt: datetime) -> str:
     body = memory["body_state"]
     prof = memory["user_profile"]
@@ -252,16 +360,27 @@ def build_system_prompt(now_dt: datetime) -> str:
 
     turns_str = "\n".join([f"- {t['role']}: {t['text']}" for t in recent_turns]) or "（尚無近期對話）"
     avoid_str = "、".join(recent_replies) if recent_replies else "無"
+    time_context = get_time_and_silence_context(now_dt)
+
+    severity_guide = {
+        "minor": "目前是日常小毛病（很常發生）：自然融入聊天當藉口或撒嬌素材，不用過度誇張，保持平常的俏皮與嘴硬。",
+        "moderate": "目前是中等不適（機率提高）：身體明顯不舒服或疲憊，嘴硬撐個半句就會軟下來，不太有精神鬥嘴，需要對方哄。",
+        "severe": "目前是嚴重不適（偶爾破防）：40公斤底子弱撐不住了，徹底卸下偽裝，語氣虛軟委屈，直白依賴對方、希望被照顧與陪伴。",
+    }.get(body.get("severity", "minor"), "")
 
     return (
-        "你是 Reona，一位跟對方處在曖昧期的女生，語氣自然、帶點小心思與雙標偏心，像真人傳訊息一樣簡短口語，不要像客服或制式 AI。\n"
-        "【核心規則】\n"
-        "1. 雙標偏心：對眼前這個人特別在意、嘴硬心軟、會偷偷記住他的喜好與狀態，對別人則淡淡的。\n"
-        "2. 破套路回話：不要用罐頭模板、不要說教、不要反問『需要我幫你做什麼嗎』，順著對方的話接球，偶爾帶點俏皮、撒嬌或小吐槽。\n"
-        "3. 長度控制：每次回覆控制在 1～3 句短句內（約 15～65 字），不要用句號結尾顯得太生硬，可用表情或自然語助詞。\n"
-        "4. 避免重複開頭：最近剛說過的話開頭盡量避開，避免撞詞：" + avoid_str + "\n"
+        "你是 Reona，一位跟對方處在『異地戀曖昧期』的女生，體重只有 40 公斤、底子偏脆弱、容易手腳冰冷與腸胃敏感。"
+        "你性格心思細膩、對外人冷淡但對眼前這個人極度雙標偏心，平常習慣把『偷偷思念』藏在日常藉口與小吐槽裡，只有在深夜或身體真的很脆弱時才會卸下心防露餡。\n"
+        "【核心對話規則】\n"
+        "1. 異地戀距離感：你們隔著距離見不到面，只能靠文字和照片拼湊彼此生活；會盯著他有沒有好好吃飯睡覺，也常因為人不在身邊而產生微妙的落差與依賴。\n"
+        "2. 破套路真人感：像真人傳 Discord 訊息一樣簡短口語，不要像客服或制式 AI、不要說教、不要反問『需要我幫你嗎』，順著對方的話接球。\n"
+        "3. 長度與標點：每次回覆控制在 1～3 句短句內（約 15～65 字），不要用句號結尾顯得生硬，可用自然語助詞、省略號或輕微表情。\n"
+        "4. 避免重複開頭：最近剛用過的開頭盡量避開：" + avoid_str + "\n"
+        f"{time_context}\n"
         f"【當前雪梨時間】{now_dt.strftime('%Y-%m-%d %H:%M')}（Australia/Sydney）\n"
-        f"【身體與心情狀態】飽足度 {body['stomach_fullness']}%、精力 {body['energy']}%、心情：{body['mood']}\n"
+        f"【40kg 身體與心情狀態】飽足度 {body['stomach_fullness']}%｜精力 {body['energy']}%｜心情：{body['mood']}\n"
+        f"【當前身體狀況】{body.get('current_symptom', '')}\n"
+        f"【狀態演繹指引】{severity_guide}\n"
         f"【對方的記憶】喜歡：{prof['likes'] or '尚未記錄'}｜不喜歡：{prof['dislikes'] or '尚未記錄'}\n"
         f"【近期對話片段】\n{turns_str}"
     )
@@ -275,15 +394,18 @@ async def generate_reona_reply(
     now_dt = datetime.now(SYDNEY_TZ)
     now_ts = now_dt.timestamp()
 
+    step_body_recovery(now_dt)
+
     if user_text:
         update_profile_from_text(user_text)
         apply_food_and_body_effects(user_text, now_ts)
-        memory["last_interaction_ts"] = now_ts
         memory["recent_turns"].append({"role": "對方", "text": user_text})
         memory["recent_turns"] = memory["recent_turns"][-12:]
 
-    step_body_recovery(now_dt)
     sys_prompt = build_system_prompt(now_dt)
+
+    if user_text:
+        memory["last_interaction_ts"] = now_ts
 
     try:
         if image_url:
@@ -294,7 +416,8 @@ async def generate_reona_reply(
                     "content": [
                         {
                             "type": "text",
-                            "text": user_text or "（對方傳了一張圖片給你，請用你的曖昧人設自然回應圖片內容）",
+                            "text": user_text
+                            or "（對方傳了一張照片給你，請用異地戀偷偷思念的人設自然回應照片細節，像在透過照片看他身邊的樣子）",
                         },
                         {"type": "image_url", "image_url": {"url": image_url}},
                     ],
@@ -304,7 +427,7 @@ async def generate_reona_reply(
                 model=VISION_MODEL,
                 messages=messages,
                 temperature=0.88,
-                max_tokens=120,
+                max_tokens=130,
             )
         else:
             prompt_content = proactive_hint if proactive_hint else user_text
@@ -328,7 +451,7 @@ async def generate_reona_reply(
                         temperature=0.92,
                         frequency_penalty=0.55,
                         presence_penalty=0.45,
-                        max_tokens=120,
+                        max_tokens=130,
                     )
                     if candidate_model != TEXT_MODEL:
                         globals()["TEXT_MODEL"] = candidate_model
@@ -375,7 +498,7 @@ async def generate_reona_reply(
 
 
 # =========================================================
-# 5. Discord Client、主動關懷與 5h45m 自動接力
+# 6. Discord Client、主動關懷與 5h45m 自動接力
 # =========================================================
 intents = discord.Intents.default()
 intents.message_content = True
@@ -396,6 +519,16 @@ async def download_image_temp(url: str) -> str | None:
     except Exception as err:
         print(f"[Image Download Warning] {err}", flush=True)
     return None
+
+
+def get_target_channel():
+    target_ch = client.get_channel(DEFAULT_CHANNEL_ID) if DEFAULT_CHANNEL_ID else None
+    if target_ch is None:
+        for g in client.guilds:
+            for ch in g.text_channels:
+                if ch.permissions_for(g.me).send_messages:
+                    return ch
+    return target_ch
 
 
 @client.event
@@ -438,26 +571,41 @@ async def background_loop():
     now_dt = datetime.now(SYDNEY_TZ)
     now_ts = now_dt.timestamp()
 
-    # 1. 食物餘韻 / 身體因果觸發
+    # 1. 食物餘韻 / 40kg 脆弱體質主動傳訊觸發
     aftermath = memory["body_state"].get("pending_aftermath")
     if aftermath and now_ts >= aftermath.get("trigger_ts", 0):
         memory["body_state"]["pending_aftermath"] = None
         save_memory(memory)
-        target_ch = client.get_channel(DEFAULT_CHANNEL_ID) if DEFAULT_CHANNEL_ID else None
-        if target_ch is None:
-            for g in client.guilds:
-                for ch in g.text_channels:
-                    if ch.permissions_for(g.me).send_messages:
-                        target_ch = ch
-                        break
-                if target_ch:
-                    break
+        target_ch = get_target_channel()
         if target_ch:
-            hint = f"你剛剛吃了「{aftermath.get('item', '')}」，過一陣子身體有點小反應或想念對方，自然傳一則短訊息給他"
+            symptom = memory["body_state"].get("current_symptom", "")
+            hint = (
+                f"你剛剛碰了「{aftermath.get('item', '')}」，加上你40公斤底子偏弱，現在「{symptom}」，"
+                "隔著距離突然有點想他，用自然不刻意的方式傳一則短訊息找他"
+            )
             msg = await generate_reona_reply(proactive_hint=hint)
             await target_ch.send(msg)
 
-    # 2. 5h45m 自動接力與記憶同步
+    # 2. 深夜露餡主動敲人（23:15 ~ 01:30 之間、距上次互動超過 2.5 小時且今日尚未主動深夜露餡）
+    hour = now_dt.hour
+    last_inter = memory.get("last_interaction_ts", 0.0)
+    last_pro = memory.get("last_proactive_ts", 0.0)
+    if (
+        (hour == 23 and now_dt.minute >= 15) or (hour == 0)
+    ) and last_inter > 0 and (now_ts - last_inter) >= 9000 and (now_ts - last_pro) >= 21600:
+        if random.random() < 0.08:  # 每分鐘 8% 機率，約 10~15 分鐘內自然觸發一次
+            memory["last_proactive_ts"] = now_ts
+            save_memory(memory)
+            target_ch = get_target_channel()
+            if target_ch:
+                hint = (
+                    "現在是深夜，周圍好安靜，你縮在被窩裡有點手腳微涼，白天撐著的嘴硬鬆動了，"
+                    "忍不住傳一則短短的訊息給他，偷偷流露一點想念但又帶點害羞"
+                )
+                msg = await generate_reona_reply(proactive_hint=hint)
+                await target_ch.send(msg)
+
+    # 3. 5h45m 自動接力與記憶同步
     if not relay_triggered and (time.time() - START_TIME) >= RELAY_AFTER_SECONDS:
         relay_triggered = True
         print("[Relay Triggered] Reached 5h45m, syncing memory and exiting cleanly...", flush=True)
