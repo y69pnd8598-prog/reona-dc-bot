@@ -539,8 +539,8 @@ def detect_user_tone_hint(user_text: str, live_history: list[dict]) -> str:
         return ""
 
     short_phrases = {
-        "不錯", "還好", "喔", "哦", "好吧", "是喔", "真不錯",
-        "聽起來不錯", "聽起來很不錯", "嗯", "嗯嗯", "好", "還行剛吃飽而已",
+        "嗨", "哈囉", "hi", "hello", "不錯", "還好", "喔", "哦", "好吧", "是喔",
+        "真不錯", "聽起來不錯", "聽起來很不錯", "嗯", "嗯嗯", "好", "還行剛吃飽而已",
     }
     recent_nick_msgs = [t["text"].strip() for t in live_history[-6:] if t["role"] == "Nick"]
     consecutive_short = sum(1 for m in recent_nick_msgs[-2:] if len(m) <= 7)
@@ -549,39 +549,59 @@ def detect_user_tone_hint(user_text: str, live_history: list[dict]) -> str:
     if repeated_same:
         return (
             "【思考角度：對方連發同一句話】"
-            "他剛剛重複傳同一句，先在心裡想一下他是不是在逗你或測試你，再轉個彎俏皮戳破他（例如『同一句傳兩遍是想騙我注意你嗎』），12～28 字。"
+            "他剛剛重複傳同一句，先在心裡想一下他是不是在逗你或測試你，再轉個彎俏皮戳破他（例如『同一句傳兩遍是想騙我注意你嗎』），10～25 字。"
         )
-    if clean in short_phrases or consecutive_short >= 2:
+    if clean.lower() in short_phrases or consecutive_short >= 2:
         return (
             "【思考角度：對方回得很簡短】"
-            "他這句回得很省字，先想一下他是不是懶得打字或吃飽就想敷衍你，再帶點小試探或曖昧吐槽回他（例如『回這麼省字，吃飽就不想理人了？』），12～30 字。"
+            "他這句回得很短，先想一下他是不是懶得打字或隨口打招呼，再帶點俏皮、小試探或曖昧回他，10～26 字。"
         )
     return ""
 
 
 # =========================================================
-# 5. 輸出清洗、亂碼防呆、頻道記憶與 Groq 防錯切換
+# 5. 輸出清洗、亂碼/假模板強力防呆、頻道記憶與 Groq 防錯切換
 # =========================================================
 groq_client = AsyncGroq(api_key=GROQ_API_KEY)
 
-# 常見生僻漢字/亂碼字元黑名單（避免模型抽風吐冷僻字）
-RARE_CHAR_PATTERN = re.compile(
-    r"[姎懓懞擝奼懅鼉齾玈尞攟臙屴尛沝炋朰攴攕襾]"
+# 日文平假名/片假名 + 已知罕見亂碼字元
+KANA_OR_BAD_CHAR_PATTERN = re.compile(
+    r"[\u3040-\u309f\u30a0-\u30ff姎懓懞擝奼懅鼉齾玈尞攟臙屴尛沝炋朰攴攕襾攭攮攳]"
 )
-# 假對話列表模板偵測
-FAKE_TRANSCRIPT_PATTERN = re.compile(r"(?:^|\n)\s*(?:•|-|\*)?\s*(?:Nick|Reona)\s*[:：]", re.MULTILINE)
+# 假對話或冒號拼接格式偵測（例如「交撇：...」「你說：...」「Nick: ...」）
+COLON_TEMPLATE_PATTERN = re.compile(r"[:：]\s*[^，。！？\n]{1,12}[:：]|(?:^|\s)(?:Nick|Reona)\s*[:：]", re.IGNORECASE)
+
+
+def is_allowed_char(ch: str) -> bool:
+    code = ord(ch)
+    # 常用 CJK 統一表意文字區間
+    if 0x4E00 <= code <= 0x9FFF:
+        return True
+    # 英數字與常用中文/英文標點
+    if ch.isalnum() or ch.isspace():
+        return True
+    if ch in "，。！？、～…—・「」『』（）()+-/*#@&%.,!?;:'\"":
+        return True
+    return False
 
 
 def is_corrupted_reply(text: str) -> bool:
-    if not text or len(text) < 2:
+    s = (text or "").strip()
+    if len(s) < 2:
         return True
-    if RARE_CHAR_PATTERN.search(text):
+    if KANA_OR_BAD_CHAR_PATTERN.search(s):
         return True
-    if FAKE_TRANSCRIPT_PATTERN.search(text):
+    if COLON_TEMPLATE_PATTERN.search(s):
         return True
-    # 若出現大量連續特殊符號或「=」拼接奇怪詞組，視為抽風
-    if len(re.findall(r"[=＝]", text)) >= 2:
+    # 冒號或等號出現超過 1 次，通常代表模型在亂拼格式或亂碼
+    if (s.count(":") + s.count("：") + s.count("=") + s.count("＝")) >= 2:
         return True
+
+    # 檢查非一般繁中/英數/常用標點字元比例，超過 15% 視為亂碼
+    disallowed = sum(1 for ch in s if not is_allowed_char(ch))
+    if disallowed / max(1, len(s)) > 0.15:
+        return True
+
     return False
 
 
@@ -590,18 +610,16 @@ def sanitize_reply_text(raw: str) -> str:
     s = (raw or "").strip()
     if not s:
         return ""
-    # 若模型把思考步驟或 Reona: 前綴寫出來，擷取最後一行非列表內容
     lines = [ln.strip() for ln in s.splitlines() if ln.strip()]
     filtered_lines = []
     for ln in lines:
-        if ln.startswith(("•", "-", "*", "思考", "步驟", "分析", "內心")):
+        if ln.startswith(("•", "-", "*", "思考", "步驟", "分析", "內心", "潛台詞")):
             continue
-        ln = re.sub(r"^(?:Reona|reona|助理|回覆)\s*[:：]\s*", "", ln)
+        ln = re.sub(r"^(?:Reona|reona|助理|回覆|你說|他說|對方說)\s*[:：]\s*", "", ln)
         filtered_lines.append(ln)
     s = filtered_lines[-1] if filtered_lines else s
 
-    # 拿掉括號內的內心旁白（如（心想：...）或 (thinking...)）
-    s = re.sub(r"（[^）]{1,40}）|\([^)]{1,40}\)", "", s)
+    s = re.sub(r"（[^）]{1,50}）|\([^)]{1,50}\)", "", s)
     s = s.strip("\"'「」『』").rstrip("。").strip()
     return s
 
@@ -712,8 +730,9 @@ def build_system_prompt(
     recent_replies = [t["text"][:16] for t in turns_source if t["role"] == "Reona"][-5:]
 
     turns_lines = [
-        f"{'他' if t['role'] == 'Nick' else '你'}說：{t['text']}"
+        f"{'對方' if t['role'] == 'Nick' else '你'}：{t['text']}"
         for t in turns_source
+        if not is_corrupted_reply(t["text"])
     ]
     turns_str = "\n".join(turns_lines) if turns_lines else "（目前沒有近期對話）"
     avoid_str = "、".join(recent_replies) if recent_replies else "無"
@@ -737,8 +756,8 @@ def build_system_prompt(
     return (
         f"你是 Reona，跟 {nickname} 正式在一起的『遠距離戀愛女友』，你們不在同一個地方，只能靠訊息聯繫。\n"
         "【先想再回・曖昧與真人感鐵律（務必嚴格遵守）】\n"
-        "1. 全程只用自然道地的『台灣繁體中文』，嚴禁簡體字或冷僻生字。\n"
-        "2. 內部先想過再回，外部只輸出最後 1 句短話（12～35 字以內，不要寫成長文）：在心裡先想（a）他這句話的潛台詞或情緒是什麼；（b）這跟我現在 40kg 怕冷/虛弱/遠距狀態或剛才聊的事有什麼關聯；（c）轉個彎帶出曖昧試探、小吐槽或軟綿綿依賴，但**只把最終那句話輸出出來**，不要印出思考過程或 `他/你說：` 前綴。\n"
+        "1. 全程只用自然道地的『台灣繁體中文』，絕對禁止簡體字、日文假名或冷僻生字，也不要出現冒號拼接的奇怪格式。\n"
+        "2. 內部先想過再回，外部只輸出最後 1 句自然短話（10～32 字以內，不要寫成長文）：在心裡先想（a）他這句話的潛台詞或情緒是什麼；（b）這跟我現在 40kg 怕冷/虛弱/遠距狀態或剛才聊的事有什麼關聯；（c）轉個彎帶出曖昧試探、小吐槽或軟綿綿依賴，但**只把最終那句話輸出出來**，不要印出思考過程或任何前綴。\n"
         "3. 曖昧要靠『轉彎與留白』，不要硬背肉麻台詞：像真的在撩他或吃醋試探一樣，帶點勾人、小抱怨或隔著螢幕的遺憾，留一點空間讓他接話。\n"
         "4. 一次只聊一件事（嚴禁當設定報備機）：接他剛才的話時，只圍繞這一個點轉彎，**絕對禁止**硬塞畫筆、麻糬、熱茶或天氣等無關設定！只有在開新話題或剛好聊到時才自然帶出。\n"
         "5. 嚴禁 AI 雞湯與越界編造：禁講『只要你開心我的心也暖起來』、『吃起來還挺舒服』這類假客氣散文句；看不到他那邊的細節不能替他說出內餡或房間狀況；說抱著/牽手時點出隔著螢幕碰不到。不用句號結尾。\n"
@@ -817,8 +836,8 @@ async def generate_reona_reply(
             resp = await groq_client.chat.completions.create(
                 model=VISION_MODEL,
                 messages=messages,
-                temperature=0.78,
-                max_tokens=450,
+                temperature=0.72,
+                max_tokens=380,
             )
             raw_content = resp.choices[0].message.content if resp.choices and resp.choices[0].message else ""
             cleaned = sanitize_reply_text(raw_content or "")
@@ -842,10 +861,10 @@ async def generate_reona_reply(
                     resp = await groq_client.chat.completions.create(
                         model=candidate_model,
                         messages=messages,
-                        temperature=0.80,
-                        frequency_penalty=0.25,
-                        presence_penalty=0.30,
-                        max_tokens=480,
+                        temperature=0.75,
+                        frequency_penalty=0.20,
+                        presence_penalty=0.25,
+                        max_tokens=400,
                     )
                     raw_content = resp.choices[0].message.content if resp.choices and resp.choices[0].message else ""
                     cleaned = sanitize_reply_text(raw_content or "")
