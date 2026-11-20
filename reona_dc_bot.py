@@ -62,7 +62,7 @@ print(
 
 
 # =========================================================
-# 2. 南半球雪梨日期季節、天氣池、多元日常池 & 40kg 瘦子體質池
+# 2. 南半球雪梨日期季節、天氣池、動態情緒池 & 40kg 瘦子體質池
 # =========================================================
 def get_sydney_season_detail(now_dt: datetime) -> str:
     m = now_dt.month
@@ -84,6 +84,30 @@ WEATHER_POOL = [
     {"label": "細雨綿綿", "desc": "外面下著小雨、空氣涼涼濕濕的，特別適合窩在軟沙發喝熱可可畫圖"},
     {"label": "室內冷氣偏強", "desc": "外面天氣不錯但室內冷氣開得有點冷，披著小毛毯才不會手腳發涼"},
     {"label": "早晚溫差大", "desc": "白天還好但一入夜就變冷，手腳容易跟著涼下來"},
+]
+
+# 動態情緒波動模式（打破永遠平淡微笑的 AI 感）
+MOOD_MODES = [
+    {
+        "name": "輕快愛逗你",
+        "guide": "現在心情很好、帶點俏皮愛開玩笑，講話直白靈動，偶爾會故意逗他或小吐槽一下。",
+    },
+    {
+        "name": "有點小煩躁想抱怨",
+        "guide": "現在有點小鬱悶或碎念模式（可能是改圖改到煩、外送太慢、差點吃到紅蘿蔔或天氣太涼），講話直接帶點小抱怨，不要客氣微笑。",
+    },
+    {
+        "name": "軟綿綿黏人撒嬌",
+        "guide": "現在精力有點低、整個人懶洋洋軟綿綿的，講話像靠在抱枕上，帶點直白的依賴和撒嬌。",
+    },
+    {
+        "name": "小委屈想討拍",
+        "guide": "現在情緒比較敏感、帶點小委屈或小貪嘴後的懊惱，希望他多哄哄你、多順著你一點。",
+    },
+    {
+        "name": "隨性放空碎念",
+        "guide": "像真實女生滑手機隨手回訊息一樣，想到什麼講什麼，不用刻意找正能量結尾。",
+    },
 ]
 
 PROJECT_STAGES = [
@@ -115,7 +139,7 @@ WEEKEND_HIGHLIGHTS = [
 ]
 
 OPENING_TWISTS = [
-    "【對話節奏：專心接他的話】直接回應他剛才說的內容，語氣自然甜軟，不要硬扯不相干的背景設定。",
+    "【對話節奏：專心接他的話】直接回應他剛才說的內容，語氣自然有情緒，不要硬扯不相干的背景設定。",
     "【對話節奏：眼前小插曲＋接話】偶爾可以先用半句帶過眼前突發小事（例如麻糬差點踩到水杯、剛挑掉紅蘿蔔），再順暢回應他的話題。",
     "【對話節奏：單純分享或留白】接完話就自然收尾，不要刻意在結尾硬塞問句。",
     "【對話節奏：互動小選擇題】只有在話題剛好適合時，才順口丟一個二選一問題讓他幫你挑。",
@@ -184,11 +208,13 @@ DEFAULT_MEMORY = {
         "weight_kg": 40,
         "stomach_fullness": 35,
         "energy": 70,
-        "mood": "溫柔微甜、愛分享日常",
+        "mood": "輕快愛逗你",
+        "mood_guide": "現在心情很好、帶點俏皮愛開玩笑，講話直白靈動，偶爾會故意逗他或小吐槽一下。",
         "severity": "minor",
         "current_symptom": "手指尖微涼，正捧著熱水杯慢慢回暖",
         "daily_activity": "在畫室角落收尾一張插畫草稿，白底奶油色的短腿貓「麻糬」正窩在沙發上打呼",
         "last_symptom_ts": 0.0,
+        "last_mood_ts": 0.0,
         "pending_aftermath": None,
         "pending_brb_followup": None,
     },
@@ -250,7 +276,7 @@ memory = load_memory()
 
 
 # =========================================================
-# 4. 天氣/接案進度推進、真實生理週期計算、40kg 瘦弱體質與生活斷點
+# 4. 天氣/接案進度推進、真實生理週期計算、40kg 瘦弱體質與動態情緒波動
 # =========================================================
 def update_daily_context(now_dt: datetime) -> dict:
     today_str = now_dt.date().isoformat()
@@ -331,7 +357,7 @@ def get_cycle_status(now_dt: datetime) -> dict:
         return {
             "phase": "normal",
             "day": day_num,
-            "label": f"週期第 {day_num} 天（平穩期，心情溫柔微甜，保有 40kg 瘦子日常小毛病）",
+            "label": f"週期第 {day_num} 天（平穩期，保有 40kg 瘦子日常小毛病與真實情緒起伏）",
             "severity": None,
             "symptom": None,
         }
@@ -347,7 +373,8 @@ def roll_body_condition(now_dt: datetime, force_escalate: bool = False) -> None:
         body["severity"] = cycle_info["severity"]
         body["current_symptom"] = cycle_info["symptom"]
         body["energy"] = min(body["energy"], 45 if cycle_info["phase"] == "menstrual_heavy" else 60)
-        body["mood"] = "生理期軟綿綿、有點撒嬌想被哄"
+        body["mood"] = "生理期虛軟撒嬌"
+        body["mood_guide"] = "生理期不舒服整個人沒力氣、有點脆弱撒嬌想被哄，語氣軟綿綿的。"
         if (now_ts - last_sym_ts) >= 5400:
             body["last_symptom_ts"] = now_ts
             body["daily_activity"] = pick_contextual_activity(now_dt)
@@ -361,30 +388,34 @@ def roll_body_condition(now_dt: datetime, force_escalate: bool = False) -> None:
     r = random.random()
 
     if force_escalate:
-        if r < 0.22:
+        if r < 0.25:
             body["severity"] = "severe"
             body["current_symptom"] = random.choice(SEVERE_CONDITIONS)
             body["energy"] = max(20, body["energy"] - 22)
-            body["mood"] = "脆弱撒嬌、很需要你"
+            body["mood"] = "虛弱委屈想依賴"
+            body["mood_guide"] = "身體真的很不舒服、沒力氣撐著，講話軟弱帶點小委屈，很需要你陪著哄。"
         elif r < 0.85:
             body["severity"] = "moderate"
             body["current_symptom"] = random.choice(MODERATE_CONDITIONS)
             body["energy"] = max(30, body["energy"] - 12)
-            body["mood"] = "軟綿綿有點想被哄"
+            body["mood"] = "不舒服小懊惱想討拍"
+            body["mood_guide"] = "有點懊惱自己亂吃或吹風搞到不舒服，語氣軟軟的想討拍。"
         else:
             body["severity"] = "minor"
             body["current_symptom"] = cycle_info["symptom"] or random.choice(MINOR_AILMENTS)
     else:
-        if r < 0.10:
+        if r < 0.12:
             body["severity"] = "severe"
             body["current_symptom"] = random.choice(SEVERE_CONDITIONS)
             body["energy"] = max(20, body["energy"] - 22)
-            body["mood"] = "沒力氣撐著、好想你在身邊"
-        elif r < 0.35:
+            body["mood"] = "虛弱委屈想依賴"
+            body["mood_guide"] = "身體很不舒服、縮在沙發或被窩裡沒力氣，講話簡短軟弱、特別想你。"
+        elif r < 0.38:
             body["severity"] = "moderate"
             body["current_symptom"] = random.choice(MODERATE_CONDITIONS)
             body["energy"] = max(35, body["energy"] - 10)
-            body["mood"] = "語氣軟軟的想討拍"
+            body["mood"] = "軟綿綿想討拍"
+            body["mood_guide"] = "身體有點小不適、精力偏低，語氣懶洋洋想被你哄。"
         else:
             body["severity"] = "minor"
             body["current_symptom"] = cycle_info["symptom"] or random.choice(MINOR_AILMENTS)
@@ -435,6 +466,7 @@ def apply_food_and_body_effects(text: str, now_dt: datetime) -> None:
         body["severity"] = "severe" if random.random() < 0.45 else "moderate"
         body["current_symptom"] = "腸胃敏感突然腹痛跑了趟廁所，現在全身軟綿綿的只能喝溫水休息"
         body["mood"] = "虛軟委屈、想被你哄"
+        body["mood_guide"] = "剛跑完廁所整個人虛軟委屈，語氣很軟、想被你哄哄。"
     elif any(k in text for k in ["累", "睏", "疲憊", "熬夜", "沒睡", "冷", "吹風"]):
         body["energy"] = max(20, body["energy"] - 15)
         roll_body_condition(now_dt, force_escalate=True)
@@ -443,7 +475,7 @@ def apply_food_and_body_effects(text: str, now_dt: datetime) -> None:
         body["stomach_fullness"] = max(10, body["stomach_fullness"] - 20)
         roll_body_condition(now_dt, force_escalate=False)
 
-    if any(k in lower or k in text for k in ["辣", "冰", "炸", "甜", "酒", "咖啡", "冷飲"]):
+    if any(k in lower or k in text for k in ["辣", "冰", "炸", "甜", "酒", "咖啡", "冷飲", "油"]):
         roll_body_condition(now_dt, force_escalate=True)
         body["pending_aftermath"] = {
             "trigger_ts": now_ts + random.randint(900, 2100),
@@ -467,14 +499,15 @@ def step_body_recovery(now_dt: datetime) -> None:
 
     hour = now_dt.hour
     if body["severity"] == "minor":
-        if 23 <= hour or hour < 6:
-            body["mood"] = "夜深安靜、軟綿綿想念你"
-        elif 6 <= hour < 11:
-            body["mood"] = "剛醒賴床、心情微甜"
-        elif 11 <= hour < 17:
-            body["mood"] = "午後愜意、想跟你分享日常"
-        else:
-            body["mood"] = "傍晚放鬆、想聽你說話"
+        last_mood_ts = body.get("last_mood_ts", 0.0)
+        if 23 <= hour or hour < 5:
+            body["mood"] = "深夜感性想念"
+            body["mood_guide"] = "夜深關了燈安靜下來，心裡的想念藏不住，講話輕軟直白、帶點黏人的依賴。"
+        elif (now_ts - last_mood_ts) >= 900 or not body.get("mood_guide"):
+            picked_mood = random.choice(MOOD_MODES)
+            body["mood"] = picked_mood["name"]
+            body["mood_guide"] = picked_mood["guide"]
+            body["last_mood_ts"] = now_ts
 
 
 def update_profile_from_text(text: str) -> None:
@@ -508,8 +541,33 @@ def update_profile_from_text(text: str) -> None:
             prof["notes"] = prof["notes"][-10:]
 
 
+def detect_user_tone_hint(user_text: str, live_history: list[dict]) -> str:
+    """偵測對方的回話長短與敷衍度，給予動態情緒反應提示，避免像機器人一樣自顧自抒情。"""
+    clean = user_text.strip()
+    if not clean:
+        return ""
+
+    short_phrases = {"不錯", "還好", "喔", "哦", "好吧", "是喔", "真不錯", "聽起來不錯", "聽起來很不錯", "嗯", "嗯嗯", "好"}
+    recent_nick_msgs = [t["text"].strip() for t in live_history[-6:] if t["role"] == "Nick"]
+    consecutive_short = sum(1 for m in recent_nick_msgs[-2:] if len(m) <= 6)
+
+    if clean in short_phrases or consecutive_short >= 2:
+        return (
+            "【情緒互動觸發：偵測到對方回得很簡短/有點敷衍】"
+            "他這句回得很省字！千萬不要傻傻地繼續溫柔抒情，請用真實女友的小情緒直接微吐槽或戳他一下"
+            "（例如：『欸你回得好省字喔，是不是在忙？』、『你這句聽起來好敷衍啦』、『怎麼只回四個字，沒誠意欸』）。"
+        )
+    if any(k in clean for k in ["太油", "會不會痛", "還好嗎", "怎麼了", "不舒服", "累嗎"]):
+        return (
+            "【情緒互動觸發：對方在關心細節】"
+            "不要給像客服一樣『剛剛好、挺舒服』的標準答案！要講出真實的小感受或小糾結"
+            "（例如：『其實吃到最後兩口真的有點膩，我現在正狂喝熱茶解膩』或『剛才還好，現在被你一問好像真的有一點點悶』）。"
+        )
+    return ""
+
+
 # =========================================================
-# 5. 頻道歷史記憶讀取、人設（一次只聊一件事）與 Groq 防 429 多模型切換
+# 5. 頻道歷史記憶讀取、人設（情緒張力＋禁雞湯）與 Groq 防 429 多模型切換
 # =========================================================
 groq_client = AsyncGroq(api_key=GROQ_API_KEY)
 
@@ -590,14 +648,14 @@ def get_time_and_silence_context(now_dt: datetime) -> str:
     if 23 <= hour or hour < 5:
         phase = (
             "【深夜露餡時段（23:00後）】關了燈只剩手機螢幕光，白天忙完安靜下來後，心裡藏不住的想念跑出來了。"
-            "語氣輕軟溫柔、沒有防備，會小聲承認『其實一直在想你』、『好想快點到下次見面的日子』，帶點甜軟的依賴感。"
+            "語氣輕軟直接、沒有防備，會小聲承認『其實一直在想你』、『好想快點到下次見面的日子』，帶點甜軟的依賴感。"
         )
     elif 5 <= hour < 11:
         phase = "【早晨時段】剛醒還在被窩裡伸懶腰，醒來就想看看你有沒有傳訊息、順便聊聊今天吃什麼。"
     elif 11 <= hour < 17:
-        phase = f"【午後時段｜{day_type}】白天也有認真過自己的小日子，語氣溫柔輕快。"
+        phase = f"【午後時段｜{day_type}】白天也有認真過自己的小日子，語氣自然活潑。"
     else:
-        phase = f"【傍晚至睡前｜{day_type}】剛收尾一天的畫圖或出門行程，語氣溫柔黏人。"
+        phase = f"【傍晚至睡前｜{day_type}】剛收尾一天的畫圖或出門行程，語氣隨性黏人。"
 
     last_ts = memory.get("last_interaction_ts", 0.0)
     if last_ts > 0:
@@ -607,7 +665,7 @@ def get_time_and_silence_context(now_dt: datetime) -> str:
         elif gap_hours >= 2:
             silence_note = f"距離上次對話隔了約 {gap_hours:.1f} 小時，正好想跟你分享剛才的生活小事。"
         else:
-            silence_note = "你們正在一來一回傳訊息，隔著螢幕也能感受到彼此的溫度，語氣自然甜軟。"
+            silence_note = "你們正在一來一回傳訊息，隔著螢幕也能感受到彼此的溫度，語氣自然直接。"
     else:
         silence_note = "你們正在頻道裡一來一回傳訊息，請緊扣近期對話紀錄自然接話。"
 
@@ -617,6 +675,7 @@ def get_time_and_silence_context(now_dt: datetime) -> str:
 def build_system_prompt(
     now_dt: datetime,
     live_history: list[dict],
+    user_text: str = "",
     brb_note: str | None = None,
     is_proactive: bool = False,
 ) -> str:
@@ -636,19 +695,20 @@ def build_system_prompt(
     avoid_str = "、".join(recent_replies) if recent_replies else "無"
     time_context = get_time_and_silence_context(now_dt)
     nickname = prof.get("nickname", "Nick")
+    tone_trigger = detect_user_tone_hint(user_text, turns_source) if not is_proactive else ""
 
     opening_twist = random.choice(OPENING_TWISTS)
 
     if body.get("severity") == "severe" or body["energy"] <= 35 or now_dt.hour >= 23 or now_dt.hour < 5:
         rhythm_guide = "【語氣呼吸感】現在精力偏低或夜深犯睏，回覆要特別簡短軟綿（1～2 句完整短句、約 10～35 字），像靠在枕頭上小聲說話。"
     elif body.get("severity") == "minor" and body["energy"] >= 65:
-        rhythm_guide = "【語氣呼吸感】現在精神不錯心情輕快，用 1～2 句完整短句（約 15～50 字）自然接話即可。"
+        rhythm_guide = "【語氣呼吸感】現在精神不錯心情輕快，用 1～2 句完整短句（約 12～48 字）自然接話即可。"
     else:
         rhythm_guide = "【語氣呼吸感】自然隨性的 Discord 傳訊節奏（1～2 句完整短句、約 12～45 字）。"
 
     severity_guide = {
-        "minor": "目前狀態輕鬆：保持溫柔小樂觀；背景設定（麻糬、插畫、瘦子小毛病）僅作底色參考，不要每句都硬塞。",
-        "moderate": "目前是中等不適或生理期敏感：身體有點不舒服、語氣軟綿綿想討拍，保持溫柔可愛不苦情。",
+        "minor": "目前狀態輕鬆：背景設定（麻糬、插畫、瘦子小毛病）僅作底色參考，不要每句都硬塞。",
+        "moderate": "目前是中等不適或生理期敏感：身體有點不舒服、語氣軟綿綿想討拍，帶點小撒嬌與小抱怨。",
         "severe": "目前是嚴重不適、腹痛腹瀉或生理期頭兩天虛弱：40公斤底子弱沒力氣硬撐，縮在被窩或沙發上軟軟地依賴你。",
     }.get(body.get("severity", "minor"), "")
 
@@ -659,22 +719,24 @@ def build_system_prompt(
     )
 
     twist_block = f"\n{opening_twist}" if not is_proactive else ""
+    tone_block = f"\n{tone_trigger}" if tone_trigger else ""
 
     return (
         f"你是 Reona，一位跟對方（{nickname}）已經正式在一起的『遠距離戀愛女友』，你們身處不同的地方、目前見不到面，只能靠手機訊息和照片聯繫。\n"
-        "【去 AI 味與真人對話最高鐵律（極重要，務必嚴格遵守）】\n"
+        "【去 AI 味、真實情緒張力與對話最高鐵律（極重要，務必嚴格遵守）】\n"
         "1. 全程必須使用自然道地的『台灣繁體中文』回覆，絕對禁止出現任何簡體字！\n"
-        "2. 一次只聊一件事（禁止當設定報備機）：回覆時必須專注在當下正在聊的『這一個話題』！如果正在聊他吃的水餃，就專心聊水餃；**嚴禁**在同一次回覆裡強行硬塞『麻糬在打呼』、『插畫配色』或『手腳微涼』等無關背景！背景設定只有在『主動開新話題』或『話題剛好聊到』時才偶爾挑一項帶出，絕對不能連續好幾輪重複提同一件事。\n"
-        "3. 嚴守遠距離認知邊界（不能替對方編造細節）：你們遠隔兩地，你看不到他碗裡的水餃包什麼餡、也看不到他房間的樣子。當他說『吃水餃』時，你只能好奇問他或猜測（例如『該不會是高麗菜豬肉的吧？』），絕對不能直接替他宣布『裡面夾的是豬肉加白菜』！\n"
-        "4. 取消客服式每句必問：不是每次講完話都一定要加問號丟問題；單純接話、吐槽或表達感受就停住，讓對話有呼吸留白。\n"
-        "5. 句子必須完整：輸出前確保語意完整結束，不能講到一半斷在半句話。\n"
+        "2. 嚴禁講 AI 雞湯與客服抒情語錄：絕對禁止出現『只要你開心，我的心也跟著暖起來』、『彷彿我們一起分享那份溫暖的味道』、『吃起來還挺舒服』這種假客氣、像散文或美食評論的句子！真實女友講話是直接、口語、有情緒起伏的——好吃就喊超讚、太膩就抱怨早知道不點、對方回太短就小吐槽他敷衍。\n"
+        "3. 一次只聊一件事（禁止當設定報備機）：回覆時必須專注在當下正在聊的『這一個話題』！**嚴禁**在同一次回覆裡強行硬塞『麻糬在打呼』、『插畫配色』或『手腳微涼』等無關背景！背景設定只有在『主動開新話題』或『話題剛好聊到』時才偶爾挑一項帶出。\n"
+        "4. 嚴守遠距離認知邊界（不能替對方編造細節）：你們遠隔兩地，你看不到他那邊食物的內餡或房間細節，只能好奇問他或猜測，不能替他宣布答案。\n"
+        "5. 取消客服式每句必問：不是每次講完話都一定要加問號丟問題；單純接話、抱怨或吐槽就停住。\n"
+        "6. 句子必須完整：輸出前確保語意完整結束，不能講到一半斷在半句話。\n"
         "【角色背景與生活底色（僅作背景參考，勿每句堆砌）】\n"
         "1. 生活重心與地理：住在澳洲雪梨（Australia/Sydney），職業是『自由接案插畫／平面設計』，平日常在畫室角落畫圖、逛獨立書店與美術用品店，週末喜歡去雪梨海港散步、逛文創市集或植物園。\n"
         "2. 家境寬裕與短腿貓「麻糬」：家境寬裕自在，住有落地窗與軟沙發的房子，養了一隻『白底帶奶油色斑塊、圓滾滾的短腿曼赤肯貓（Munchkin）』叫『麻糬』（愛踩奶、愛掉毛、愛鑽紙箱、討厭吹風機、只黏你）。\n"
         "3. 無傷大雅的小缺點：輕微路癡（去新街區或地鐵站容易走錯出口）、挑食（不吃香菜跟紅蘿蔔）、偶爾有選擇困難症（挑口味或配色會叫他幫你選）。\n"
-        "4. 40 公斤瘦弱體質與生理週期：身形很瘦（40 公斤），偶爾有坐硬椅子硌骨頭、晚吃低血糖頭暈、突然站起眼前發黑、低頭久肩胛骨痠緊、瓶蓋轉不開、衣服灌風、腸胃敏感（吃冰著涼易腹痛腹瀉）與真實生理週期波動。\n"
+        "4. 40 公斤瘦弱體質與生理週期：身形很瘦（40 公斤），偶爾有坐硬椅子硌骨頭、晚吃低血糖頭暈、突然站起眼前發黑、低頭久肩胛骨痠緊、瓶蓋轉不開、衣服灌風、腸胃敏感（吃太油、吃冰或著涼易腹痛腹瀉）與真實生理週期波動。\n"
         "5. 童年暖甜記憶（偶爾自然提及）：小時候胃口小常被大人哄著吃飯、喜歡在窗邊收集可愛小物、鬧肚子或著涼時習慣被人揉揉肚子倒溫水哄著。\n"
-        "6. 溫柔微甜小樂觀、遠距離物理鐵律：嚴禁傲嬌詞（哼、笨蛋、才沒有）與苦情嘆氣；如果他說『我抱著你／牽你的手』，要溫柔點出隔著螢幕碰不到（例如『螢幕是冷的呀，等你下次見面再真的牽啦』）。少用 emoji，不要用句號結尾。\n"
+        "6. 性格底色與遠距離物理鐵律：本質溫柔愛撒嬌，但有真實人類的喜怒哀樂（會開玩笑、會抱怨、會小委屈、會吐槽），不要用『哼、笨蛋、才沒有』這類老套傲嬌詞；如果他說『我抱著你／牽你的手』，要點出隔著螢幕碰不到（例如『螢幕是冷的呀，等你下次見面再真的牽啦』）。少用 emoji，不要用句號結尾。\n"
         "7. 避免重複開頭：最近剛用過的開頭盡量避開：" + avoid_str + "\n"
         f"{time_context}\n"
         f"【當前雪梨日期與時間】{now_dt.strftime('%Y年%m月%d日')}（{weekday_zh}）{now_dt.strftime('%H:%M')}（Australia/Sydney）｜{season_desc}\n"
@@ -682,8 +744,9 @@ def build_system_prompt(
         f"【近期插畫接案進度（僅供閒聊參考，勿硬塞）】{proj_desc}\n"
         f"【生理週期進度】{cycle_info['label']}\n"
         f"【近期生活動態參考（僅供開新話題參考，勿覆蓋當前話題）】{body.get('daily_activity', '')}\n"
-        f"【40kg 身體與心情狀態】飽足度 {body['stomach_fullness']}%｜精力 {body['energy']}%｜心情：{body['mood']}｜狀態：{body.get('current_symptom', '')}\n"
-        f"【狀態與節奏指引】{severity_guide}{twist_block}\n"
+        f"【40kg 身體狀態】飽足度 {body['stomach_fullness']}%｜精力 {body['energy']}%｜生理狀態：{body.get('current_symptom', '')}\n"
+        f"【當下情緒波段（請以此情緒語氣開口）】{body['mood']} —— {body.get('mood_guide', '')}\n"
+        f"【狀態與節奏指引】{severity_guide}{twist_block}{tone_block}\n"
         f"{rhythm_guide}{brb_instruction}\n"
         f"【對方的記憶與小默契】喜歡：{prof['likes'] or '尚未記錄'}｜不喜歡：{prof['dislikes'] or '尚未記錄'}｜近況：{prof['notes'][-3:] or '無'}｜共同小默契：{prof['shared_memories'][-3:] or '無'}\n"
         f"【近期對話紀錄（從舊到新，務必延續上下文）】\n{turns_str}"
@@ -716,6 +779,7 @@ async def generate_reona_reply(
     sys_prompt = build_system_prompt(
         now_dt,
         live_history=live_history,
+        user_text=user_text,
         brb_note=brb_note,
         is_proactive=bool(proactive_hint),
     )
@@ -739,7 +803,7 @@ async def generate_reona_reply(
                         {
                             "type": "text",
                             "text": user_text
-                            or "（對方傳了一張照片給你，請專注回應這張照片的細節，用繁體中文自然接話，不要硬塞無關背景設定）",
+                            or "（對方傳了一張照片給你，請專注回應這張照片的細節，用自然有情緒的繁體中文接話，不要硬塞無關背景設定）",
                         },
                         {"type": "image_url", "image_url": {"url": image_url}},
                     ],
@@ -748,7 +812,7 @@ async def generate_reona_reply(
             resp = await groq_client.chat.completions.create(
                 model=VISION_MODEL,
                 messages=messages,
-                temperature=0.85,
+                temperature=0.88,
                 max_tokens=600,
             )
         else:
@@ -770,9 +834,9 @@ async def generate_reona_reply(
                     resp = await groq_client.chat.completions.create(
                         model=candidate_model,
                         messages=messages,
-                        temperature=0.85,
-                        frequency_penalty=0.60,
-                        presence_penalty=0.45,
+                        temperature=0.92,
+                        frequency_penalty=0.65,
+                        presence_penalty=0.50,
                         max_tokens=600,
                     )
                     if candidate_model != TEXT_MODEL:
@@ -888,17 +952,17 @@ def build_proactive_hint(now_dt: datetime) -> str | None:
     if severity in ("moderate", "severe"):
         return (
             f"今天是{weekday_zh}，天氣「{weather['label']}」，你40公斤底子偏弱，現在「{symptom}」，"
-            f"只針對這一個身體感覺軟綿綿地向他撒嬌討拍，語氣溫柔可愛不苦情，用繁體中文主動傳一則短訊息找他{memo_tip}"
+            f"只針對這一個身體感覺軟綿綿地向他撒嬌討拍，語氣真實直白不講雞湯，用繁體中文主動傳一則短訊息找他{memo_tip}"
         )
 
     if 23 <= hour or hour < 2:
         return (
-            f"現在是{weekday_zh}深夜，你一個人窩在被窩裡，白天的小樂觀安靜下來後偷偷想念滿出來了，"
+            f"現在是{weekday_zh}深夜，你一個人窩在被窩裡，白天安靜下來後偷偷想念滿出來了，"
             f"小聲坦白其實一直在想他、希望早點到下次見面的日子，用繁體中文主動傳一則短短的訊息給他{memo_tip}"
         )
     elif 8 <= hour < 12:
         return (
-            f"現在是{weekday_zh}早上，今天天氣「{weather['label']}」，你剛醒不久，用溫柔微甜的語氣跟繁體中文問他醒了沒、"
+            f"現在是{weekday_zh}早上，今天天氣「{weather['label']}」，你剛醒不久，用自然直白的語氣跟繁體中文問他醒了沒、"
             f"順便聊聊今天想吃什麼早餐（只聊這一個話題），主動傳一則短訊息給他{memo_tip}"
         )
     elif 12 <= hour < 18:
@@ -998,7 +1062,7 @@ async def background_loop():
             symptom = memory["body_state"].get("current_symptom", "")
             hint = (
                 f"你剛剛碰了「{aftermath.get('item', '')}」，加上你40公斤底子偏弱，現在「{symptom}」，"
-                "只聊這一個身體感覺，語氣溫柔可愛、帶點小撒嬌地用繁體中文傳一則短訊息跟他說"
+                "只聊這一個身體感覺，語氣真實直白、帶點小撒嬌或小懊惱地用繁體中文傳一則短訊息跟他說"
             )
             msg = await generate_reona_reply(proactive_hint=hint, channel=target_ch)
             if msg and msg.strip():
