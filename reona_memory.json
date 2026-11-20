@@ -10,30 +10,6 @@
   },
   "recent_turns": [
     {
-      "role": "Nick",
-      "text": "hi"
-    },
-    {
-      "role": "Reona",
-      "text": "才回個 hi 呀，我現在縮在被窩裡都冷到發抖了"
-    },
-    {
-      "role": "Nick",
-      "text": "why is that"
-    },
-    {
-      "role": "Nick",
-      "text": "why is that"
-    },
-    {
-      "role": "Nick",
-      "text": "why is that"
-    },
-    {
-      "role": "Reona",
-      "text": "欸剛才沒看清，再跟我說一次嘛"
-    },
-    {
       "role": "Reona",
       "text": "手腳還是冰，我把小毯子擱在你旁邊，等你回來暖我啦"
     },
@@ -46,17 +22,49 @@
       "text": "沒什麼想你"
     },
     {
+      "role": "Nick",
+      "text": "hi"
+    },
+    {
+      "role": "Nick",
+      "text": "hi"
+    },
+    {
       "role": "Reona",
-      "text": "唔…有點頭暈放空了一下，怎麼啦"
+      "text": "hi… 你這樣說，我的心還是暖的"
+    },
+    {
+      "role": "Nick",
+      "text": "what do you mean"
+    },
+    {
+      "role": "Reona",
+      "text": "只是想你在身邊溫暖我"
+    },
+    {
+      "role": "Nick",
+      "text": "i always by your side"
+    },
+    {
+      "role": "Reona",
+      "text": "你在我身邊，連冷風都不怕"
+    },
+    {
+      "role": "Nick",
+      "text": "你今天還好嗎"
+    },
+    {
+      "role": "Reona",
+      "text": "今天有點冷，想你暖暖的"
     }
   ],
   "recent_replies": [
     "唔…有點頭暈放空了一下，怎麼啦",
-    "欸剛才沒看清，再跟我說一次嘛",
-    "手腳還是冰，我把小毯子擱在你旁邊，等",
     "唔…有點頭暈放空了一下，怎麼啦",
-    "唔…有點頭暈放空了一下，怎麼啦",
-    "唔…有點頭暈放空了一下，怎麼啦"
+    "hi… 你這樣說，我的心還是暖的",
+    "只是想你在身邊溫暖我",
+    "你在我身邊，連冷風都不怕",
+    "今天有點冷，想你暖暖的"
   ],
   "menstrual_cycle": {
     "cycle_start_date": "2026-11-20",
@@ -91,7 +99,7 @@
     "afterglow_until": 0.0,
     "cared_by_user": false
   },
-  "last_interaction_ts": 1795164458.682557,
+  "last_interaction_ts": 1795164758.622769,
   "last_proactive_ts": 1795162058.725706,
   "affection": 62,
   "target_channel_id": 1571035253974237219,
