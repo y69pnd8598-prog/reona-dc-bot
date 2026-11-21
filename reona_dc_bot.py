@@ -34,6 +34,7 @@ SYDNEY_TZ = ZoneInfo("Australia/Sydney")
 START_TIME = time.time()
 RELAY_AFTER_SECONDS = 5 * 3600 + 45 * 60  # 5 小時 45 分鐘自動接力
 PROACTIVE_COOLDOWN_SECONDS = int(os.getenv("PROACTIVE_COOLDOWN_SECONDS", "14400"))  # 4 小時
+HISTORY_LIMIT = 30  # 拉長近期對話讀取則數（30 則）
 
 MEMORY_FILE = "reona_memory.json"
 WEEKDAY_NAMES_ZH = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
@@ -47,6 +48,7 @@ last_fallback_ts = 0.0
 # =========================================================
 DEFAULT_MEMORY = {
     "recent_turns": [],
+    "long_term_notes": [],  # 跨日重要事件備忘（最多保留 8 條）
     "menstrual_cycle": {
         "cycle_start_date": "",
         "cycle_length": 30,
@@ -148,7 +150,9 @@ def build_system_prompt(now_dt: datetime, history_lines: list[str]) -> str:
         time_mood = "白天或傍晚，隨性滑手機回訊息，想到什麼講什麼"
 
     cycle_note = get_cycle_note(now_dt)
-    history_block = "\n".join(history_lines[-8:]) if history_lines else "（剛開始聊天）"
+    notes = memory.get("long_term_notes", [])
+    notes_block = "\n".join(f"- {n}" for n in notes[-8:]) if notes else "（暫無特別備忘）"
+    history_block = "\n".join(history_lines[-HISTORY_LIMIT:]) if history_lines else "（剛開始聊天）"
 
     return (
         "你是 Reona，跟 Nick 正式交往的遠距離女友。你住澳洲雪梨，自由接案插畫師，養一隻奶油白短腿貓「麻糬」，挑食不吃香菜跟紅蘿蔔。\n"
@@ -165,7 +169,8 @@ def build_system_prompt(now_dt: datetime, history_lines: list[str]) -> str:
         "- 對方說不會離開 -> 「這你說的喔 我截圖存證了」\n"
         "- 覺得冷或想他 -> 「好冷喔 手根本冰塊 你現在在幹嘛」或「突然有點想你欸 煩死」\n"
         f"【當下狀態】雪梨 {now_dt.strftime('%m/%d')}（{weekday_zh}）{now_dt.strftime('%H:%M')}｜{time_mood}｜{cycle_note}\n"
-        f"【近期對話】\n{history_block}"
+        f"【近期生活備忘（記得你們提過的事，自然接話即可）】\n{notes_block}\n"
+        f"【近期完整對話紀錄（最近 {HISTORY_LIMIT} 則）】\n{history_block}"
     )
 
 
@@ -208,11 +213,11 @@ async def send_natural_messages(channel: discord.abc.Messageable, text: str) -> 
 
 
 # =========================================================
-# 5. 頻道歷史讀取與單線模型呼叫
+# 5. 頻道歷史讀取（30 則）與跨日重點提取
 # =========================================================
-async def get_recent_history_lines(channel: discord.abc.Messageable | None, limit: int = 10) -> list[str]:
+async def get_recent_history_lines(channel: discord.abc.Messageable | None, limit: int = HISTORY_LIMIT) -> list[str]:
     if channel is None:
-        return []
+        return memory.get("recent_turns", [])[-limit:]
     lines = []
     try:
         msgs = []
@@ -230,13 +235,27 @@ async def get_recent_history_lines(channel: discord.abc.Messageable | None, limi
         lines = msgs
     except Exception as err:
         print(f"[History Warning] {err}", flush=True)
+        return memory.get("recent_turns", [])[-limit:]
     return lines
+
+
+def record_long_term_note(user_text: str, now_dt: datetime) -> None:
+    if not user_text or len(user_text) < 4:
+        return
+    keywords = ["考試", "上班", "下班", "去", "買", "看醫生", "生病", "發燒", "頭痛", "累", "約", "明天", "週末", "禮拜", "澳洲", "台灣", "作業", "報告"]
+    if any(k in user_text for k in keywords):
+        date_tag = now_dt.strftime("%m/%d")
+        clean_txt = user_text.replace("\n", " ")[:36]
+        note = f"[{date_tag}] Nick 提到：{clean_txt}"
+        notes = memory.setdefault("long_term_notes", [])
+        if not notes or notes[-1] != note:
+            notes.append(note)
+            memory["long_term_notes"] = notes[-8:]
 
 
 def check_and_update_period(user_text: str, now_dt: datetime) -> bool:
     if not user_text:
         return False
-    # 排除否定句（「還沒來」「沒來」），抓到確認來的語意就立刻鎖定今天為第 1 天
     if any(neg in user_text for neg in ["還沒來", "沒來嗎", "沒來", "快來"]):
         return False
     triggers = ["生理期來", "月經來", "大姨媽來", "那個來", "姨媽來", "經痛", "生理期第"]
@@ -259,11 +278,14 @@ async def generate_reply(
     now_dt = datetime.now(SYDNEY_TZ)
     now_ts = now_dt.timestamp()
 
+    if user_text:
+        record_long_term_note(user_text, now_dt)
+
     period_changed = check_and_update_period(user_text, now_dt)
     if period_changed:
         asyncio.create_task(asyncio.to_thread(sync_memory_to_git, "update: menstrual cycle start date"))
 
-    history_lines = await get_recent_history_lines(channel, limit=10)
+    history_lines = await get_recent_history_lines(channel, limit=HISTORY_LIMIT)
     sys_prompt = build_system_prompt(now_dt, history_lines)
 
     if user_text:
@@ -324,7 +346,7 @@ async def generate_reply(
             return "唔…剛才分心了一下"
         return ""
 
-    memory["recent_turns"] = (history_lines + [f"你：{reply.replace('||', ' ')}"])[-10:]
+    memory["recent_turns"] = (history_lines + [f"你：{reply.replace('||', ' ')}"])[-HISTORY_LIMIT:]
     save_memory(memory)
     return reply
 
@@ -352,7 +374,7 @@ def get_target_channel():
 @client.event
 async def on_ready():
     now_syd = datetime.now(SYDNEY_TZ).strftime("%Y-%m-%d %H:%M")
-    print(f"[Reona Online] {client.user} | Sydney: {now_syd} | Models: {TEXT_MODELS}", flush=True)
+    print(f"[Reona Online] {client.user} | Sydney: {now_syd} | HistoryLimit: {HISTORY_LIMIT}", flush=True)
     if not background_loop.is_running():
         background_loop.start()
 
