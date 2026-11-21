@@ -1,12 +1,5 @@
 {
   "recent_turns": [
-    "Nick：現在呢寶貝",
-    "你：還是冷 手冰冰 肚子痛得想睡覺啦",
-    "Nick：寶貝肚子還是絞痛嗎",
-    "你：還是痛得想睡啦 手還是冰冰",
-    "Nick：拉肚子嗎",
-    "你：你快睡啦",
-    "Nick：不要",
     "你：好的，若還有需要再告訴我喔",
     "Nick：寶貝一直肚子痛我會擔心",
     "你：知道啦 別擔心啦",
@@ -29,16 +22,23 @@
     "你：嗯 晚安",
     "Nick：ㄨㄢ ㄢ ㄉ",
     "你：晚安啦 你也要好好休息呀",
-    "你：肚子還是悶悶的 今天累死 晚安 快睡"
+    "你：肚子還是悶悶的 今天累死",
+    "你：晚安 快睡",
+    "Nick：早安",
+    "你：早安 Nick 我剛起床還在床上滑手機肚子還在悶痛手冰冰",
+    "Nick：寶貝早安啊",
+    "你：我還在床上癱著 懶得動",
+    "Nick：今天還沒走嗎",
+    "你：腰好酸 動不了"
   ],
   "long_term_notes": [],
   "menstrual_cycle": {
-    "cycle_start_date": "2026-11-21",
+    "cycle_start_date": "2026-11-22",
     "cycle_length": 30
   },
-  "last_interaction_ts": 1795272352.111598,
-  "last_proactive_ts": 1795272359.078241,
-  "last_morning_date": "",
+  "last_interaction_ts": 1795297025.068918,
+  "last_proactive_ts": 1795296999.129143,
+  "last_morning_date": "2026-11-22",
   "last_goodnight_date": "2026-11-22",
   "user_profile": {
     "nickname": "你",
