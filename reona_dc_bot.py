@@ -18,8 +18,7 @@ from groq import AsyncGroq
 # =========================================================
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
-DEFAULT_CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
-
+DEFAULT_CHANNEL_ID = int((os.getenv("DISCORD_CHANNEL_ID") or "0").strip() or "0")
 TEXT_MODELS = [
     os.getenv("GROQ_TEXT_MODEL", "").strip(),
     "openai/gpt-oss-20b",
