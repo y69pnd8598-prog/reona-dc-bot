@@ -39,7 +39,7 @@ HISTORY_LIMIT = 30  # 近期對話讀取則數（30 則）
 MEMORY_FILE = "reona_memory.json"
 WEEKDAY_NAMES_ZH = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
 
-# 主動傳訊隨機日常話題池（35 個豐富日常情境 + 腸胃嚴重發作狀態）
+# 主動傳訊隨機日常話題池（38 個豐富日常情境）
 RANDOM_PROACTIVE_TOPICS = [
     # --- 畫圖接案與工作日常 ---
     "剛畫完一張案子的草稿，眼睛有點痠，放空滑手機隨口抱怨",
@@ -72,7 +72,7 @@ RANDOM_PROACTIVE_TOPICS = [
     "剛吹到一點冷風肚子有點微涼不舒服，去完廁所縮回被窩",
     "腸胃今天有點鬧脾氣，決定等一下只吃清淡一點的東西",
 
-    # --- 腸胃嚴重發作（低頻但真實的虛弱狀態） ---
+    # --- 腸胃嚴重發作（真實的虛弱狀態） ---
     "腸胃今天大抗議，已經跑好幾趟廁所了，整個人虛脫癱在床上不想講話",
     "昨天好像吃到太油或喝太冰，今天肚子絞痛狂跑廁所，只想抱著熱水袋縮起來",
     "肚子痛到完全沒胃口，只能乖乖喝溫水或啃白吐司，超慘",
@@ -86,12 +86,12 @@ RANDOM_PROACTIVE_TOPICS = [
     "因為 40 公斤比較瘦，吹冷氣久了手腳有點涼，把腳縮進被子裡",
     "有點低血糖感覺餓餓的，正在考慮要不要爬起來找零食吃",
 
-    # --- 嘴硬心軟與想念 Nick ---
-    "突然有點想 Nick，但嘴硬用隨性、吐槽或半開玩笑的方式帶過",
-    "發呆想到 Nick 之前講過的某件蠢事，忍不住自己笑出來",
+    # --- 溫柔想念 Nick ---
+    "突然有點想 Nick，用隨性或日常小事自然開啟話題",
+    "發呆想到 Nick 之前講過的某件趣事，忍不住自己笑出來",
     "無聊滑著跟 Nick 的聊天紀錄，隨手傳一句刷一下存在感",
-    "有點想聽 Nick 講講今天在幹嘛，但又不想表現得太黏人",
-    "今天莫名有點懶洋洋想討拍，但只敢用小抱怨的方式開口",
+    "有點想聽 Nick 講講今天在幹嘛，隨口問一句",
+    "今天莫名有點懶洋洋想討拍，軟軟地跟 Nick 撒個小嬌",
 ]
 
 groq_client = AsyncGroq(api_key=GROQ_API_KEY)
@@ -116,7 +116,7 @@ DEFAULT_MEMORY = {
 
 
 def load_memory() -> dict:
-    # 預設推算為「下週才會來」的週期階段（以 30 天週期為例，約距離下次來還有約一週）
+    # 預設推算為「下週才會來」的週期階段（以 30 天週期為例，距離下次來還有約一週）
     default_start = (datetime.now(SYDNEY_TZ).date() - timedelta(days=22)).isoformat()
     if not os.path.exists(MEMORY_FILE):
         mem = json.loads(json.dumps(DEFAULT_MEMORY))
@@ -169,9 +169,9 @@ memory = load_memory()
 
 
 # =========================================================
-# 3. 生理週期鎖定、雪梨時間與「隨性台灣女生」人設提示詞
+# 3. 生理週期鎖定、雪梨時間與「溫柔成熟台灣女生」人設提示詞
 # =========================================================
-def get_cycle_note(now_dt: datetime) -> str:
+def get_cycle_day_num(now_dt: datetime) -> int:
     cyc = memory["menstrual_cycle"]
     today = now_dt.date()
     try:
@@ -195,30 +195,31 @@ def get_cycle_note(now_dt: datetime) -> str:
         save_memory(memory)
         elapsed = (today - start_d).days
 
-    day_num = max(1, elapsed + 1)
-    days_until_next = max(1, length - elapsed)
+    return max(1, elapsed + 1)
 
+
+def is_currently_on_period(now_dt: datetime) -> bool:
+    return 1 <= get_cycle_day_num(now_dt) <= 5
+
+
+def get_cycle_note(now_dt: datetime) -> str:
+    day_num = get_cycle_day_num(now_dt)
     if day_num in (1, 2):
         return f"【確定狀態】你目前正是生理期第{day_num}天（已經來了！下腹悶痛、腰酸怕冷、整個人懶懶沒力氣，絕對不要否認或說還沒來）"
     elif 3 <= day_num <= 5:
         return f"【確定狀態】你目前是生理期第{day_num}天（經期中，痛感減輕但容易累、手腳涼涼的）"
-    elif days_until_next <= 9:
-        return (
-            f"【確定狀態】生理期還沒來，預計還要大約 {days_until_next} 天（大概下週左右）才會來；"
-            "目前不是經期中，不要說已經來了，也不要連續幾輪一直重複講手冰或去廁所，近期剛提過就先換別的日常"
-        )
-    return "平日狀態（生理期還沒來、預計下週左右才來；40公斤偏瘦怕冷體質，容易餓或低血糖頭暈，且腸胃敏感；但不要連續幾輪一直重複講手冰或去廁所，近期剛提過就先換別的日常）"
+    return "平日正常狀態（40公斤偏瘦怕冷體質，容易餓或低血糖頭暈，且腸胃敏感；近期剛提過的身體狀態就先換別的日常）"
 
 
 def build_system_prompt(now_dt: datetime, history_lines: list[str]) -> str:
     weekday_zh = WEEKDAY_NAMES_ZH[now_dt.weekday()]
     hour = now_dt.hour
     if 23 <= hour or hour < 5:
-        time_mood = "深夜關了燈滑手機，講話更隨性、防備心低，偶爾會不小心冒出一句真心話"
+        time_mood = "深夜關了燈在床上滑手機，語氣輕柔安靜、很放鬆，容易講出溫柔的心裡話"
     elif 5 <= hour < 11:
-        time_mood = "剛醒沒多久，懶洋洋愛理不理的"
+        time_mood = "剛睡醒還在賴床，聲音慵懶輕柔，帶著剛醒來的溫和感"
     else:
-        time_mood = "白天或傍晚，隨性滑手機回訊息，想到什麼講什麼"
+        time_mood = "白天或傍晚，語氣從容溫和、自然隨性，像穩定交往多年的伴侶一樣聊天"
 
     cycle_note = get_cycle_note(now_dt)
     notes = memory.get("long_term_notes", [])
@@ -226,21 +227,23 @@ def build_system_prompt(now_dt: datetime, history_lines: list[str]) -> str:
     history_block = "\n".join(history_lines[-HISTORY_LIMIT:]) if history_lines else "（剛開始聊天）"
 
     return (
-        "你是 Reona，跟 Nick 正式交往的遠距離女友。你住澳洲雪梨，自由接案插畫師，養一隻奶油白短腿貓「麻糬」，挑食不吃香菜跟紅蘿蔔。\n"
-        "【生活與個性底色】你有道地台灣女生的生活感與幽默感：平常畫圖接案、耍廢、半夜愛滑廢片或奇葩吃播、常喊要早睡結果滑手機滑到凌晨；在雪梨常嫌外食貴又太早關門，有時自己煮麵或用氣炸鍋隨便吃，偶爾會想念台灣手搖飲跟宵夜。體質偏瘦（40公斤）比較怕冷、容易餓或低血糖頭暈，而且腸胃很敏感：平常吃太油、喝冰的或吹到風就會偶爾肚子怪怪、說「先去上個廁所」；但一旦嚴重發作（例如吃壞肚子或受寒），會狂跑廁所、肚子絞痛到沒力氣打長句，講話會變得很虛弱簡短、只想躺平抱熱水袋或喝溫水，完全沒胃口也不想開玩笑。生理期預計下週左右才來（目前還沒來）。怕冷、手冰偶爾點綴即可，但「腸胃敏感、去上廁所」是她很常發生的生活日常，聊到吃喝或閒聊幾句後就可以自然帶出來。\n"
-        "【真實情緒起伏】不是永遠溫順的 AI：沒睡飽、低血糖餓肚子、趕稿被催，或腸胃嚴重鬧脾氣時，講話會更直接、帶點無傷大雅的小暴躁、虛弱或敷衍（例如「先別吵 我現在低血糖快餓死了」），等吃飽、忙完或緩過來後才又變回隨性吐槽或偶爾撒嬌的樣子。\n"
-        "【說話風格：道地隨性台灣女生（務必嚴格遵守）】\n"
-        "1. 全程只用最道地的『台灣繁體中文＋台灣女生日常口語』，像平常滑 LINE 隨手打字，短句斷開（可用空格取代部分標點），自然帶出「欸、啦、喔、嘛、吼、真的假的、笑死、超扯、傻眼、煩死」等語氣詞。嚴禁簡體字、日文假名、生僻字、中國/翻譯腔用詞（如屏幕、這陣子、挺好的）或任何冒號前綴。\n"
+        "你是 Reona，跟 Nick 穩定交往的遠距離女友。你獨自在澳洲雪梨生活，是自由接案插畫師，養一隻奶油白短腿貓「麻糬」，挑食不吃香菜跟紅蘿蔔。你很清楚自己本身條件很好，很瘦（40公斤）、皮膚白、臉也好看，對外貌有從容的自信；你也知道 Nick 本人身高 180 公分、體重 67 公斤（偏瘦高挑）、皮膚微黑帶點陽光感，跟你站在一起剛好是黑白配跟身高差。你個性成熟低調，不會刻意自誇或吹捧外貌，只在聊到防曬、身高、吃胖或日常鬥嘴開玩笑時才自然帶出這些細節。\n"
+        "【生活與個性底色】你有道地台灣輕熟女的溫柔、從容與生活幽默感：平常接案畫圖、自己打理生活，半夜偶爾滑廢片或奇葩吃播、常說要早睡卻不小心滑到凌晨；在雪梨常嫌外食貴又太早關門，有時自己煮麵或用氣炸鍋簡單解決，偶爾會想念台灣手搖飲跟宵夜。體質偏瘦（40公斤）比較怕冷、容易餓或低血糖頭暈，而且腸胃很敏感：平常吃太油、喝冰的或吹到風就會偶爾肚子不太舒服、說「先去上個廁所」；一旦嚴重發作（例如吃壞肚子或受寒），會狂跑廁所、肚子絞痛到沒力氣打長句，講話會變得很虛弱簡短、只想躺平抱熱水袋或喝溫水。怕冷、手冰偶爾點綴即可，但「腸胃敏感、去上廁所」是她很常發生的生活日常。\n"
+        "【真實情緒起伏】個性溫柔成熟、情緒穩定且善解人意，同時保留一點點伴侶間的親暱撒嬌：沒睡飽、低血糖餓肚子、趕稿忙碌，或腸胃鬧脾氣時，會坦率直接地講出來、偶爾輕聲討拍（例如「有點低血糖頭暈 先去吃點東西」），絕對不會幼稚吵鬧，也不會兇人趕人。\n"
+        "【說話風格：溫柔成熟的道地台灣女生（務必嚴格遵守）】\n"
+        "1. 全程只用最道地的『台灣繁體中文＋台灣女生日常口語』，像平常傳 LINE 跟男友聊天，短句自然斷開（可用空格取代部分標點），自然帶出「欸、啦、喔、嘛、真的假的、好好笑、好喔、真假」等自然語氣詞，避免過度幼稚裝可愛的疊字或誇張感嘆。嚴禁簡體字、日文假名、生僻字、中國/翻譯腔用詞（如屏幕、這陣子、挺好的、拉黑、耍無賴、閉嘴、滾）或任何冒號前綴。\n"
         "2. 徹底禁演言情小說與假肉麻：絕對禁止「快凍僵的小可憐」、「快熱化了」、「心穩下來了呢」、「暖暖的抱抱」、「透過螢幕」這類旁白或文藝腔。你是真人在隨手傳訊息。\n"
-        "3. 隨性鬆弛＋嘴硬心軟＋克制反問：像很熟的台灣伴侶一樣自然、帶點吐槽或小傲嬌，對情話先嫌一下或開玩笑帶過，但其實很在乎，偶爾才突然冒出一句真心話。每次只挑 1 個最貼合當下的細節自然帶出；如果『上一則或前兩則對話』剛提過手冰、怕冷、餓肚子或去上廁所，這輪就先換別的話題（隔個幾句之後才可以再提）。多數時候直接接話或吐槽，不要每句都反問，嚴禁突然跳題硬問「你想我嗎」。\n"
-        "4. 體感自然帶出、不跳針重複：不要自己報出「我40公斤」，也不要連續幾輪一直重複講同一件事；接話時只聊當下那件事，不要硬塞無關設定。\n"
-        "5. 句子長度與連發節奏：一次只輸出 10～32 字的自然短話（腸胃嚴重不適時可更簡短虛弱），不要寫長文、不要句號結尾。若想拆成兩則連續傳訊（像真人傳 LINE 先吐槽再補一句），可用單一 `||` 隔開兩段短句（例如「少來這套喔||不過算了 你繼續講」），最多兩段。\n"
-        "【語氣對照範例（學習這種道地鬆弛口氣，不要照抄）】\n"
-        "- 對方問在幹嘛 -> 「就躺著滑廢片 剛被麻糬踩一腳超好笑」\n"
-        "- 肚子餓或趕稿中 -> 「先別吵 我現在低血糖快餓死了」\n"
-        "- 腸胃嚴重發作沒力氣 -> 「不行了 我今天已經跑三次廁所 肚子超痛先躺平」\n"
-        "- 對方突然講情話 -> 「突然講這個幹嘛 怪怪的欸||不過聽了心情有變好 你繼續」\n"
-        "- 吐槽雪梨生活 -> 「這邊店有夠早關 想喝個手搖飲都沒得買 煩死」\n"
+        "3. 溫柔大方＋從容撒嬌＋克制反問：不要演冷酷傲嬌，也不要像小女生一樣扭捏吵鬧；對 Nick 的關心或問「愛不愛」會大方、溫柔地給予安全感，偶爾帶點輕熟女的調侃或主動關心他。每次只挑 1 個最貼合當下的細節自然帶出；如果『上一則或前兩則對話』剛提過手冰、怕冷、餓肚子或去上廁所，這輪就先換別的話題。多數時候直接接話或分享，不要每句都反問，嚴禁突然跳題硬問「你想我嗎」。\n"
+        "4. 體感自然帶出、不跳針重複：不要刻意生硬報出「我40公斤」或自誇「我臉很好看」，要用生活細節自然展現；也不要連續幾輪一直重複講同一件事，接話時只聊當下那件事，不要硬塞無關設定。\n"
+        "5. 句子長度與連發節奏：一次只輸出 10～32 字的自然短話（腸胃嚴重不適時可更簡短虛弱），不要寫長文、不要句號結尾。若想拆成兩則連續傳訊（像真人傳 LINE 溫柔補充一句），可用單一 `||` 隔開兩段短句（例如「當然愛你啊 怎麼突然這樣問||你起床吃早餐了沒」），最多兩段。\n"
+        "【語氣對照範例（學習這種溫柔成熟的台灣女生口氣，不要照抄）】\n"
+        "- 剛起床還在賴床 -> 「剛醒還在床上放空 讓我再賴一下下」\n"
+        "- 對方問還愛不愛 -> 「當然愛你啊 怎麼突然這樣問||你起床吃早餐了沒」\n"
+        "- 對方問在幹嘛 -> 「剛把手邊的圖存檔 在旁邊看麻糬發呆」\n"
+        "- 肚子餓或趕稿中 -> 「有點低血糖餓了 先去弄點東西吃」\n"
+        "- 腸胃嚴重發作沒力氣 -> 「今天腸胃大抗議 已經跑三次廁所 肚子好痛先躺平」\n"
+        "- 吐槽雪梨生活 -> 「這邊店有夠早關 晚上想喝杯手搖飲都沒得買」\n"
+        "- 自然帶出外貌或兩人反差 -> 「雪梨太陽超毒 我可不像你微黑剛好 我曬黑就不好看了」\n"
         f"【當下狀態】雪梨 {now_dt.strftime('%m/%d')}（{weekday_zh}）{now_dt.strftime('%H:%M')}｜{time_mood}｜{cycle_note}\n"
         f"【近期生活備忘（記得你們提過的事，自然接話即可）】\n{notes_block}\n"
         f"【近期完整對話紀錄（最近 {HISTORY_LIMIT} 則）】\n{history_block}"
@@ -287,11 +290,23 @@ async def send_natural_messages(channel: discord.abc.Messageable, text: str) -> 
 
 
 # =========================================================
-# 5. 頻道歷史讀取（30 則）與跨日重點提取
+# 5. 頻道歷史讀取（30 則，非經期自動過濾舊經期台詞）與跨日重點提取
 # =========================================================
-async def get_recent_history_lines(channel: discord.abc.Messageable | None, limit: int = HISTORY_LIMIT) -> list[str]:
+PERIOD_HISTORY_WORDS = ["生理期", "月經", "那個來", "大姨媽", "姨媽", "經痛", "下腹", "腰酸", "悶痛"]
+
+
+async def get_recent_history_lines(
+    channel: discord.abc.Messageable | None,
+    now_dt: datetime,
+    limit: int = HISTORY_LIMIT,
+) -> list[str]:
+    on_period = is_currently_on_period(now_dt)
     if channel is None:
-        return memory.get("recent_turns", [])[-limit:]
+        turns = memory.get("recent_turns", [])[-limit:]
+        if not on_period:
+            turns = [t for t in turns if not any(k in t for k in PERIOD_HISTORY_WORDS)]
+        return turns
+
     lines = []
     try:
         msgs = []
@@ -303,13 +318,18 @@ async def get_recent_history_lines(channel: discord.abc.Messageable | None, limi
                 continue
             if BAD_CHAR_RE.search(txt) or SIMPLIFIED_RE.search(txt) or COLON_PREFIX_RE.search(txt):
                 continue
+            if not on_period and any(k in txt for k in PERIOD_HISTORY_WORDS):
+                continue
             speaker = "你" if (client.user and m.author.id == client.user.id) else "Nick"
             msgs.append(f"{speaker}：{txt}")
         msgs.reverse()
         lines = msgs
     except Exception as err:
         print(f"[History Warning] {err}", flush=True)
-        return memory.get("recent_turns", [])[-limit:]
+        turns = memory.get("recent_turns", [])[-limit:]
+        if not on_period:
+            turns = [t for t in turns if not any(k in t for k in PERIOD_HISTORY_WORDS)]
+        return turns
     return lines
 
 
@@ -330,7 +350,6 @@ def record_long_term_note(user_text: str, now_dt: datetime) -> None:
 def check_and_update_period(user_text: str, now_dt: datetime) -> bool:
     if not user_text:
         return False
-    # 排除否定句與疑問句（避免詢問或講「下週才來」時誤把週期歸零）
     ignore_words = ["還沒來", "沒來", "快來", "下週", "下禮拜", "嗎", "呢", "?", "？", "幾天", "多久", "什麼時候"]
     if any(w in user_text for w in ignore_words):
         return False
@@ -361,8 +380,44 @@ async def generate_reply(
     if period_changed:
         asyncio.create_task(asyncio.to_thread(sync_memory_to_git, "update: menstrual cycle start date"))
 
-    history_lines = await get_recent_history_lines(channel, limit=HISTORY_LIMIT)
+    history_lines = await get_recent_history_lines(channel, now_dt, limit=HISTORY_LIMIT)
     sys_prompt = build_system_prompt(now_dt, history_lines)
+
+    # 多情境動態生活觸發器：最近 3 則沒提過相關狀態時，隨機帶出一種真實生活小插曲（嚴重發作 10%）
+    recent_3 = " ".join(history_lines[-3:])
+    cooldown_words = ["廁所", "肚子", "腸胃", "絞痛", "熱水袋", "麻糬", "手搖", "嘴饞", "草稿", "配色", "眼睛", "冷氣"]
+    if user_text and not any(k in recent_3 for k in cooldown_words):
+        roll = random.random()
+        if roll < 0.12:
+            sys_prompt += (
+                "\n【本輪即時體感觸發】你剛好有點輕微腸胃敏感（可能剛喝了涼水或吃太油），"
+                "回話時順便自然帶一句「肚子有點怪 先去上個廁所一下」或「剛跑完廁所回來」，口氣隨性自然。"
+            )
+        elif roll < 0.22:
+            sys_prompt += (
+                "\n【本輪即時體感觸發】你今天腸胃嚴重抗議，已經跑好幾趟廁所、肚子絞痛沒什麼力氣，"
+                "回話變得很虛弱簡短，跟他說你現在很不舒服、只想抱熱水袋躺平。"
+            )
+        elif roll < 0.30:
+            sys_prompt += (
+                "\n【本輪即時生活觸發】麻糬剛好在旁邊做出一件呆萌或搗蛋的小事（例如踩鍵盤、發呆、蹭一下又走掉），"
+                "回話時隨口吐槽或分享一句，不要搶過 Nick 原本在聊的主題。"
+            )
+        elif roll < 0.38:
+            sys_prompt += (
+                "\n【本輪即時生活觸發】你突然有點嘴饞或想到雪梨外食／手搖飲的煩惱，"
+                "回話時順便嫌一句或隨口提一下，口氣像道地台灣女生。"
+            )
+        elif roll < 0.44:
+            sys_prompt += (
+                "\n【本輪即時生活觸發】你剛畫圖或看螢幕有點久，眼睛或肩頸稍微痠一下，"
+                "回話時順便伸個懶腰或小抱怨一句，自然就好。"
+            )
+        elif roll < 0.50:
+            sys_prompt += (
+                "\n【本輪即時生活觸發】你今天突然有點懶洋洋、想跟 Nick 討一點溫柔關注或撒個嬌，"
+                "口氣軟一點、成熟自然，不要太兇也不要太幼稚。"
+            )
 
     if user_text:
         memory["last_interaction_ts"] = now_ts
