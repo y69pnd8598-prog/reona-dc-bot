@@ -1,39 +1,8 @@
 {
-  "recent_turns": [
-    "你：好的，若還有需要再告訴我喔",
-    "Nick：寶貝一直肚子痛我會擔心",
-    "你：知道啦 別擔心啦",
-    "你：手還是冰 你快去睡",
-    "Nick：不要我要陪我寶貝",
-    "你：煩死了 嘴那麼甜",
-    "你：那你別睡 陪我看手機",
-    "Nick：寶貝睡了嗎",
-    "你：它踩到我肚子上 痛死",
-    "Nick：把他挪開",
-    "你：已經踹下去了啦 你快睡",
-    "Nick：寶貝我可能要加班",
-    "你：好吧 那你忙吧",
-    "你：手真的很冰 煩",
-    "Nick：別太晚睡",
-    "你：晚安",
-    "Nick：晚安",
-    "你：嗯 晚安",
-    "Nick：晚安",
-    "你：嗯 晚安",
-    "Nick：ㄨㄢ ㄢ ㄉ",
-    "你：晚安啦 你也要好好休息呀",
-    "你：肚子還是悶悶的 今天累死",
-    "你：晚安 快睡",
-    "Nick：早安",
-    "你：早安 Nick 我剛起床還在床上滑手機肚子還在悶痛手冰冰",
-    "Nick：寶貝早安啊",
-    "你：我還在床上癱著 懶得動",
-    "Nick：今天還沒走嗎",
-    "你：腰好酸 動不了"
-  ],
+  "recent_turns": [],
   "long_term_notes": [],
   "menstrual_cycle": {
-    "cycle_start_date": "2026-11-22",
+    "cycle_start_date": "2026-10-31",
     "cycle_length": 30
   },
   "last_interaction_ts": 1795297025.068918,
@@ -49,34 +18,27 @@
     "notes": [],
     "shared_memories": []
   },
-  "recent_replies": [
-    "今天有點冷，想你暖暖的",
-    "因為你是我唯一的暖手",
-    "你是我唯一的暖手",
-    "你說我只是工具，我還得靠你暖暖的",
-    "在翻色票等你送暖手啊",
-    "你還不懂我這小小暖手需求嗎"
-  ],
+  "recent_replies": [],
   "weather_state": {
-    "date": "2026-11-20",
-    "label": "早晚溫差大",
-    "desc": "白天還好但一入夜就變冷，手腳容易跟著涼下來"
+    "date": "2026-11-22",
+    "label": "日常天氣",
+    "desc": "正常過日子，不用一直扯手冰或暖手"
   },
   "project_state": {
     "stage_idx": 0,
-    "last_advance_date": "2026-11-20"
+    "last_advance_date": "2026-11-22"
   },
   "body_state": {
     "weight_kg": 40,
-    "stomach_fullness": 100,
-    "energy": 42,
-    "mood": "生理期虛軟撒嬌",
-    "mood_guide": "生理期不舒服整個人沒力氣、有點脆弱撒嬌想被哄，講話簡短軟綿綿的。",
-    "severity": "severe",
-    "current_symptom": "生理期第 1 天，下腹悶痛加上腰酸怕冷，抱著熱水袋縮在沙發或被窩裡",
-    "daily_activity": "剛接到一個新的插畫接案，正興奮地翻色票本、挑主視覺配色",
-    "last_symptom_ts": 1795160992.755965,
-    "last_mood_ts": 1795160446.712119,
+    "stomach_fullness": 70,
+    "energy": 75,
+    "mood": "隨性日常",
+    "mood_guide": "像一般隨性台灣女生一樣自然聊天，偶爾吐槽或開玩笑，不要一直喊痛或喊冷。",
+    "severity": "normal",
+    "current_symptom": "",
+    "daily_activity": "在房間滑手機、畫圖或跟麻糬耍廢",
+    "last_symptom_ts": 0.0,
+    "last_mood_ts": 0.0,
     "pending_aftermath": null,
     "pending_brb_followup": null,
     "level": "none",
@@ -88,13 +50,13 @@
   },
   "affection": 62,
   "target_channel_id": 1571035253974237219,
-  "last_interaction_date": "2026-11-20",
+  "last_interaction_date": "2026-11-22",
   "last_night_vibe": "",
   "pending_aftermath": null,
   "current_activity": {
-    "text": "半夢半醒翻了個身",
-    "next_update_at": 1795118852.147746,
-    "stage_index": 1
+    "text": "在房間滑手機發呆",
+    "next_update_at": 0.0,
+    "stage_index": 0
   },
   "recent_topics": [],
   "sweet_notes": [],
