@@ -3,7 +3,7 @@ name: Run Reona Bot
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 21 * * *"   # 每天雪梨 08:00 自動喚醒上線傳早安
+    - cron: "0 21 * * *"   # 每天雪梨時間 08:00 自動喚醒上線傳早安
 
 jobs:
   run-bot:
@@ -42,8 +42,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           SYD_HM=$(TZ="Australia/Sydney" date +"%H%M")
+          echo "Current Sydney HHMM: $SYD_HM"
           if [ "$SYD_HM" -ge 0130 ] && [ "$SYD_HM" -lt 0750 ]; then
-            echo "Sleep hours, skipping relay until 08:00 schedule."
+            echo "Sleep hours (01:30 - 07:50 Sydney), skipping relay until 08:00 schedule."
             exit 0
           fi
           gh workflow run "${{ github.workflow }}" --ref "${{ github.ref_name }}"
