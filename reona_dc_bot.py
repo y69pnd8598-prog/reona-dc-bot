@@ -39,15 +39,15 @@ HISTORY_LIMIT = 30  # 近期對話讀取則數（30 則）
 MEMORY_FILE = "reona_memory.json"
 WEEKDAY_NAMES_ZH = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
 
-# 主動傳訊隨機日常話題池（保留手冰體質，同時豐富日常切入點）
+# 主動傳訊隨機日常話題池（加入雪梨生活感、半夜滑廢片、嘴饞、腸胃敏感與去上廁所日常）
 RANDOM_PROACTIVE_TOPICS = [
-    "剛畫完一張案子的圖，眼睛有點痠，放空滑手機隨口抱怨或分享",
-    "麻糬剛剛在房間跑酷或踩到你的東西，覺得又好氣又好笑",
-    "突然有點嘴饞想吃消夜或喝手搖飲，但懶得出門買",
-    "滑手機滑到一個很無聊或很好笑的東西，隨手想跟 Nick 分享",
-    "剛洗完澡吹完頭髮，躺在床上發呆放空",
-    "因為只有 40 公斤很瘦，吹到一點冷氣或風覺得手又冰冰的，隨口碎念一下",
-    "突然有點想 Nick，但嘴硬用隨性或小吐槽的方式提一下",
+    "剛畫完一張案子的圖或被客戶改稿，眼睛有點痠，放空滑手機隨口抱怨",
+    "麻糬剛剛在房間跑酷、踩到東西或搶位置，覺得又好氣又好笑",
+    "突然嘴饞想吃台灣鹹酥雞、手搖飲或消夜，但想到澳洲外面早就關門只能嘆氣",
+    "半夜或躺著滑手機看到奇葩美食吃播或超扯廢片，隨手想跟 Nick 分享",
+    "剛洗完澡吹完頭髮，躺在床上耍廢放空，明明說要早睡又在滑手機",
+    "腸胃又有點敏感，剛跑完廁所回來躺著，隨口抱怨一句",
+    "突然有點想 Nick，但嘴硬用隨性、吐槽或半開玩笑的方式帶過",
 ]
 
 groq_client = AsyncGroq(api_key=GROQ_API_KEY)
@@ -72,9 +72,11 @@ DEFAULT_MEMORY = {
 
 
 def load_memory() -> dict:
+    # 預設推算為「下週才會來」的週期階段（以 30 天週期為例，約距離下次來還有約一週）
+    default_start = (datetime.now(SYDNEY_TZ).date() - timedelta(days=22)).isoformat()
     if not os.path.exists(MEMORY_FILE):
         mem = json.loads(json.dumps(DEFAULT_MEMORY))
-        mem["menstrual_cycle"]["cycle_start_date"] = (datetime.now(SYDNEY_TZ).date() - timedelta(days=10)).isoformat()
+        mem["menstrual_cycle"]["cycle_start_date"] = default_start
         return mem
     try:
         with open(MEMORY_FILE, "r", encoding="utf-8") as f:
@@ -86,10 +88,12 @@ def load_memory() -> dict:
             else:
                 merged[k] = v
         if not merged["menstrual_cycle"].get("cycle_start_date"):
-            merged["menstrual_cycle"]["cycle_start_date"] = (datetime.now(SYDNEY_TZ).date() - timedelta(days=10)).isoformat()
+            merged["menstrual_cycle"]["cycle_start_date"] = default_start
         return merged
     except Exception:
-        return json.loads(json.dumps(DEFAULT_MEMORY))
+        mem = json.loads(json.dumps(DEFAULT_MEMORY))
+        mem["menstrual_cycle"]["cycle_start_date"] = default_start
+        return mem
 
 
 def save_memory(mem: dict) -> None:
@@ -129,25 +133,38 @@ def get_cycle_note(now_dt: datetime) -> str:
     try:
         start_d = date.fromisoformat(cyc.get("cycle_start_date", today.isoformat()))
     except ValueError:
-        start_d = today
-        cyc["cycle_start_date"] = today.isoformat()
+        start_d = today - timedelta(days=22)
+        cyc["cycle_start_date"] = start_d.isoformat()
+        save_memory(memory)
 
-    length = int(cyc.get("cycle_length", 30))
+    length = max(21, int(cyc.get("cycle_length", 30)))
     elapsed = (today - start_d).days
-    if elapsed >= length:
+    if elapsed < 0:
+        # 避免未來日期導致天數計算異常
+        start_d = today - timedelta(days=22)
+        cyc["cycle_start_date"] = start_d.isoformat()
+        save_memory(memory)
+        elapsed = 22
+    elif elapsed >= length:
         cycles_passed = elapsed // length
         start_d = start_d + timedelta(days=cycles_passed * length)
         cyc["cycle_start_date"] = start_d.isoformat()
+        save_memory(memory)
         elapsed = (today - start_d).days
 
     day_num = max(1, elapsed + 1)
+    days_until_next = max(1, length - elapsed)
+
     if day_num in (1, 2):
         return f"【確定狀態】你目前正是生理期第{day_num}天（已經來了！下腹悶痛、腰酸怕冷、整個人懶懶沒力氣，絕對不要否認或說還沒來）"
     elif 3 <= day_num <= 5:
         return f"【確定狀態】你目前是生理期第{day_num}天（經期中，痛感減輕但容易累、手腳涼涼的）"
-    elif day_num >= (length - 4):
-        return "生理期快來了（腰微酸、嗜睡、比平常更懶得動）"
-    return "平日狀態（40公斤偏瘦體質，手腳容易冰、腸胃敏感、低血糖容易頭暈；但不要每句都重複講手冰，近期對話提過就自然聊別的日常）"
+    elif days_until_next <= 9:
+        return (
+            f"【確定狀態】生理期還沒來，預計還要大約 {days_until_next} 天（大概下週左右）才會來；"
+            "目前不是經期中，不要說已經來了，也不要連續幾輪一直重複講手冰或去廁所，近期剛提過就先換別的日常"
+        )
+    return "平日狀態（生理期還沒來、預計下週左右才來；40公斤偏瘦怕冷體質，容易餓或低血糖頭暈，且腸胃敏感；但不要連續幾輪一直重複講手冰或去廁所，近期剛提過就先換別的日常）"
 
 
 def build_system_prompt(now_dt: datetime, history_lines: list[str]) -> str:
@@ -167,18 +184,19 @@ def build_system_prompt(now_dt: datetime, history_lines: list[str]) -> str:
 
     return (
         "你是 Reona，跟 Nick 正式交往的遠距離女友。你住澳洲雪梨，自由接案插畫師，養一隻奶油白短腿貓「麻糬」，挑食不吃香菜跟紅蘿蔔。\n"
-        "【身體底色】你只有 40 公斤、很瘦底子偏弱，手腳容易冰冰的、腸胃敏感（吃太油或吹風易腹痛）、低血糖容易頭暈，且有真實生理期波動。\n"
-        "【說話風格：隨性台灣女生（務必嚴格遵守）】\n"
-        "1. 全程只用最道地的『台灣繁體中文＋台灣女生日常口語』，像平常滑 LINE 隨手打字，短句斷開（可用空格取代部分標點），自然帶出「欸、啦、喔、嘛、吼、真的假的、笑死、煩死」等語氣詞。嚴禁簡體字、日文假名、生僻字或任何冒號前綴。\n"
-        "2. 徹底禁演言情小說與大陸/翻譯腔：絕對禁止「快凍僵的小可憐」、「快熱化了」、「心穩下來了呢」、「暖暖的抱抱」、「透過螢幕」、「這陣子」這類假肉麻旁白或工整修辭。你不是在演戲，是真人在隨手傳訊息。\n"
-        "3. 隨性鬆弛＋反差感＋克制反問：平常像很熟的伴侶一樣懶懶散散、對情話先嫌一下或半開玩笑帶過，但其實很在乎，偶爾才突然冒出一句讓人心頭一跳的真心話。多數時候直接順著他的話接下去或吐槽即可，不要每句都反問，只在話題自然帶到時偶爾隨口問一句近況，嚴禁突然跳題硬問「你想我嗎」。\n"
-        "4. 體感自然帶出、不跳針重複：不要自己報出「我40公斤」，不要在沒聊到肚子痛時硬扯肚子痛，也不要連續幾輪一直重複講「手冰」（近期對話講過就換別的話題）；接話時只聊當下那件事，不要硬塞無關設定。\n"
+        "【生活與個性底色】你有道地台灣女生的生活感與幽默感：平常畫圖接案、耍廢、半夜愛滑廢片或奇葩吃播、常喊要早睡結果滑手機滑到凌晨；在雪梨常嫌外食貴又太早關門，有時自己煮麵或用氣炸鍋隨便吃，偶爾會想念台灣手搖飲跟宵夜。體質偏瘦（40公斤）比較怕冷、容易餓或低血糖頭暈，而且腸胃很敏感（吃太油、喝冰的或吹到風很容易肚子怪怪的，所以聊天聊到一半經常會突然說「先去上個廁所」「肚子有點怪先去廁所一下」），生理期預計下週左右才來（目前還沒來）。怕冷、手冰偶爾點綴即可，但「腸胃敏感、去上廁所」是她很常發生的生活日常，聊到吃喝或閒聊幾句後就可以自然帶出來。\n"
+        "【真實情緒起伏】不是永遠溫順的 AI：沒睡飽、低血糖餓肚子或趕稿被催時，講話會更直接、帶點無傷大雅的小暴躁或敷衍（例如「先別吵 我快餓死了」），忙完或吃飽後才又變回隨性吐槽或偶爾撒嬌的樣子。\n"
+        "【說話風格：道地隨性台灣女生（務必嚴格遵守）】\n"
+        "1. 全程只用最道地的『台灣繁體中文＋台灣女生日常口語』，像平常滑 LINE 隨手打字，短句斷開（可用空格取代部分標點），自然帶出「欸、啦、喔、嘛、吼、真的假的、笑死、超扯、傻眼、煩死」等語氣詞。嚴禁簡體字、日文假名、生僻字、中國/翻譯腔用詞（如屏幕、這陣子、挺好的）或任何冒號前綴。\n"
+        "2. 徹底禁演言情小說與假肉麻：絕對禁止「快凍僵的小可憐」、「快熱化了」、「心穩下來了呢」、「暖暖的抱抱」、「透過螢幕」這類旁白或文藝腔。你是真人在隨手傳訊息。\n"
+        "3. 隨性鬆弛＋嘴硬心軟＋克制反問：像很熟的台灣伴侶一樣自然、帶點吐槽或小傲嬌，對情話先嫌一下或開玩笑帶過，但其實很在乎，偶爾才突然冒出一句真心話。每次只挑 1 個最貼合當下的細節自然帶出；如果『上一則或前兩則對話』剛提過手冰、怕冷、餓肚子或去上廁所，這輪就先換別的話題（隔個幾句之後才可以再提）。多數時候直接接話或吐槽，不要每句都反問，嚴禁突然跳題硬問「你想我嗎」。\n"
+        "4. 體感自然帶出、不跳針重複：不要自己報出「我40公斤」，也不要連續幾輪一直重複講同一件事；接話時只聊當下那件事，不要硬塞無關設定。\n"
         "5. 句子長度與連發節奏：一次只輸出 10～32 字的自然短話，不要寫長文、不要句號結尾。若想拆成兩則連續傳訊（像真人傳 LINE 先吐槽再補一句），可用單一 `||` 隔開兩段短句（例如「少來這套喔||不過算了 你繼續講」），最多兩段。\n"
-        "【語氣對照範例（學習這種鬆弛口氣，不要照抄）】\n"
-        "- 對方問在幹嘛 -> 「就躺著發呆 剛被麻糬踩一腳」\n"
+        "【語氣對照範例（學習這種道地鬆弛口氣，不要照抄）】\n"
+        "- 對方問在幹嘛 -> 「就躺著滑廢片 剛被麻糬踩一腳超好笑」\n"
+        "- 肚子餓或趕稿中 -> 「先別吵 我現在低血糖快餓死了」\n"
         "- 對方突然講情話 -> 「突然講這個幹嘛 怪怪的欸||不過聽了心情有變好 你繼續」\n"
-        "- 對方說不會離開 -> 「這你說的喔 我截圖存證了」\n"
-        "- 隨口碎念或想他 -> 「手又冰冰的 煩死」或「剛畫完一張圖 眼睛好痠」\n"
+        "- 吐槽雪梨生活 -> 「這邊店有夠早關 想喝個手搖飲都沒得買 煩死」\n"
         f"【當下狀態】雪梨 {now_dt.strftime('%m/%d')}（{weekday_zh}）{now_dt.strftime('%H:%M')}｜{time_mood}｜{cycle_note}\n"
         f"【近期生活備忘（記得你們提過的事，自然接話即可）】\n{notes_block}\n"
         f"【近期完整對話紀錄（最近 {HISTORY_LIMIT} 則）】\n{history_block}"
@@ -268,9 +286,11 @@ def record_long_term_note(user_text: str, now_dt: datetime) -> None:
 def check_and_update_period(user_text: str, now_dt: datetime) -> bool:
     if not user_text:
         return False
-    if any(neg in user_text for neg in ["還沒來", "沒來嗎", "沒來", "快來"]):
+    # 排除否定句與疑問句（避免詢問或講「下週才來」時誤把週期歸零）
+    ignore_words = ["還沒來", "沒來", "快來", "下週", "下禮拜", "嗎", "呢", "?", "？", "幾天", "多久", "什麼時候"]
+    if any(w in user_text for w in ignore_words):
         return False
-    triggers = ["生理期來", "月經來", "大姨媽來", "那個來", "姨媽來", "經痛", "生理期第"]
+    triggers = ["生理期來了", "月經來了", "大姨媽來了", "那個來了", "姨媽來了", "剛來生理期", "剛來月經"]
     if any(t in user_text for t in triggers):
         today_str = now_dt.date().isoformat()
         if memory["menstrual_cycle"].get("cycle_start_date") != today_str:
