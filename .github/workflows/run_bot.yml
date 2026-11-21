@@ -1,59 +1,49 @@
-name: Reona 24/7 Cloud Runner
+name: Run Reona Bot
 
 on:
-  # 1. 允許手動點擊 Run workflow 啟動
   workflow_dispatch:
-  # 2. 接收 Python 程式跑滿 5 小時 45 分時發出的「無縫接力」訊號
-  repository_dispatch:
-    types: [relay_reona]
-  # 3. 保底排程：萬一遇到 GitHub 伺服器異常中斷，每 6 小時自動補位重啟
   schedule:
-    - cron: '15 */6 * * *'
-
-# 賦予自動把 reona_memory.json 存回倉庫與觸發下一個 Job 的權限
-permissions:
-  contents: write
+    - cron: "0 21 * * *"   # 每天雪梨 08:00 自動喚醒上線傳早安
 
 jobs:
-  run-reona:
+  run-bot:
     runs-on: ubuntu-latest
-    # 避免兩個分身同時重複上線搶話（排隊機制）
-    concurrency:
-      group: reona-bot-instance
-      cancel-in-progress: false
+    timeout-minutes: 360
+    permissions:
+      contents: write
+      actions: write
 
     steps:
-      - name: 拉取最新程式碼與記憶檔
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
 
-      - name: 設定 Python 3.11 環境
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-          cache: 'pip'
+          python-version: "3.11"
 
-      - name: 安裝依賴套件
+      - name: Install dependencies
         run: |
-          pip install -U discord.py groq aiohttp tzdata
+          pip install -U discord.py groq
 
-      - name: 啟動 Reona（含 5h45m 自動接力與記憶同步）
+      - name: Run Reona Bot
         env:
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
+          DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
         run: |
           python reona_dc_bot.py
 
-      - name: 同步最新記憶檔回倉庫
+      - name: Trigger next relay run (skip during Sydney sleep hours)
         if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ -f "reona_memory.json" ]; then
-            git config user.name "Reona-Memory-Bot"
-            git config user.email "bot@users.noreply.github.com"
-            git add reona_memory.json
-            git commit -m "chore: sync Reona memory & state [skip ci]" || exit 0
-            git push
+          SYD_HM=$(TZ="Australia/Sydney" date +"%H%M")
+          if [ "$SYD_HM" -ge 0130 ] && [ "$SYD_HM" -lt 0750 ]; then
+            echo "Sleep hours, skipping relay until 08:00 schedule."
+            exit 0
           fi
+          gh workflow run "${{ github.workflow }}" --ref "${{ github.ref_name }}"
