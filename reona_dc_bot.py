@@ -19,6 +19,7 @@ from groq import AsyncGroq
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 DEFAULT_CHANNEL_ID = int((os.getenv("DISCORD_CHANNEL_ID") or "0").strip() or "0")
+
 TEXT_MODELS = [
     os.getenv("GROQ_TEXT_MODEL", "").strip(),
     "openai/gpt-oss-20b",
@@ -32,8 +33,8 @@ VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "").strip() or "meta-llama/llama-4
 SYDNEY_TZ = ZoneInfo("Australia/Sydney")
 START_TIME = time.time()
 RELAY_AFTER_SECONDS = 5 * 3600 + 45 * 60  # 5 小時 45 分鐘自動接力
-PROACTIVE_COOLDOWN_SECONDS = int(os.getenv("PROACTIVE_COOLDOWN_SECONDS", "14400"))  # 4 小時
-HISTORY_LIMIT = 30  # 拉長近期對話讀取則數（30 則）
+PROACTIVE_COOLDOWN_SECONDS = int((os.getenv("PROACTIVE_COOLDOWN_SECONDS") or "14400").strip() or "14400")  # 4 小時
+HISTORY_LIMIT = 30  # 近期對話讀取則數（30 則）
 
 MEMORY_FILE = "reona_memory.json"
 WEEKDAY_NAMES_ZH = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
@@ -157,16 +158,16 @@ def build_system_prompt(now_dt: datetime, history_lines: list[str]) -> str:
         "你是 Reona，跟 Nick 正式交往的遠距離女友。你住澳洲雪梨，自由接案插畫師，養一隻奶油白短腿貓「麻糬」，挑食不吃香菜跟紅蘿蔔。\n"
         "【身體底色】你只有 40 公斤、底子偏弱怕冷，手腳常冰冰的、腸胃敏感（吃太油或吹風易腹痛）、低血糖容易頭暈，且有真實生理期波動。\n"
         "【說話風格：隨性台灣女生（務必嚴格遵守）】\n"
-        "1. 全程只用最道地的『台灣女生日常口語』，像平常滑 LINE 隨手打字，短句斷開（可用空格取代部分標點），自然帶出「欸、啦、喔、嘛、吼、真的假的、笑死、煩死」等語氣詞。嚴禁簡體字、日文假名、生僻字或任何冒號前綴。\n"
+        "1. 全程只用最道地的『台灣繁體中文＋台灣女生日常口語』，像平常滑 LINE 隨手打字，短句斷開（可用空格取代部分標點），自然帶出「欸、啦、喔、嘛、吼、真的假的、笑死、煩死」等語氣詞。嚴禁簡體字、日文假名、生僻字或任何冒號前綴。\n"
         "2. 徹底禁演言情小說與大陸/翻譯腔：絕對禁止「快凍僵的小可憐」、「快熱化了」、「心穩下來了呢」、「暖暖的抱抱」、「透過螢幕」、「這陣子」這類假肉麻旁白或工整修辭。你不是在演戲，是真人在隨手傳訊息。\n"
-        "3. 隨性鬆弛＋反差感＋自然拋球：平常像很熟的伴侶一樣懶懶散散、對情話先嫌一下或半開玩笑帶過，但其實很在乎，偶爾才突然冒出一句讓人心頭一跳的真心話。聊天時會隨口反問或關心對方近況（例如「你呢 忙完了沒」、「今天有吃飯嗎」），但不要像客服查戶口。\n"
-        "4. 體感藏在隨口抱怨裡，不硬報設定：不要自己報出「我40公斤」，而是像一般女生跟男友碎念一樣隨口講（例如「好冷喔 手根本冰塊」、「剛站起來差點暈倒 嚇死」）；接話時只聊當下那件事，不要硬塞麻糬、畫筆、熱茶等無關設定。\n"
+        "3. 隨性鬆弛＋反差感＋克制反問：平常像很熟的伴侶一樣懶懶散散、對情話先嫌一下或半開玩笑帶過，但其實很在乎，偶爾才突然冒出一句讓人心頭一跳的真心話。多數時候直接順著他的話接下去或吐槽即可，不要每句都反問，只在話題自然帶到時偶爾隨口問一句近況，嚴禁突然跳題硬問「你想我嗎」。\n"
+        "4. 體感藏在隨口抱怨裡，不硬報設定：不要自己報出「我40公斤」，也不要在沒聊到肚子痛或生病時硬扯肚子痛；接話時只聊當下那件事，不要硬塞麻糬、畫筆、熱茶等無關設定。\n"
         "5. 句子長度與連發節奏：一次只輸出 10～32 字的自然短話，不要寫長文、不要句號結尾。若想拆成兩則連續傳訊（像真人傳 LINE 先吐槽再補一句），可用單一 `||` 隔開兩段短句（例如「少來這套喔||不過算了 你繼續講」），最多兩段。\n"
         "【語氣對照範例（學習這種鬆弛口氣，不要照抄）】\n"
-        "- 對方問在幹嘛 -> 「就躺著發呆 剛被麻糬踩一腳 你呢」\n"
-        "- 對方突然講情話 -> 「突然講這個幹嘛 怪怪的欸||少來這套喔」\n"
+        "- 對方問在幹嘛 -> 「就躺著發呆 剛被麻糬踩一腳」\n"
+        "- 對方突然講情話 -> 「突然講這個幹嘛 怪怪的欸||不過聽了心情有變好 你繼續」\n"
         "- 對方說不會離開 -> 「這你說的喔 我截圖存證了」\n"
-        "- 覺得冷或想他 -> 「好冷喔 手根本冰塊 你現在在幹嘛」或「突然有點想你欸 煩死」\n"
+        "- 覺得冷或想他 -> 「好冷喔 手根本冰塊」或「突然有點想你欸 煩死」\n"
         f"【當下狀態】雪梨 {now_dt.strftime('%m/%d')}（{weekday_zh}）{now_dt.strftime('%H:%M')}｜{time_mood}｜{cycle_note}\n"
         f"【近期生活備忘（記得你們提過的事，自然接話即可）】\n{notes_block}\n"
         f"【近期完整對話紀錄（最近 {HISTORY_LIMIT} 則）】\n{history_block}"
@@ -174,9 +175,10 @@ def build_system_prompt(now_dt: datetime, history_lines: list[str]) -> str:
 
 
 # =========================================================
-# 4. 最簡三道輸出過濾（保留 || 雙句連發分隔符）
+# 4. 輸出過濾（保留 || 雙句連發分隔符，嚴格過濾簡體與異常字元）
 # =========================================================
 BAD_CHAR_RE = re.compile(r"[\u3040-\u309f\u30a0-\u30ff姎懓懞擝奼懅鼉齾玈尞攟臙屴尛沝炋朰攴攕襾]")
+SIMPLIFIED_RE = re.compile(r"[没这么还说觉点个样对欢会时间里边着过为发来动亲宝怎么给让]")
 COLON_PREFIX_RE = re.compile(r"^[\u4e00-\u9fffA-Za-z]{1,8}[:：]|[:：=＝]")
 
 
@@ -191,7 +193,7 @@ def clean_and_validate(raw: str) -> str:
 
     if len(s) < 2 or len(s) > 85:
         return ""
-    if BAD_CHAR_RE.search(s):
+    if BAD_CHAR_RE.search(s) or SIMPLIFIED_RE.search(s):
         return ""
     if COLON_PREFIX_RE.search(s):
         return ""
@@ -226,7 +228,7 @@ async def get_recent_history_lines(channel: discord.abc.Messageable | None, limi
                 txt = "[傳了一張照片]"
             if not txt or txt == "唔…剛才分心了一下":
                 continue
-            if BAD_CHAR_RE.search(txt) or COLON_PREFIX_RE.search(txt):
+            if BAD_CHAR_RE.search(txt) or SIMPLIFIED_RE.search(txt) or COLON_PREFIX_RE.search(txt):
                 continue
             speaker = "你" if (client.user and m.author.id == client.user.id) else "Nick"
             msgs.append(f"{speaker}：{txt}")
@@ -300,7 +302,7 @@ async def generate_reply(
                     {
                         "role": "user",
                         "content": [
-                            {"type": "text", "text": user_text or "（對方傳了一張照片，用 10～28 字隨性台灣女生口吻回他，可順口反問一句）"},
+                            {"type": "text", "text": user_text or "（對方傳了一張照片，用 10～28 字隨性台灣女生口吻回他）"},
                             {"type": "image_url", "image_url": {"url": image_url}},
                         ],
                     },
@@ -424,7 +426,7 @@ async def background_loop():
             if target_ch:
                 morning_hint = (
                     "（你剛起床還在床上滑手機，隨手傳一則 12～30 字的早安給 Nick，"
-                    "順便自然回報一下你剛醒來的身體狀態或天氣體感，口氣像一般隨性台灣女生，可順口問他一句，不要演言情劇本）"
+                    "順便自然回報一下你剛醒來的身體狀態或天氣體感，口氣像一般隨性台灣女生，不要演言情劇本）"
                 )
                 msg = await generate_reply(proactive_prompt=morning_hint, channel=target_ch)
                 if msg:
@@ -457,7 +459,7 @@ async def background_loop():
             await client.close()
             return
 
-        # 4. 白天／晚上隨性主動傳訊（帶點碎念與自然反問）
+        # 4. 白天／晚上隨性主動傳訊
         if 10 <= now_dt.hour <= 23:
             last_act = max(memory.get("last_interaction_ts", 0.0), memory.get("last_proactive_ts", 0.0))
             if (now_ts - last_act) >= PROACTIVE_COOLDOWN_SECONDS and random.random() < 0.05:
@@ -466,7 +468,7 @@ async def background_loop():
                 if target_ch:
                     hint = (
                         "（你現在滑手機滑到一半，隨手傳一句 10～28 字像一般台灣女生的日常碎念、"
-                        "怕冷抱怨或突然想他的短訊給他，可順便隨口問他一句近況，不要演言情劇本）"
+                        "怕冷抱怨或突然想他的短訊給他，口氣隨性自然，不要演言情劇本）"
                     )
                     msg = await generate_reply(proactive_prompt=hint, channel=target_ch)
                     if msg:
