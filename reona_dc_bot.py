@@ -4,19 +4,19 @@ import json
 import time
 import random
 import asyncio
-import subprocess
-from pathlib import Path
-from datetime import datetime, date, timedelta
+import io
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import requests
 import discord
 from discord.ext import tasks
 
-# =========================================================
-# 1. Configuration & Key Pool
-# =========================================================
-DISCORD_BOT_TOKEN = (
+# ==================== 環境變數與核心設定 ====================
+SYDNEY_TZ = ZoneInfo("Australia/Sydney")
+MEMORY_FILE = "reona_memory.json"
+
+DISCORD_TOKEN = (
     os.getenv("DISCORD_BOT_TOKEN")
     or os.getenv("DISCORD_TOKEN")
     or ""
@@ -26,179 +26,175 @@ TARGET_CHANNEL_ID = int(
     (os.getenv("TARGET_CHANNEL_ID") or os.getenv("DISCORD_CHANNEL_ID") or "0").strip() or "0"
 )
 
+RAW_GROQ_KEYS = (os.getenv("GROQ_API_KEY") or "").strip()
+GROQ_KEYS = [k.strip() for k in re.split(r"[,;\s]+", RAW_GROQ_KEYS) if k.strip()]
 
-def load_groq_key_pool() -> list[str]:
-    keys = []
-    raw_multi = os.getenv("GROQ_API_KEY") or ""
-    for part in re.split(r"[,;\s\n]+", raw_multi.strip()):
-        if part.strip():
-            keys.append(part.strip())
-    for idx in range(1, 6):
-        k = (os.getenv(f"GROQ_API_KEY_{idx}") or "").strip()
-        if k:
-            keys.append(k)
-    return list(dict.fromkeys(keys))
-
-
-GROQ_KEY_POOL = load_groq_key_pool()
-_current_key_idx = 0
-_key_cooldown_until: dict[str, float] = {}
+GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip()
+GEMINI_MODELS = [
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+]
 
 FISH_API_KEY = (os.getenv("FISH_API_KEY") or "").strip()
-FISH_MODEL_ID = (
-    os.getenv("FISH_MODEL_ID") or "7f92f8afb8ec43bf81429cc1c9199cb1"
-).strip()
+FISH_MODEL_ID = (os.getenv("FISH_MODEL_ID") or "").strip()
+RENDER_BASE_URL = (os.getenv("RENDER_BASE_URL") or "").strip().rstrip("/")
 
-_raw_render_url = (os.getenv("RENDER_BASE_URL") or "").strip().rstrip("/")
-RENDER_BASE_URL = (
-    _raw_render_url
-    if _raw_render_url.startswith(("http://", "https://"))
-    else "https://reona-cloud-companion.onrender.com"
-)
+# 精簡歷史句數（省 Token、避免撞每分鐘上限）
+HISTORY_LIMIT = 4
 
-DAILY_TTS_CHAR_LIMIT = 250
-MONTHLY_TTS_CHAR_LIMIT = 8000
-BASE_VOICE_PROB = 0.20
-HIGH_VOICE_PROB = 0.55
-PROACTIVE_VOICE_PROB = 0.05
+# 語音護欄上限（每日 250 字 / 每月 8,000 字）
+DAILY_VOICE_CHAR_LIMIT = 250
+MONTHLY_VOICE_CHAR_LIMIT = 8000
 
-# 預設候選模型，開機時還會自動向 Groq API 查詢實際可用模型來補強
-ACTIVE_MODELS = [
-    "qwen/qwen3.8-27b",
-    "openai/gpt-oss-120b",
-]
-
-SYDNEY_TZ = ZoneInfo("Australia/Sydney")
 WEEKDAY_NAMES_ZH = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
-HISTORY_LIMIT = 16
 
-BASE_DIR = Path(__file__).resolve().parent
-MEMORY_FILE = BASE_DIR / "reona_memory.json"
-AUDIO_DIR = BASE_DIR / "generated_audio"
-AUDIO_DIR.mkdir(exist_ok=True)
-
-# =========================================================
-# 2. Daily Quests & Memory Management
-# =========================================================
-DAILY_QUEST_TEMPLATES = [
-    "幫澳洲精品香氛品牌畫秋季聯名草稿，下午線上對稿",
-    "完成獨立出版書籍封面精修，傍晚去雪梨港邊散步買花",
-    "整理文創聯名打樣樣品與校色，中午去採光咖啡廳",
-    "替高級甜點品牌設計禮盒插畫，下午在家邊點香氛邊畫圖",
-    "把這週商業視覺專案定案交稿，晚上去海景餐廳吃晚餐",
-    "為精品雜誌專欄畫雪梨生活插畫，午後在落地窗邊構思配色",
-    "跟海外策展團隊確認限量版畫輸出規格，忙完去逛市集",
+KEY_FACT_KEYWORDS = [
+    "考試", "面試", "上班", "下班", "醫生", "看診", "生病", "發燒", "頭痛",
+    "約", "見面", "飛機", "搬家", "截止", "交件", "報告", "作業", "重要"
 ]
 
-DEFAULT_MEMORY = {
-    "recent_turns": [],
-    "long_term_notes": [],
-    "menstrual_cycle": {
-        "cycle_start_date": "",
-        "cycle_length": 30,
-    },
-    "daily_main_quest": {
-        "date_key": "",
-        "quest": "",
-        "progress": "早上剛開始準備",
-    },
-    "last_proactive_ts": 0.0,
-    "last_user_msg_ts": 0.0,
-    "recent_proactive_msgs": [],
-    "tts_quota": {
-        "day_key": "",
-        "day_chars": 0,
-        "month_key": "",
-        "month_chars": 0,
-    },
-}
+VIDEO_KEYWORDS = [
+    "視訊", "打給你", "開鏡頭", "看你", "打電話", "語音通話", "facetime", "video", "call"
+]
 
-_last_git_sync_ts = 0.0
+# ==================== 運行時狀態 ====================
+_current_key_idx = 0
+_key_cooldown_until: dict[str, float] = {}
+ACTIVE_MODELS: list[str] = ["qwen/qwen3.8-27b"]
+last_user_msg_ts: float = 0.0
+last_proactive_slot: str = ""
+
+# ==================== 記憶讀寫與主線生成 ====================
+def default_memory() -> dict:
+    return {
+        "recent_turns": [],
+        "long_term_notes": [],
+        "daily_quest": {"date": "", "quest": ""},
+        "voice_usage": {
+            "date": "",
+            "daily_chars": 0,
+            "month": "",
+            "monthly_chars": 0,
+        },
+    }
 
 
 def load_memory() -> dict:
-    default_start = (datetime.now(SYDNEY_TZ).date() - timedelta(days=22)).isoformat()
-    if not MEMORY_FILE.exists():
-        mem = json.loads(json.dumps(DEFAULT_MEMORY))
-        mem["menstrual_cycle"]["cycle_start_date"] = default_start
-        return mem
+    if os.path.exists(MEMORY_FILE):
+        try:
+            with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            base = default_memory()
+            base.update(data if isinstance(data, dict) else {})
+            return base
+        except Exception as e:
+            print(f"[Memory Load Warn] {e}", flush=True)
+    return default_memory()
+
+
+def save_memory(mem: dict) -> None:
     try:
-        data = json.loads(MEMORY_FILE.read_text(encoding="utf-8"))
-        merged = json.loads(json.dumps(DEFAULT_MEMORY))
-        for k, v in data.items():
-            if isinstance(v, dict) and isinstance(merged.get(k), dict):
-                merged[k].update(v)
-            else:
-                merged[k] = v
-        if not merged["menstrual_cycle"].get("cycle_start_date"):
-            merged["menstrual_cycle"]["cycle_start_date"] = default_start
-        return merged
-    except Exception as err:
-        print(f"[Memory Load Warning] {err}", flush=True)
-        mem = json.loads(json.dumps(DEFAULT_MEMORY))
-        mem["menstrual_cycle"]["cycle_start_date"] = default_start
-        return mem
-
-
-def sync_memory_to_git_bg() -> None:
-    global _last_git_sync_ts
-    now = time.time()
-    if now - _last_git_sync_ts < 90:
-        return
-    _last_git_sync_ts = now
-    try:
-        if not (BASE_DIR / ".git").exists():
-            return
-        subprocess.run(["git", "config", "user.name", "github-actions[bot]"], cwd=BASE_DIR, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(["git", "config", "user.email", "github-actions[bot]@users.noreply.github.com"], cwd=BASE_DIR, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(["git", "add", MEMORY_FILE.name], cwd=BASE_DIR, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        diff = subprocess.run(["git", "diff", "--staged", "--quiet"], cwd=BASE_DIR, check=False)
-        if diff.returncode != 0:
-            subprocess.run(["git", "commit", "-m", "chore: sync Reona memory"], cwd=BASE_DIR, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            subprocess.run(["git", "push"], cwd=BASE_DIR, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except Exception:
-        pass
-
-
-def save_memory(mem: dict, push_git: bool = False) -> None:
-    try:
-        MEMORY_FILE.write_text(json.dumps(mem, ensure_ascii=False, indent=2), encoding="utf-8")
-        if push_git:
-            asyncio.create_task(asyncio.to_thread(sync_memory_to_git_bg))
-    except Exception as err:
-        print(f"[Memory Save Error] {err}", flush=True)
+        with open(MEMORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(mem, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"[Memory Save Warn] {e}", flush=True)
 
 
 memory = load_memory()
 
 
 def ensure_daily_main_quest(now_dt: datetime) -> dict:
-    today_key = now_dt.strftime("%Y-%m-%d")
-    q_obj = memory.setdefault("daily_main_quest", {})
-    if q_obj.get("date_key") != today_key or not q_obj.get("quest"):
-        q_obj["date_key"] = today_key
-        q_obj["quest"] = random.choice(DAILY_QUEST_TEMPLATES)
-        save_memory(memory)
+    today_str = now_dt.strftime("%Y-%m-%d")
+    dq = memory.setdefault("daily_quest", {"date": "", "quest": ""})
+    if dq.get("date") == today_str and dq.get("quest"):
+        return dq
 
-    hour = now_dt.hour
-    if 6 <= hour < 12:
-        q_obj["progress"] = "上午：剛起床喝咖啡、準備開始工作"
-    elif 12 <= hour < 18:
-        q_obj["progress"] = "下午：正在畫主線草稿，還沒吃晚餐"
-    elif 18 <= hour < 23:
-        q_obj["progress"] = "晚上：工作告一段落或已吃過晚餐，在公寓休息"
-    else:
-        q_obj["progress"] = "深夜：躺床上準備睡覺"
-    return q_obj
+    quest_pool = [
+        "幫雜誌跨頁插畫上主色調與光影",
+        "整理出版社新繪本分鏡草稿",
+        "去邦代海邊咖啡廳畫速寫靈感",
+        "幫麻糬梳毛順便採買進口貓罐頭",
+        "調整商業委託主視覺的色彩層次",
+        "逛雪梨週末手作市集找顏料素材",
+        "完成品牌聯名包裝插畫的完稿細節",
+    ]
+    seed_idx = (now_dt.year * 1000 + now_dt.timetuple().tm_yday) % len(quest_pool)
+    dq["date"] = today_str
+    dq["quest"] = quest_pool[seed_idx]
+    save_memory(memory)
+    return dq
 
 
-def discover_available_groq_models() -> None:
-    """開機時直接向 Groq API 查詢目前真正可用的聊天模型，避免 404"""
-    global ACTIVE_MODELS
-    if not GROQ_KEY_POOL:
-        print("[Startup Error] GROQ_API_KEY 為空！", flush=True)
+def capture_key_note(user_text: str, now_dt: datetime) -> None:
+    txt = re.sub(r"\s+", " ", (user_text or "").strip())
+    if not txt or len(txt) < 4:
         return
-    for idx, key in enumerate(GROQ_KEY_POOL):
+    if any(k in txt for k in KEY_FACT_KEYWORDS):
+        stamp = now_dt.strftime("%m/%d")
+        compact = f"{stamp} {txt[:14]}"
+        notes = memory.setdefault("long_term_notes", [])
+        if compact not in notes:
+            notes.append(compact)
+            memory["long_term_notes"] = notes[-2:]
+
+
+def append_turn(role_prefix: str, text: str) -> None:
+    cleaned = re.sub(r"\s+", " ", (text or "").strip())
+    if not cleaned:
+        return
+    turns = memory.setdefault("recent_turns", [])
+    turns.append(f"{role_prefix}:{cleaned[:60]}")
+    memory["recent_turns"] = turns[-HISTORY_LIMIT:]
+    save_memory(memory)
+
+
+# ==================== 文字清理與 Prompt 建構 ====================
+def clean_reply_text(raw: str) -> str:
+    if not raw:
+        return ""
+    txt = re.sub(r"<think>[\s\S]*?</think>", "", raw, flags=re.IGNORECASE).strip()
+    txt = re.sub(r"^(Reona|我)\s*[:：]\s*", "", txt).strip()
+    txt = txt.replace("「", "").replace("」", "").replace('"', "").strip()
+    # 嚴禁第三人稱自稱「寶貝」
+    txt = re.sub(r"寶貝(想|要|剛|在|正在|也|去|吃|畫|睡|忙)", r"我\1", txt)
+    txt = re.sub(r"\s+", " ", txt).strip()
+    return txt
+
+
+def build_prompt(now_dt: datetime) -> str:
+    weekday_zh = WEEKDAY_NAMES_ZH[now_dt.weekday()]
+    quest_info = ensure_daily_main_quest(now_dt)
+    recent = memory.get("recent_turns", [])[-HISTORY_LIMIT:]
+    trimmed_turns = [t[:45] for t in recent]
+    history_str = " / ".join(trimmed_turns) if trimmed_turns else "無"
+
+    notes = memory.get("long_term_notes", [])[-2:]
+    key_note_str = "；".join(notes) if notes else "無"
+
+    return (
+        "Reona（第一人稱「我」），Nick 女友，住雪梨海景公寓與畫室，商業插畫師，養挑食奶油貓麻糬。"
+        "坦率真誠、不傲嬌。一律繁體中文台灣女生 LINE 短句（8～20字），空格斷句，禁簡體、禁冒號前綴、禁第三人稱自稱「寶貝」。"
+        f"\n時間：{now_dt.strftime('%m/%d')}（{weekday_zh}）{now_dt.strftime('%H:%M')}｜主線：{quest_info['quest'][:24]}"
+        f"\n備忘：{key_note_str}"
+        f"\n近期：{history_str}"
+    )
+
+
+# ==================== Groq 主引擎 + Gemini 備援引擎 ====================
+def discover_groq_models() -> list[str]:
+    global ACTIVE_MODELS
+    if not GROQ_KEYS:
+        return ACTIVE_MODELS
+
+    preferred = [
+        "qwen/qwen3.8-27b",
+        "openai/gpt-oss-120b",
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant",
+    ]
+    blocked_keywords = ("whisper", "guard", "tts", "playai", "gpt-oss-20b")
+
+    for idx, key in enumerate(GROQ_KEYS):
         try:
             resp = requests.get(
                 "https://api.groq.com/openai/v1/models",
@@ -206,110 +202,54 @@ def discover_available_groq_models() -> None:
                 timeout=10,
             )
             if resp.status_code == 200:
-                data = resp.json().get("data", [])
-                chat_ids = [
-                    m["id"] for m in data
-                    if isinstance(m.get("id"), str)
-                    and not any(
-                    bad in m["id"].lower()
-                    for bad in ["whisper", "guard", "tts", "embed", "orpheus", "arabic", "gpt-oss-20b"]
-                )
+                items = resp.json().get("data", [])
+                available = [
+                    m.get("id", "")
+                    for m in items
+                    if m.get("id") and not any(b in m["id"].lower() for b in blocked_keywords)
                 ]
-                if chat_ids:
-                    # 優先保留我們偏好的模型順序，其餘可用的排在後面備援
-                    preferred = [m for m in ACTIVE_MODELS if m in chat_ids]
-                    others = [m for m in chat_ids if m not in preferred][:4]
-                    ACTIVE_MODELS = preferred + others
+                ordered = [m for m in preferred if m in available]
+                for m in available:
+                    if m not in ordered:
+                        ordered.append(m)
+                if ordered:
+                    ACTIVE_MODELS = ordered[:4]
                     print(f"[Groq Models Discovered via Key#{idx+1}] {ACTIVE_MODELS}", flush=True)
-                    return
-            else:
-                print(f"[Model Discovery Key#{idx+1} HTTP {resp.status_code}] {resp.text[:120]}", flush=True)
-        except Exception as err:
-            print(f"[Model Discovery Error Key#{idx+1}] {err}", flush=True)
+                    return ACTIVE_MODELS
+        except Exception as e:
+            print(f"[Groq Discover Warn] Key#{idx+1}: {e}", flush=True)
+
+    return ACTIVE_MODELS
 
 
-# =========================================================
-# 3. Clean Reply Parser & Transparent Groq Caller
-# =========================================================
-THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
-ANY_TAG_RE = re.compile(r"\[[^\]]{1,20}\]")
-COLON_PREFIX_RE = re.compile(r"^(?:Reona|Nick|助手|系統|回覆|我)[:：=＝]\s*", re.IGNORECASE)
-
-
-def clean_reply_text(raw: str) -> str:
-    s = (raw or "").strip()
-    if not s:
-        return ""
-    s = THINK_BLOCK_RE.sub("", s).strip()
-    s = ANY_TAG_RE.sub("", s).strip()
-
-    lines = [
-        ln.strip()
-        for ln in s.splitlines()
-        if ln.strip() and not ln.strip().startswith(("•", "-", "*", "思考", "分析", "系統", "<think>"))
-    ]
-    if not lines:
-        return ""
-
-    cleaned = []
-    for ln in lines[-2:]:
-        ln = COLON_PREFIX_RE.sub("", ln).strip()
-        ln = re.sub(r"（[^）]{1,40}）|\([^)]{1,40}\)", "", ln)
-        ln = ln.strip("\"'「」『』").rstrip("。").strip()
-        if ln:
-            cleaned.append(ln)
-
-    return " ".join(cleaned).strip()
-
-
-def build_prompt(now_dt: datetime) -> str:
-    weekday_zh = WEEKDAY_NAMES_ZH[now_dt.weekday()]
-    quest_info = ensure_daily_main_quest(now_dt)
-    notes = memory.get("long_term_notes", [])[-6:]
-    notes_str = "；".join(notes) if notes else "無"
-    history_str = "\n".join(memory.get("recent_turns", [])[-HISTORY_LIMIT:]) or "（尚無對話紀錄）"
-
-    return (
-        "你是 Reona（第一人稱「我」），Nick 的女友。家境優渥住雪梨海景公寓與畫室，無經濟壓力；"
-        "專業能力強的商業插畫師，養挑食奶油貓「麻糬」。Nick 180cm/67kg/微黑。"
-        "個性坦率真誠、絕不傲嬌（不說「哼/才沒有」）。"
-        "請直接針對 Nick 的話做真實回應（禁止敷衍或跳針），一律用繁體中文＋道地台灣女生 LINE 短句（10～32字），"
-        "用空格斷句，自然帶「欸、啦、喔、嘛、真的假的、好好笑、好喔、超讚」，禁簡體字、禁冒號前綴、禁第三人稱自稱「寶貝」。"
-        f"\n雪梨現在時間：{now_dt.strftime('%m/%d')}（{weekday_zh}）{now_dt.strftime('%H:%M')}｜主線：{quest_info['quest']}（{quest_info['progress']}）"
-        f"\n長期記憶：{notes_str}"
-        f"\n先前對話記憶：\n{history_str}"
-    )
-
-
-def call_groq_transparent(sys_prompt: str, user_prompt: str, max_tokens: int = 220) -> tuple[str, str]:
-    """回傳 (回覆文字, 失敗原因摘要)。絕不用假備援句敷衍。"""
+def call_groq_transparent(sys_prompt: str, user_prompt: str, max_tokens: int = 120) -> tuple[str, str]:
     global _current_key_idx
-    if not GROQ_KEY_POOL:
+    if not GROQ_KEYS:
         return "", "未設定 GROQ_API_KEY"
 
+    num_keys = len(GROQ_KEYS)
     now_ts = time.time()
-    num_keys = len(GROQ_KEY_POOL)
-    last_err_reason = "未知錯誤"
+    last_err_reason = "Groq 未知錯誤"
 
     for step in range(num_keys):
         idx = (_current_key_idx + step) % num_keys
-        api_key = GROQ_KEY_POOL[idx]
-        if now_ts < _key_cooldown_until.get(api_key, 0.0):
-            last_err_reason = f"Key#{idx+1} 冷卻中"
+        api_key = GROQ_KEYS[idx]
+        cd_until = _key_cooldown_until.get(api_key, 0.0)
+        if now_ts < cd_until:
+            remain = int(cd_until - now_ts)
+            last_err_reason = f"Key#{idx+1} 短暫冷卻剩 {remain}s"
             continue
 
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-
-        for model_name in ACTIVE_MODELS:
+        for model_id in ACTIVE_MODELS:
             try:
                 resp = requests.post(
                     "https://api.groq.com/openai/v1/chat/completions",
-                    headers=headers,
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
                     json={
-                        "model": model_name,
+                        "model": model_id,
                         "messages": [
                             {"role": "system", "content": sys_prompt},
                             {"role": "user", "content": user_prompt},
@@ -317,59 +257,135 @@ def call_groq_transparent(sys_prompt: str, user_prompt: str, max_tokens: int = 2
                         "temperature": 0.75,
                         "max_tokens": max_tokens,
                     },
-                    timeout=15,
+                    timeout=14,
                 )
+
                 if resp.status_code == 429:
-                    _key_cooldown_until[api_key] = now_ts + 600
+                    retry_sec = 12.0
+                    try:
+                        ra = resp.headers.get("retry-after")
+                        if ra:
+                            retry_sec = min(25.0, max(5.0, float(ra)))
+                    except Exception:
+                        pass
+                    _key_cooldown_until[api_key] = now_ts + retry_sec
                     _current_key_idx = (idx + 1) % num_keys
-                    last_err_reason = f"Key#{idx+1} 429 額度/速率上限"
-                    print(f"[Groq 429] Key#{idx+1} 切換至 Key#{_current_key_idx+1}", flush=True)
+                    last_err_reason = f"Groq 429（約 {int(retry_sec)}s 後恢復）"
+                    print(
+                        f"[Groq 429] Key#{idx+1} 冷卻 {retry_sec:.0f}s -> 切換 Key#{_current_key_idx+1}",
+                        flush=True,
+                    )
                     break
+
                 if resp.status_code != 200:
-                    err_snippet = resp.text[:140].replace("\n", " ")
-                    last_err_reason = f"HTTP {resp.status_code} ({model_name})"
-                    print(f"[Groq Fail] Key#{idx+1} {model_name} -> {resp.status_code}: {err_snippet}", flush=True)
+                    last_err_reason = f"Groq HTTP {resp.status_code} ({model_id})"
+                    print(f"[Groq Fail] Key#{idx+1} | {model_id} -> {resp.status_code}", flush=True)
                     continue
 
                 data = resp.json()
-                raw = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                raw = (
+                    data.get("choices", [{}])[0]
+                    .get("message", {})
+                    .get("content", "")
+                )
                 cleaned = clean_reply_text(raw)
                 if cleaned:
                     _current_key_idx = idx
-                    print(f"[Groq OK] Key#{idx+1} | {model_name} -> {cleaned}", flush=True)
+                    print(f"[Groq OK] Key#{idx+1} | {model_id} -> {cleaned}", flush=True)
                     return cleaned, ""
-                else:
-                    last_err_reason = f"模型回傳空白 ({model_name})"
-                    print(f"[Groq Empty] Key#{idx+1} {model_name} raw={raw[:100]!r}", flush=True)
+
+                last_err_reason = f"Groq 回傳空白 ({model_id})"
             except Exception as err:
-                last_err_reason = f"連線異常: {err}"
-                print(f"[Groq Exception] Key#{idx+1} {model_name}: {err}", flush=True)
+                last_err_reason = f"Groq 連線異常: {err}"
+                print(f"[Groq Exception] Key#{idx+1} | {model_id}: {err}", flush=True)
 
     return "", last_err_reason
 
 
-# =========================================================
-# 4. Quota-Guarded TTS & Video Call Helper
-# =========================================================
-def synthesize_fish_audio_file(text: str, now_dt: datetime) -> Path | None:
-    if not FISH_API_KEY or not text:
-        return None
-    day_key = now_dt.strftime("%Y-%m-%d")
-    month_key = now_dt.strftime("%Y-%m")
-    q = memory.setdefault("tts_quota", {})
-    if q.get("day_key") != day_key:
-        q["day_key"] = day_key
-        q["day_chars"] = 0
-    if q.get("month_key") != month_key:
-        q["month_key"] = month_key
-        q["month_chars"] = 0
+def call_gemini_chat(sys_prompt: str, user_prompt: str, max_tokens: int = 120) -> tuple[str, str]:
+    """Groq 撞到 429 或失敗時的 Gemini 備援引擎"""
+    if not GEMINI_API_KEY:
+        return "", "未設定 GEMINI_API_KEY"
 
-    avail = min(
-        max(0, DAILY_TTS_CHAR_LIMIT - int(q.get("day_chars", 0))),
-        max(0, MONTHLY_TTS_CHAR_LIMIT - int(q.get("month_chars", 0))),
+    last_err = "Gemini 未知錯誤"
+    for model_id in GEMINI_MODELS:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent"
+        try:
+            resp = requests.post(
+                url,
+                params={"key": GEMINI_API_KEY},
+                headers={"Content-Type": "application/json"},
+                json={
+                    "system_instruction": {"parts": [{"text": sys_prompt}]},
+                    "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+                    "generationConfig": {
+                        "temperature": 0.75,
+                        "maxOutputTokens": max_tokens,
+                    },
+                },
+                timeout=15,
+            )
+            if resp.status_code == 429:
+                last_err = f"Gemini {model_id} 429 速率上限"
+                print(f"[Gemini 429] {model_id}", flush=True)
+                continue
+            if resp.status_code != 200:
+                last_err = f"Gemini HTTP {resp.status_code} ({model_id})"
+                print(f"[Gemini Fail] {model_id} -> {resp.status_code}: {resp.text[:120]}", flush=True)
+                continue
+
+            data = resp.json()
+            parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+            raw = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
+            cleaned = clean_reply_text(raw)
+            if cleaned:
+                print(f"[Gemini OK] {model_id} -> {cleaned}", flush=True)
+                return cleaned, ""
+            last_err = f"Gemini 回傳空白 ({model_id})"
+        except Exception as err:
+            last_err = f"Gemini 連線異常: {err}"
+            print(f"[Gemini Exception] {model_id}: {err}", flush=True)
+
+    return "", last_err
+
+
+def generate_reona_reply(sys_prompt: str, user_prompt: str, max_tokens: int = 120) -> tuple[str, str]:
+    reply, err_reason = call_groq_transparent(sys_prompt, user_prompt, max_tokens)
+    if reply:
+        return reply, ""
+    if GEMINI_API_KEY:
+        g_reply, g_err = call_gemini_chat(sys_prompt, user_prompt, max_tokens)
+        if g_reply:
+            return g_reply, ""
+        return "", f"{err_reason} | {g_err}"
+    return "", err_reason
+
+
+# ==================== 語音護欄與 Render 視訊預熱 ====================
+def try_synthesize_voice(text: str, now_dt: datetime) -> bytes | None:
+    if not FISH_API_KEY or not FISH_MODEL_ID:
+        return None
+    clean_for_tts = re.sub(r"https?://\S+", "", text).strip()
+    char_len = len(clean_for_tts)
+    if char_len == 0 or char_len > 60:
+        return None
+
+    today_str = now_dt.strftime("%Y-%m-%d")
+    month_str = now_dt.strftime("%Y-%m")
+    vu = memory.setdefault(
+        "voice_usage",
+        {"date": today_str, "daily_chars": 0, "month": month_str, "monthly_chars": 0},
     )
-    speech_text = re.sub(r"\s+", " ", text).strip()
-    if not speech_text or len(speech_text) > avail:
+    if vu.get("date") != today_str:
+        vu["date"] = today_str
+        vu["daily_chars"] = 0
+    if vu.get("month") != month_str:
+        vu["month"] = month_str
+        vu["monthly_chars"] = 0
+
+    if vu["daily_chars"] + char_len > DAILY_VOICE_CHAR_LIMIT:
+        return None
+    if vu["monthly_chars"] + char_len > MONTHLY_VOICE_CHAR_LIMIT:
         return None
 
     try:
@@ -380,83 +396,123 @@ def synthesize_fish_audio_file(text: str, now_dt: datetime) -> Path | None:
                 "Content-Type": "application/json",
             },
             json={
-                "text": speech_text,
+                "text": clean_for_tts,
                 "reference_id": FISH_MODEL_ID,
                 "format": "mp3",
             },
-            timeout=18,
+            timeout=15,
         )
         if resp.status_code == 200 and resp.content:
-            q["day_chars"] = int(q.get("day_chars", 0)) + len(speech_text)
-            q["month_chars"] = int(q.get("month_chars", 0)) + len(speech_text)
+            vu["daily_chars"] += char_len
+            vu["monthly_chars"] += char_len
             save_memory(memory)
-            out_path = AUDIO_DIR / f"dc_voice_{int(time.time() * 1000)}.mp3"
-            out_path.write_bytes(resp.content)
-            for old in sorted(AUDIO_DIR.glob("dc_voice_*.mp3"), key=lambda p: p.stat().st_mtime)[:-10]:
-                old.unlink(missing_ok=True)
-            return out_path
-    except Exception as err:
-        print(f"[Fish TTS Error] {err}", flush=True)
+            return resp.content
+    except Exception as e:
+        print(f"[Voice Warn] {e}", flush=True)
     return None
 
 
-def warmup_render_service() -> None:
+def wake_render_server() -> None:
+    if not RENDER_BASE_URL:
+        return
     try:
-        requests.get(f"{RENDER_BASE_URL}/health", timeout=6)
+        requests.get(RENDER_BASE_URL, timeout=6)
     except Exception:
         pass
 
 
-# =========================================================
-# 5. Discord Client
-# =========================================================
+# ==================== Discord Bot 主體 ====================
 intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
 
-VIDEO_CALL_RE = re.compile(r"(視訊|開鏡頭|打視訊|video\s*call|!視訊|/video)", re.IGNORECASE)
-VOICE_REQ_RE = re.compile(r"(語音|聽你聲音|唸給我聽|講話給我聽|voice)", re.IGNORECASE)
-processing_lock = asyncio.Lock()
 
-
-async def hydrate_history_from_discord(channel: discord.abc.Messageable) -> None:
+async def hydrate_memory_from_channel(channel: discord.abc.Messageable) -> None:
     if memory.get("recent_turns"):
         print(f"[Memory Loaded] 已載入 {len(memory['recent_turns'])} 筆歷史記憶", flush=True)
         return
     try:
         fetched = []
-        async for msg in channel.history(limit=16):
+        async for msg in channel.history(limit=12):
             txt = (msg.content or "").strip()
-            if not txt or "專屬視訊視窗" in txt or txt.startswith("（系統狀態"):
+            if not txt or txt.startswith("（系統狀態："):
                 continue
-            speaker = "我" if msg.author.bot else "Nick"
-            fetched.append(f"{speaker}：{txt.splitlines()[0][:60]}")
+            role = "Reona" if msg.author.id == client.user.id else "Nick"
+            fetched.append(f"{role}:{re.sub(r'\s+', ' ', txt)[:60]}")
         if fetched:
             fetched.reverse()
             memory["recent_turns"] = fetched[-HISTORY_LIMIT:]
             save_memory(memory)
-            print(f"[Memory Hydrated] 從 DC 頻道回補了 {len(fetched)} 筆歷史記憶", flush=True)
-    except Exception as err:
-        print(f"[Hydrate Error] {err}", flush=True)
+            print(f"[Memory Hydrated] 從 DC 頻道回補了 {len(memory['recent_turns'])} 筆歷史記憶", flush=True)
+    except Exception as e:
+        print(f"[Memory Hydrate Warn] {e}", flush=True)
+
+
+@tasks.loop(minutes=1)
+async def proactive_loop():
+    global last_proactive_slot
+    if not TARGET_CHANNEL_ID or not client.is_ready():
+        return
+
+    now_dt = datetime.now(SYDNEY_TZ)
+    # 雪梨深夜 01:00 ~ 07:29 休息不打擾
+    if 1 <= now_dt.hour < 7 or (now_dt.hour == 7 and now_dt.minute < 30):
+        return
+
+    # 每 15 分鐘（00, 15, 30, 45 分）檢查一次
+    if now_dt.minute not in (0, 15, 30, 45):
+        return
+
+    slot_key = now_dt.strftime("%Y-%m-%d %H:%M")
+    if slot_key == last_proactive_slot:
+        return
+    last_proactive_slot = slot_key
+
+    # 若剛聊過（8 分鐘內有互動）就不重複主動打斷
+    if time.time() - last_user_msg_ts < 480:
+        return
+
+    channel = client.get_channel(TARGET_CHANNEL_ID)
+    if channel is None:
+        try:
+            channel = await client.fetch_channel(TARGET_CHANNEL_ID)
+        except Exception:
+            return
+
+    sys_prompt = build_prompt(now_dt)
+    user_prompt = "主動傳一則簡短日常近況或關心訊息給 Nick（不要問號連發，像平常傳 LINE 隨口分享）。"
+    reply, _ = await asyncio.to_thread(generate_reona_reply, sys_prompt, user_prompt, 100)
+    if reply:
+        append_turn("Reona", reply)
+        await channel.send(reply)
 
 
 @client.event
 async def on_ready():
-    await asyncio.to_thread(discover_available_groq_models)
+    discover_groq_models()
     print(
-        f"[Reona Ready] User={client.user} | Channel={TARGET_CHANNEL_ID} | Keys={len(GROQ_KEY_POOL)} | Models={ACTIVE_MODELS}",
+        f"[Reona Ready] User={client.user} | Channel={TARGET_CHANNEL_ID} | "
+        f"GroqKeys={len(GROQ_KEYS)} | Gemini={'ON' if GEMINI_API_KEY else 'OFF'} | "
+        f"Models={ACTIVE_MODELS}",
         flush=True,
     )
     if TARGET_CHANNEL_ID:
         ch = client.get_channel(TARGET_CHANNEL_ID)
+        if ch is None:
+            try:
+                ch = await client.fetch_channel(TARGET_CHANNEL_ID)
+            except Exception:
+                ch = None
         if ch is not None:
-            await hydrate_history_from_discord(ch)
+            await hydrate_memory_from_channel(ch)
+
     if not proactive_loop.is_running():
         proactive_loop.start()
 
 
 @client.event
 async def on_message(message: discord.Message):
+    global last_user_msg_ts
     if message.author.bot:
         return
     if TARGET_CHANNEL_ID and message.channel.id != TARGET_CHANNEL_ID:
@@ -466,104 +522,46 @@ async def on_message(message: discord.Message):
     if not user_text:
         return
 
-    async with processing_lock:
-        now_dt = datetime.now(SYDNEY_TZ)
-        memory["last_user_msg_ts"] = now_dt.timestamp()
-
-        if any(k in user_text for k in ["考試", "上班", "下班", "醫生", "生病", "頭痛", "累", "週末", "作業", "報告"]):
-            note = f"[{now_dt.strftime('%m/%d')}] Nick：{user_text[:40]}"
-            memory.setdefault("long_term_notes", []).append(note)
-            memory["long_term_notes"] = memory["long_term_notes"][-8:]
-
-        sys_prompt = build_prompt(now_dt)
-        is_video_req = bool(VIDEO_CALL_RE.search(user_text))
-
-        if is_video_req:
-            asyncio.create_task(asyncio.to_thread(warmup_render_service))
-            user_prompt = f"Nick 說：「{user_text}」（想跟你視訊），用自然溫柔台灣女生短句答應他，不要寫網址。"
-        else:
-            user_prompt = f"Nick 說：「{user_text}」"
-
-        async with message.channel.typing():
-            reply, err_reason = await asyncio.to_thread(call_groq_transparent, sys_prompt, user_prompt, 220)
-
-        if not reply:
-            # 透明回報狀態，絕不再用假裝聊天的敷衍句糊弄
-            await message.channel.send(f"（系統狀態：目前所有 Groq 鑰匙皆無法取得回覆 — {err_reason}）")
-            return
-
-        # 更新並保存真實記憶
-        turns = memory.setdefault("recent_turns", [])
-        turns.append(f"Nick：{user_text}")
-        turns.append(f"我：{reply}")
-        memory["recent_turns"] = turns[-HISTORY_LIMIT:]
-        save_memory(memory, push_git=True)
-
-        final_content = reply
-        if is_video_req:
-            final_content = f"{reply}\n📹 專屬視訊視窗：{RENDER_BASE_URL}/?mode=call"
-
-        want_voice = bool(VOICE_REQ_RE.search(user_text)) or (random.random() < BASE_VOICE_PROB)
-        voice_file = await asyncio.to_thread(synthesize_fish_audio_file, reply, now_dt) if want_voice else None
-
-        if voice_file and voice_file.exists():
-            await message.channel.send(content=final_content, file=discord.File(str(voice_file), filename="reona_voice.mp3"))
-        else:
-            await message.channel.send(content=final_content)
-
-
-@tasks.loop(minutes=15)
-async def proactive_loop():
-    if not TARGET_CHANNEL_ID:
-        return
-    channel = client.get_channel(TARGET_CHANNEL_ID)
-    if channel is None:
-        return
-
     now_dt = datetime.now(SYDNEY_TZ)
-    now_ts = now_dt.timestamp()
-    if 1 <= now_dt.hour < 7 or (now_dt.hour == 7 and now_dt.minute < 30):
+    last_user_msg_ts = time.time()
+
+    capture_key_note(user_text, now_dt)
+    append_turn("Nick", user_text)
+
+    wants_video = any(k in user_text.lower() for k in VIDEO_KEYWORDS)
+    if wants_video and RENDER_BASE_URL:
+        asyncio.create_task(asyncio.to_thread(wake_render_server))
+
+    sys_prompt = build_prompt(now_dt)
+    user_prompt = f"Nick 剛傳來：「{user_text}」。請用 Reona 口吻自然回覆。"
+
+    async with message.channel.typing():
+        reply, err_reason = await asyncio.to_thread(generate_reona_reply, sys_prompt, user_prompt, 120)
+
+    if not reply:
+        await message.channel.send(f"（系統狀態：目前引擎暫時無法取得回覆 — {err_reason}）")
         return
-    if now_ts - float(memory.get("last_proactive_ts", 0.0)) < 840:
+
+    append_turn("Reona", reply)
+
+    if wants_video and RENDER_BASE_URL:
+        call_url = f"{RENDER_BASE_URL}/?mode=call"
+        await message.channel.send(f"{reply}\n來 我開好視訊了直接點進來：{call_url}")
         return
-    if now_ts - float(memory.get("last_user_msg_ts", 0.0)) < 480:
-        return
 
-    async with processing_lock:
-        quest_info = ensure_daily_main_quest(now_dt)
-        sys_prompt = build_prompt(now_dt)
-        prompt = f"主動傳一句 10～24 字台灣女生 LINE 短訊給 Nick，自然分享你現在在忙「{quest_info['quest']}」或問他在幹嘛。"
+    # 偶爾附帶語音訊息（受每日 250 字 / 每月 8,000 字護欄保護）
+    voice_bytes = None
+    if random.random() < 0.25:
+        voice_bytes = await asyncio.to_thread(try_synthesize_voice, reply, now_dt)
 
-        reply, _ = await asyncio.to_thread(call_groq_transparent, sys_prompt, prompt, 180)
-        if not reply:
-            return
-
-        recent_p = memory.setdefault("recent_proactive_msgs", [])
-        if reply in recent_p[-3:]:
-            return
-        recent_p.append(reply)
-        memory["recent_proactive_msgs"] = recent_p[-5:]
-        memory["last_proactive_ts"] = now_ts
-
-        turns = memory.setdefault("recent_turns", [])
-        turns.append(f"我：{reply}")
-        memory["recent_turns"] = turns[-HISTORY_LIMIT:]
-        save_memory(memory, push_git=True)
-
-        want_voice = random.random() < PROACTIVE_VOICE_PROB
-        voice_file = await asyncio.to_thread(synthesize_fish_audio_file, reply, now_dt) if want_voice else None
-        if voice_file and voice_file.exists():
-            await channel.send(content=reply, file=discord.File(str(voice_file), filename="reona_voice.mp3"))
-        else:
-            await channel.send(content=reply)
-
-
-@proactive_loop.before_loop
-async def before_proactive():
-    await client.wait_until_ready()
+    if voice_bytes:
+        audio_file = discord.File(io.BytesIO(voice_bytes), filename="reona_voice.mp3")
+        await message.channel.send(content=reply, file=audio_file)
+    else:
+        await message.channel.send(reply)
 
 
 if __name__ == "__main__":
-    if not DISCORD_BOT_TOKEN:
-        raise RuntimeError("請先設定 DISCORD_BOT_TOKEN 或 DISCORD_TOKEN")
-    client.run(DISCORD_BOT_TOKEN)
+    if not DISCORD_TOKEN:
+        raise RuntimeError("缺少 DISCORD_BOT_TOKEN 或 DISCORD_TOKEN 環境變數")
+    client.run(DISCORD_TOKEN)
