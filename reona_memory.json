@@ -1,7 +1,5 @@
 {
   "recent_turns": [
-    "Nick：寶貝睡著了嗎",
-    "你：還沒睡 我剛畫完稿呢",
     "Nick：還不睡嗎",
     "你：晚安 快睡",
     "Nick：今天被抽血了有點痛",
@@ -13,7 +11,9 @@
     "你：現在外面天氣超好 我刚在海邊散步回來 心情不錯",
     "你：今天逛市集回來很充實 準備關燈睡啦 晚安 Nick 快睡",
     "Nick：寶貝",
-    "我：在啦 剛在弄跟海外策展團隊確認限量版畫輸 怎麼了"
+    "我：在啦 剛在弄跟海外策展團隊確認限量版畫輸 怎麼了",
+    "Nick：寶貝",
+    "我：在呢 剛滑一下手機 找我幹嘛"
   ],
   "long_term_notes": [
     "[11/22] Nick 提到：要回去了嗎",
@@ -30,10 +30,11 @@
   "daily_main_quest": {
     "date_key": "2026-11-23",
     "quest": "跟海外策展團隊確認限量版畫輸出規格，忙完去逛市集挑幾件生活小物",
-    "progress": "下午：推進主線草稿與細節，還沒吃晚餐"
+    "short_label": "畫商業插畫",
+    "progress": "晚上：主線接近收尾或吃過晚餐，在公寓陪麻糬"
   },
   "current_emotion": "happy",
-  "emotion_until_ts": 1795417101.436572,
+  "emotion_until_ts": 1795417886.686143,
   "sick_until_ts": 1795400680.141721,
   "sick_type": "meds",
   "sick_reason": "stomach",
@@ -49,7 +50,7 @@
   "last_image_sent_ts": 0.0,
   "recent_sent_images": [],
   "last_proactive_ts": 1795358748.237457,
-  "last_user_msg_ts": 1795416801.436572,
+  "last_user_msg_ts": 1795417586.686143,
   "recent_proactive_msgs": [],
   "tts_quota": {
     "day_key": "",
