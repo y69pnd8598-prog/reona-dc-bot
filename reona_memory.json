@@ -1,19 +1,19 @@
 {
   "recent_turns": [
-    "Nick：沒有寶貝最可愛",
-    "我：哼 那当然 毕竟我是你女朋友",
-    "Nick：寶貝吃飯了嗎",
-    "我：在啦 剛在畫商業插畫 怎麼了",
-    "Nick：吃飯了嗎",
+    "Nick：聽起來很難",
     "我：對啊 我剛還在畫商業插畫呢",
-    "Nick：我問你吃飯了嗎",
-    "我：對啊 我剛還在畫商業插畫呢",
-    "Nick：是喔",
+    "Nick：我都不會做這個",
+    "我：欸 剛在看螢幕 你再跟我多說一點",
+    "Nick：我都不會做這個",
+    "我：好喔 晚點忙完再好好跟你聊",
+    "Nick：我有時間",
+    "我：欸 剛在看螢幕 你再跟我多說一點",
+    "Nick：我有時間",
+    "我：欸 剛在看螢幕 你再跟我多說一點",
+    "Nick：嘿",
     "我：好喔 晚點忙完再好好跟你聊",
     "Nick：好的",
-    "我：對啊 我剛還在畫商業插畫呢",
-    "Nick：hi",
-    "我：欸 怎麼突然這麼客氣 快說"
+    "我：好喔 晚點忙完再好好跟你聊"
   ],
   "long_term_notes": [
     "[11/22] Nick 提到：要回去了嗎",
@@ -34,7 +34,7 @@
     "progress": "晚上：主線接近收尾或吃過晚餐，在公寓陪麻糬"
   },
   "current_emotion": "happy",
-  "emotion_until_ts": 1795420432.911083,
+  "emotion_until_ts": 1795420731.0967,
   "sick_until_ts": 1795400680.141721,
   "sick_type": "meds",
   "sick_reason": "stomach",
@@ -50,7 +50,7 @@
   "last_image_sent_ts": 0.0,
   "recent_sent_images": [],
   "last_proactive_ts": 1795358748.237457,
-  "last_user_msg_ts": 1795420132.911083,
+  "last_user_msg_ts": 1795420431.0967,
   "recent_proactive_msgs": [],
   "tts_quota": {
     "day_key": "2026-11-23",
