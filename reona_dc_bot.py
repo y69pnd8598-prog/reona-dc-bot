@@ -64,9 +64,8 @@ PROACTIVE_VOICE_PROB = 0.05
 
 # 預設候選模型，開機時還會自動向 Groq API 查詢實際可用模型來補強
 ACTIVE_MODELS = [
-    "openai/gpt-oss-20b",
     "qwen/qwen3.8-27b",
-    "meta-llama/llama-4-scout-17b-16e-instruct",
+    "openai/gpt-oss-120b",
 ]
 
 SYDNEY_TZ = ZoneInfo("Australia/Sydney")
@@ -211,7 +210,10 @@ def discover_available_groq_models() -> None:
                 chat_ids = [
                     m["id"] for m in data
                     if isinstance(m.get("id"), str)
-                    and not any(bad in m["id"].lower() for bad in ["whisper", "guard", "tts", "embed"])
+                    and not any(
+                    bad in m["id"].lower()
+                    for bad in ["whisper", "guard", "tts", "embed", "orpheus", "arabic", "gpt-oss-20b"]
+                )
                 ]
                 if chat_ids:
                     # 優先保留我們偏好的模型順序，其餘可用的排在後面備援
