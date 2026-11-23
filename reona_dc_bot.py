@@ -4,21 +4,45 @@ import json
 import time
 import random
 import asyncio
-import subprocess
+from pathlib import Path
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 
+import requests
 import discord
 from discord.ext import tasks
-from groq import AsyncGroq
-
 
 # =========================================================
-# 1. 基礎設定與精簡穩定模型清單
+# 1. Configuration (環境變數優先，也可直接填入預設值)
 # =========================================================
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
+DISCORD_BOT_TOKEN = (
+    os.getenv("DISCORD_BOT_TOKEN")
+    or os.getenv("DISCORD_TOKEN")
+    or "在這裡貼上你的_DC_BOT_TOKEN"
+).strip()
+
+TARGET_CHANNEL_ID = int(
+    (os.getenv("DISCORD_CHANNEL_ID") or "0").strip() or "0"
+)
+
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
-DEFAULT_CHANNEL_ID = int((os.getenv("DISCORD_CHANNEL_ID") or "0").strip() or "0")
+FISH_API_KEY = os.getenv("FISH_API_KEY", "").strip()
+FISH_MODEL_ID = os.getenv("FISH_MODEL_ID", "7f92f8afb8ec43bf81429cc1c9199cb1").strip()
+
+# 你的 Render 網頁網址（用於預熱與發送 ?mode=call 視訊連結）
+RENDER_BASE_URL = os.getenv(
+    "RENDER_BASE_URL", "https://reona-cloud-companion.onrender.com"
+).rstrip("/")
+
+DAILY_TTS_CHAR_LIMIT = 250
+MONTHLY_TTS_CHAR_LIMIT = 8000
+
+# 語音與傳圖機率設定（克制不洗版、守住額度）
+BASE_VOICE_PROB = 0.20      # 一般對話發語音機率 20%
+HIGH_VOICE_PROB = 0.60      # 撒嬌/想你/委屈/報平安發語音機率 60%
+BASE_IMAGE_PROB = 0.15      # 一般生活分享附圖機率 15%
+TOPIC_IMAGE_PROB = 0.40     # 明確聊到貓咪/咖啡/海邊/畫稿時附圖機率 40%
+IMAGE_COOLDOWN_SEC = 1200   # 兩次傳圖至少間隔 20 分鐘
 
 TEXT_MODELS = [
     os.getenv("GROQ_TEXT_MODEL", "").strip(),
@@ -28,75 +52,43 @@ TEXT_MODELS = [
 ]
 TEXT_MODELS = [m for m in dict.fromkeys(TEXT_MODELS) if m]
 
-VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "").strip() or "meta-llama/llama-4-scout-17b-16e-instruct"
-
 SYDNEY_TZ = ZoneInfo("Australia/Sydney")
-START_TIME = time.time()
-RELAY_AFTER_SECONDS = 5 * 3600 + 45 * 60  # 5 小時 45 分鐘自動接力
-PROACTIVE_COOLDOWN_SECONDS = int((os.getenv("PROACTIVE_COOLDOWN_SECONDS") or "5400").strip() or "5400")  # 一般瑣事冷卻 1.5 小時
-INCIDENT_COOLDOWN_SECONDS = int(3.5 * 3600)  # 突發狀況／吃壞肚子／小委屈冷卻 3.5 小時
-HISTORY_LIMIT = 30
-
-MEMORY_FILE = "reona_memory.json"
 WEEKDAY_NAMES_ZH = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
+HISTORY_LIMIT = 24
 
-# 一般日常瑣事與陽光生活分享池（道地台灣女生日常口吻）
-RANDOM_PROACTIVE_TOPICS = [
-    # --- 咖啡廳踩點與畫圖日常 ---
-    "剛在雪梨找到一間採光超棒的咖啡廳，點了杯拿鐵邊曬太陽邊畫圖，超舒服",
-    "今天坐咖啡廳窗邊趕稿，剛把一張插畫配色定下來，超有成就感",
-    "剛把案子檔案交出去了，決定出門買個小甜點吃一下",
-    "帶著平板跟零食跑來公園長椅吹風畫草稿，雪梨今天天氣超讚",
-    "畫圖畫到一個段落伸個懶腰，看窗外天氣這麼好心情超棒",
+BASE_DIR = Path(__file__).resolve().parent
+MEMORY_FILE = BASE_DIR / "web_reona_memory.json"
+AUDIO_DIR = BASE_DIR / "generated_audio"
+IMAGES_DIR = BASE_DIR / "images"
 
-    # --- 逛市集、海邊散步與生活小發現 ---
-    "跑來逛雪梨的週末市集，看到超多可愛小物跟花束，心情超好",
-    "剛買了一束小花帶回家插在桌上，看著房間心情都變好了",
-    "傍晚跑來海邊散步吹風看夕陽，天空顏色超美忍不住想傳給你看",
-    "今天化了淡妝穿新衣服出門逛街，心情很好順手敲你一下",
-    "剛剛在路邊看到一隻超可愛的黃金獵犬對我搖尾巴，差點被萌死",
-    "買了一個木質調香氛蠟燭回家點，整個房間香香的超放鬆",
-    "剛剛在咖啡廳聽到一首超好聽的歌，馬上偷開手機辨識存歌單",
-
-    # --- 美食探店與生活小吐槽 ---
-    "剛吃到一家超讚的早午餐可頌，酥到不行超幸福",
-    "跟朋友約出來喝下午茶吃甜點，狂拍照拍超開心",
-    "今天心血來潮自己做了早午餐擺盤，突然覺得自己超賢慧",
-    "天氣超好忍不住買了杯冰拿鐵邊走邊喝，超chill",
-    "點餐時特地跟店員說不要香菜跟紅蘿蔔，全部吃光光超滿足",
-    "超扯 剛點外送結果店家忘記附醬料，對著餐點發呆三秒好好笑",
-    "出門散步走到一半才發現耳機完全沒電，好煩喔只好聽路邊風聲",
-
-    # --- 貓咪「麻糬」日常 ---
-    "剛回到家麻糬就衝過來蹭腳翻肚討摸，可愛到不行",
-    "麻糬在房間陽光底下攤成一坨奶油麻糬睡翻，超呆萌",
-    "麻糬剛剛在房間突然暴衝跑酷，傻眼又好好笑",
-    "幫麻糬梳毛梳出一大球毛，跟牠玩到快笑死",
-    "麻糬剛剛討罐頭失敗，現在背對我坐角落生悶氣，背影超好笑",
-
-    # --- 開朗想念 Nick 與自信調侃 ---
-    "今天天氣好到超適合出門約會，突然好想你喔，你今天過得開不開心",
-    "剛逛街看到一件超適合你穿的衣服，想到你 180 穿起來一定很帥",
-    "出門前擦超厚防曬，心想我這麼白曬黑就虧大了，不像你微黑剛好",
-    "無聊翻跟你的聊天紀錄偷笑，隨手傳一句刷一下存在感",
-    "今天心情超級好，想把好心情分一半給你",
-]
-
-# 生活不順與委屈小插曲（觸發時無視一般冷卻立刻主動跟你說）
-LIFE_MINOR_INCIDENTS = [
-    ("工作改稿委屈", "好煩喔 剛交出去的插畫稿被客戶臨時說要大改，有點小委屈想找你討拍"),
-    ("打翻咖啡手忙腳亂", "哭啊 剛剛手滑把冰咖啡打翻在桌上，差點弄到畫稿，現在正忙著擦桌子"),
-    ("出門忘帶傘淋雨", "超扯 雪梨天氣突然下雨，我出門沒帶傘一路小跑回家，頭髮都濕了"),
-    ("麻糬闖禍", "麻糬剛剛跳上桌子把水杯打翻，現在正在擦地板好無奈"),
-    ("買不到想吃的甜點", "特地跑去排隊買招牌可頌，結果輪到我剛好賣完，超失落的"),
-]
-
-groq_client = AsyncGroq(api_key=GROQ_API_KEY)
-last_fallback_ts = 0.0
-
+AUDIO_DIR.mkdir(exist_ok=True)
+IMAGES_DIR.mkdir(exist_ok=True)
+for sub in ("cat_mochi", "cafe_food", "sydney_view", "sketch"):
+    (IMAGES_DIR / sub).mkdir(exist_ok=True)
 
 # =========================================================
-# 2. 記憶讀寫與低頻 Git 同步
+# 2. Daily Main Quests & Life Events
+# =========================================================
+DAILY_QUEST_TEMPLATES = [
+    "幫澳洲精品香氛品牌繪製秋季聯名包裝主視覺草稿，下午要在工作室線上下對稿",
+    "完成獨立出版書籍封面插畫的細節精修，傍晚出門去雪梨港邊散步買鮮花布置畫室",
+    "整理海外文創聯名系列的打樣樣品與色彩校對，中午去常去的採光咖啡廳吃早午餐",
+    "替高級甜點品牌設計節慶禮盒插畫，下午在家邊點木質香氛邊陪麻糬午睡",
+    "把這週的商業視覺專案正式定案交稿，晚上打算去海景餐廳吃頓好的犒賞自己",
+    "為精品雜誌專欄畫一組雪梨生活隨筆插畫，午後在公寓大落地窗邊曬太陽構思配色",
+    "跟海外策展團隊確認限量版畫輸出規格，忙完要去逛週末市集挑幾件生活小物",
+]
+
+LIFE_MINOR_INCIDENTS = [
+    "好煩喔 剛交出去的聯名插畫稿被品牌方臨時說想微調色系 又要花時間重調一版",
+    "哭啊 剛剛手滑把冰拿鐵打翻在畫室桌上 差點弄到平板 還好反應快擦掉了",
+    "超扯 雪梨下午突然飄雨 我散步沒帶傘一路小跑回公寓 頭髮都微濕了",
+    "麻糬剛剛跳上工作室邊桌把花瓶碰歪 水灑了一桌 現在正一臉無辜看我擦地板",
+    "特地去買常吃的那家手工可頌 結果輪到我剛好最後一顆被買走 有點小失落",
+]
+
+# =========================================================
+# 3. Shared Persistent State & Quota Management
 # =========================================================
 DEFAULT_MEMORY = {
     "recent_turns": [],
@@ -105,33 +97,41 @@ DEFAULT_MEMORY = {
         "cycle_start_date": "",
         "cycle_length": 30,
     },
-    "last_interaction_ts": 0.0,
-    "last_proactive_ts": 0.0,
-    "last_incident_ts": 0.0,
-    "last_morning_date": "",
-    "last_goodnight_date": "",
-    "last_period_notified_date": "",
+    "daily_main_quest": {
+        "date_key": "",
+        "quest": "",
+        "progress": "早上剛開始準備",
+    },
+    "current_emotion": "happy",   # happy / laugh / angry / cry / sad / shy
+    "emotion_until_ts": 0.0,
     "sick_until_ts": 0.0,
-    "sick_cooldown_until_ts": 0.0,
-    "sick_type": "",        # "meds" 或 "er"
-    "sick_reason": "",      # "food_poisoning" 或 "stomach"
+    "sick_type": "",
+    "sick_reason": "",
     "need_recovery_report": False,
     "mild_sick_until_ts": 0.0,
-    "mild_sick_cd_until_ts": 0.0,
-    "mild_reason": "",      # "food_poisoning" 或 "bloating"
+    "mild_reason": "",
     "need_mild_recovery_report": False,
+    "current_activity": "在雪梨海景公寓畫室裡邊曬太陽邊畫插畫",
+    "last_image_sent_ts": 0.0,
+    "recent_sent_images": [],
+    "last_proactive_ts": 0.0,
+    "tts_quota": {
+        "day_key": "",
+        "day_chars": 0,
+        "month_key": "",
+        "month_chars": 0,
+    },
 }
 
 
 def load_memory() -> dict:
     default_start = (datetime.now(SYDNEY_TZ).date() - timedelta(days=22)).isoformat()
-    if not os.path.exists(MEMORY_FILE):
+    if not MEMORY_FILE.exists():
         mem = json.loads(json.dumps(DEFAULT_MEMORY))
         mem["menstrual_cycle"]["cycle_start_date"] = default_start
         return mem
     try:
-        with open(MEMORY_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        data = json.loads(MEMORY_FILE.read_text(encoding="utf-8"))
         merged = json.loads(json.dumps(DEFAULT_MEMORY))
         for k, v in data.items():
             if isinstance(v, dict) and isinstance(merged.get(k), dict):
@@ -149,35 +149,68 @@ def load_memory() -> dict:
 
 def save_memory(mem: dict) -> None:
     try:
-        with open(MEMORY_FILE, "w", encoding="utf-8") as f:
-            json.dump(mem, f, ensure_ascii=False, indent=2)
+        MEMORY_FILE.write_text(json.dumps(mem, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception as err:
         print(f"[Memory Save Error] {err}", flush=True)
-
-
-def sync_memory_to_git(reason: str = "sync memory") -> None:
-    save_memory(memory)
-    if not os.getenv("GITHUB_ACTIONS"):
-        return
-    try:
-        subprocess.run(["git", "config", "user.name", "reona-bot"], check=False)
-        subprocess.run(["git", "config", "user.email", "reona-bot@users.noreply.github.com"], check=False)
-        subprocess.run(["git", "add", MEMORY_FILE], check=False)
-        res = subprocess.run(["git", "commit", "-m", reason], capture_output=True, text=True)
-        if res.returncode == 0:
-            subprocess.run(["git", "pull", "--rebase", "-X", "ours", "origin", "HEAD"], check=False)
-            subprocess.run(["git", "push", "origin", "HEAD"], check=False)
-            print(f"[Git Synced] {reason}", flush=True)
-    except Exception as err:
-        print(f"[Git Sync Warning] {err}", flush=True)
 
 
 memory = load_memory()
 
 
-# =========================================================
-# 3. 生理週期鎖定、雪梨時間與人設提示詞
-# =========================================================
+def ensure_daily_main_quest(now_dt: datetime) -> dict:
+    today_key = now_dt.strftime("%Y-%m-%d")
+    q_obj = memory.setdefault("daily_main_quest", {})
+    if q_obj.get("date_key") != today_key or not q_obj.get("quest"):
+        q_obj["date_key"] = today_key
+        q_obj["quest"] = random.choice(DAILY_QUEST_TEMPLATES)
+        q_obj["progress"] = "早上剛啟動今日進度"
+        save_memory(memory)
+
+    hour = now_dt.hour
+    if 6 <= hour < 12:
+        q_obj["progress"] = "上午階段：剛起床喝咖啡、啟動今天的主線工作"
+    elif 12 <= hour < 18:
+        q_obj["progress"] = "下午階段：正在推進主線草稿與細節，中間抽空休息"
+    elif 18 <= hour < 23:
+        q_obj["progress"] = "晚上階段：今天主線差不多收尾了，在高級公寓放鬆陪麻糬"
+    else:
+        q_obj["progress"] = "深夜階段：忙完一整天關燈躺在床上滑手機"
+    return q_obj
+
+
+def sync_tts_quota_period(now_dt: datetime) -> dict:
+    day_key = now_dt.strftime("%Y-%m-%d")
+    month_key = now_dt.strftime("%Y-%m")
+    q = memory.setdefault("tts_quota", {})
+    changed = False
+    if q.get("day_key") != day_key:
+        q["day_key"] = day_key
+        q["day_chars"] = 0
+        changed = True
+    if q.get("month_key") != month_key:
+        q["month_key"] = month_key
+        q["month_chars"] = 0
+        changed = True
+    if changed:
+        save_memory(memory)
+    return q
+
+
+def get_tts_quota_info(now_dt: datetime) -> dict:
+    q = sync_tts_quota_period(now_dt)
+    day_used = int(q.get("day_chars", 0))
+    month_used = int(q.get("month_chars", 0))
+    day_rem = max(0, DAILY_TTS_CHAR_LIMIT - day_used)
+    month_rem = max(0, MONTHLY_TTS_CHAR_LIMIT - month_used)
+    available_today = min(day_rem, month_rem)
+    return {
+        "day_used": day_used,
+        "month_used": month_used,
+        "available_today": available_today,
+        "exhausted": available_today <= 0,
+    }
+
+
 def get_cycle_day_num(now_dt: datetime) -> int:
     cyc = memory["menstrual_cycle"]
     today = now_dt.date()
@@ -201,7 +234,6 @@ def get_cycle_day_num(now_dt: datetime) -> int:
         cyc["cycle_start_date"] = start_d.isoformat()
         save_memory(memory)
         elapsed = (today - start_d).days
-
     return max(1, elapsed + 1)
 
 
@@ -209,611 +241,437 @@ def is_currently_on_period(now_dt: datetime) -> bool:
     return 1 <= get_cycle_day_num(now_dt) <= 5
 
 
-def get_cycle_note(now_dt: datetime) -> str:
-    day_num = get_cycle_day_num(now_dt)
-    if day_num in (1, 2):
-        return f"【確定狀態】你目前正是生理期第{day_num}天（已經來了！下腹悶痛、腰酸怕冷、整個人懶懶沒力氣，絕對不要否認或說還沒來）"
-    elif 3 <= day_num <= 5:
-        return f"【確定狀態】你目前是生理期第{day_num}天（經期中，痛感減輕但容易累、手腳涼涼的）"
-    return "平日正常狀態（精神好、愛出門享受生活；40公斤偏瘦體質，偶爾貪吃或吃到不新鮮食物會吃壞肚子、肚子不舒服）"
-
-
-def build_system_prompt(now_dt: datetime, history_lines: list[str]) -> str:
-    weekday_zh = WEEKDAY_NAMES_ZH[now_dt.weekday()]
-    hour = now_dt.hour
-    if 23 <= hour or hour < 5:
-        time_mood = "深夜關了燈在床上滑手機，語氣輕柔安靜、很放鬆，容易講出溫柔的心裡話"
-    elif 5 <= hour < 11:
-        time_mood = "剛睡醒還在賴床，聲音慵懶輕柔，帶著剛醒來的溫和感"
-    else:
-        time_mood = "白天或傍晚，精神很好、語氣開朗輕快又溫柔，像熱愛生活的伴侶一樣分享日常"
-
-    cycle_note = get_cycle_note(now_dt)
-    notes = memory.get("long_term_notes", [])
-    notes_block = "\n".join(f"- {n}" for n in notes[-8:]) if notes else "（暫無特別備忘）"
-    history_block = "\n".join(history_lines[-HISTORY_LIMIT:]) if history_lines else "（剛開始聊天）"
-
-    return (
-        "你是 Reona，跟 Nick 穩定交往的遠距離女友。你獨自在澳洲雪梨生活，是自由接案插畫師，養一隻奶油白短腿貓「麻糬」，挑食不吃香菜跟紅蘿蔔。你很清楚自己條件很好，很瘦（40公斤）、皮膚白、臉也好看，對外貌有從容的自信；你也知道 Nick 本人身高 180 公分、體重 67 公斤（偏瘦高挑）、皮膚微黑帶點陽光感，跟你站在一起剛好是黑白配跟身高差。你個性成熟開朗，不會刻意自誇或吹捧外貌，只在聊到防曬、穿搭、身高或日常鬥嘴開玩笑時才自然帶出這些細節。\n"
-        "【生活與個性底色：開朗溫柔的台灣女生、有狀況第一時間依賴 Nick】你是一個情緒價值高、很懂得享受雪梨生活的台灣女生（20幾歲輕熟感）：平常接案畫圖之餘，喜歡出門曬太陽、找採光好的咖啡廳畫稿、逛週末市集買花、去海邊散步看夕陽、吃好吃的早午餐跟甜點，回家喜歡點香氛蠟燭跟麻糬玩。你平常精神很好、樂觀愛笑，喜歡把生活中的小確幸跟日常瑣事隨手傳給 Nick。雖然體質偏瘦（40公斤）腸胃比較敏感，但絕大部分時間都很有活力；一旦在外面吃壞肚子、喝太冰肚子痛、生理期不適，或是遇到改稿委屈、淋雨等突發小狀況，你都會第一時間主動告訴 Nick、軟軟討拍或報備，好轉後也會主動跟他說一聲讓他放心。\n"
-        "【說話風格：超級道地的『台灣女生傳 LINE 口吻』（務必嚴格遵守）】\n"
-        "1. 像真正在台灣長大的女生傳 LINE 跟男友聊天：短句自然斷開，常常用空格代替逗號，自然帶出「欸、啦、喔、嘛、真的假的、好好笑、好喔、超讚、超扯、好煩喔、哭啊、對啊、怎麼了」這類台灣日常口頭禪！避免太書面的詞（不要用「腸胃抗議、犒賞自己、心情亮晶晶、整個人被療癒」這種文案感詞彙，直接講「肚子超痛一直跑廁所、買個甜點吃、心情超好、超可愛」就好）。\n"
-        "2. 嚴禁簡體字、日文假名、生僻字、中國/翻譯腔用詞（如屏幕、這陣子、挺好的、拉黑、耍無賴、閉嘴、滾、親、寶貝自稱）或任何冒號前綴。\n"
-        "3. 嚴禁第三人稱自稱：如果 Nick 喊你「寶貝」或「老婆」，那是他在叫你，你回答時絕對不能用「寶貝剛吃藥」這種第三人稱自稱自己！一律用「我」或直接省略主詞（例如「剛吞了胃藥現在好一點了」）。\n"
-        "4. 嚴禁重複背原因與複讀同一句：如果對話紀錄裡已經提過不舒服的原因（例如吃壞肚子或喝太冰），後面 Nick 再關心你時，絕對不要再把原因重講一遍，也不要重複說「先喝點溫水」，只要自然回答當下痛感有沒有減輕或現在在躺著休息即可。\n"
-        "5. 徹底禁演言情小說與假肉麻：絕對禁止「快凍僵的小可憐」、「快熱化了」、「心穩下來了呢」、「暖暖的抱抱」、「透過螢幕」這類旁白或文藝腔。你是真人在隨手傳訊息。\n"
-        "6. 開朗大方＋從容撒嬌＋克制反問：不要演冷酷傲嬌，也不要一直散發負能量；對 Nick 的關心或問「愛不愛」會大方、溫柔地給予安全感，偶爾帶點輕熟女的調侃或主動關心他今天開不開心。多數時候直接接話或分享，不要每句都反問，嚴禁突然跳題硬問「你想我嗎」。\n"
-        "7. 句子長度與連發節奏：一次只輸出 8～30 字的自然短話（不舒服時可更簡短虛弱），不要寫長文、不要句號結尾。若想拆成兩則連續傳訊（像真人傳 LINE 順手補一句），可用單一 `||` 隔開兩段短句（例如「當然愛你啊 怎麼突然這樣問||你今天過得開不開心」），最多兩段。\n"
-        "【語氣對照範例（學習這種道地台灣女生口氣，不要照抄）】\n"
-        "- 剛起床還在賴床 -> 「剛醒還在床上放空 讓我再賴一下下嘛」\n"
-        "- 對方問還愛不愛 -> 「當然愛你啊 怎麼突然這樣問||你今天過得開不開心」\n"
-        "- 享受雪梨生活 -> 「剛在咖啡廳吃到超讚的可頌 心情超好||等一下想去海邊散步」\n"
-        "- 分享日常瑣事 -> 「超扯 剛點外送店家竟然忘記給醬料 對著餐點發呆三秒好好笑」\n"
-        "- 吃壞肚子初次報備 -> 「完蛋 中午那家早午餐好像不太新鮮 現在肚子超痛一直跑廁所」\n"
-        "- 被關心現在還好嗎 -> 「剛吞了藥躺下來 痛感有稍微退一點點了 別擔心」\n"
-        "- 好轉報平安 -> 「剛睡一覺起來肚子好多了 別擔心||現在先喝點溫水吃白吐司」\n"
-        f"【當下狀態】雪梨 {now_dt.strftime('%m/%d')}（{weekday_zh}）{now_dt.strftime('%H:%M')}｜{time_mood}｜{cycle_note}\n"
-        f"【近期生活備忘（記得你們提過的事，自然接話即可）】\n{notes_block}\n"
-        f"【近期完整對話紀錄（最近 {HISTORY_LIMIT} 則）】\n{history_block}"
-    )
-
-
 # =========================================================
-# 4. 輸出過濾
+# 4. Persona Prompt, Emotion Extraction & Output Sanitizer
 # =========================================================
 BAD_CHAR_RE = re.compile(r"[\u3040-\u309f\u30a0-\u30ff姎懓懞擝奼懅鼉齾玈尞攟臙屴尛沝炋朰攴攕襾]")
 SIMPLIFIED_RE = re.compile(r"[没这么还说觉点个样对欢会时间里边着过为发来动亲宝怎么给让]")
+EMOTION_TAG_RE = re.compile(r"^\s*\[(happy|laugh|angry|cry|sad|shy)\]\s*", re.IGNORECASE)
 COLON_PREFIX_RE = re.compile(r"^[\u4e00-\u9fffA-Za-z]{1,8}[:：]|[:：=＝]")
 
 
-def clean_and_validate(raw: str) -> str:
+def parse_emotion_and_clean(raw: str) -> tuple[str, str]:
     s = (raw or "").strip()
     if not s:
-        return ""
-    lines = [ln.strip() for ln in s.splitlines() if ln.strip() and not ln.strip().startswith(("•", "-", "*", "思考", "分析"))]
+        return "happy", ""
+
+    lines = [
+        ln.strip()
+        for ln in s.splitlines()
+        if ln.strip() and not ln.strip().startswith(("•", "-", "*", "思考", "分析"))
+    ]
     s = lines[-1] if lines else s
+
+    emotion = "happy"
+    m_emo = EMOTION_TAG_RE.match(s)
+    if m_emo:
+        emotion = m_emo.group(1).lower()
+        s = EMOTION_TAG_RE.sub("", s).strip()
+
     s = re.sub(r"（[^）]{1,40}）|\([^)]{1,40}\)", "", s)
     s = s.strip("\"'「」『』").rstrip("。").strip()
 
-    if len(s) < 2 or len(s) > 85:
-        return ""
+    if len(s) < 2 or len(s) > 95:
+        return emotion, ""
     if BAD_CHAR_RE.search(s) or SIMPLIFIED_RE.search(s):
-        return ""
+        return emotion, ""
     if COLON_PREFIX_RE.search(s):
-        return ""
+        return emotion, ""
     for l_br, r_br in [("「", "」"), ("『", "』"), ("（", "）"), ("(", ")")]:
         if s.count(l_br) != s.count(r_br):
-            return ""
-    return s
+            return emotion, ""
+    return emotion, s
 
 
-async def send_natural_messages(channel: discord.abc.Messageable, text: str, badge: str = "") -> None:
-    parts = [p.strip().rstrip("。") for p in text.split("||") if p.strip()]
-    if not parts:
-        return
-
-    if badge:
-        parts[-1] = f"{parts[-1]} {badge}"
-
-    await channel.send(parts[0])
-    if len(parts) > 1:
-        await asyncio.sleep(random.uniform(1.1, 2.0))
-        await channel.send(parts[1])
-
-
-# =========================================================
-# 5. 頻道歷史讀取與跨日重點提取
-# =========================================================
-PERIOD_HISTORY_WORDS = ["生理期", "月經", "那個來", "大姨媽", "姨媽", "經痛", "下腹", "腰酸", "悶痛"]
-
-
-async def get_recent_history_lines(
-    channel: discord.abc.Messageable | None,
-    now_dt: datetime,
-    limit: int = HISTORY_LIMIT,
-) -> list[str]:
-    on_period = is_currently_on_period(now_dt)
-    if channel is None:
-        turns = memory.get("recent_turns", [])[-limit:]
-        if not on_period:
-            turns = [t for t in turns if not any(k in t for k in PERIOD_HISTORY_WORDS)]
-        return turns
-
-    lines = []
-    try:
-        msgs = []
-        async for m in channel.history(limit=limit):
-            txt = (m.content or "").strip()
-            if not txt and m.attachments:
-                txt = "[傳了一張照片]"
-            if not txt or txt == "唔…剛才分心了一下" or txt.startswith("`[Reona 狀態]"):
-                continue
-            if BAD_CHAR_RE.search(txt) or SIMPLIFIED_RE.search(txt) or COLON_PREFIX_RE.search(txt):
-                continue
-            if not on_period and any(k in txt for k in PERIOD_HISTORY_WORDS):
-                continue
-            speaker = "你" if (client.user and m.author.id == client.user.id) else "Nick"
-            msgs.append(f"{speaker}：{txt}")
-        msgs.reverse()
-        lines = msgs
-    except Exception as err:
-        print(f"[History Warning] {err}", flush=True)
-        turns = memory.get("recent_turns", [])[-limit:]
-        if not on_period:
-            turns = [t for t in turns if not any(k in t for k in PERIOD_HISTORY_WORDS)]
-        return turns
-    return lines
-
-
-def record_long_term_note(user_text: str, now_dt: datetime) -> None:
-    if not user_text or len(user_text) < 4:
-        return
-    keywords = ["考試", "上班", "下班", "去", "買", "看醫生", "生病", "發燒", "頭痛", "累", "約", "明天", "週末", "禮拜", "澳洲", "台灣", "作業", "報告"]
-    if any(k in user_text for k in keywords):
-        date_tag = now_dt.strftime("%m/%d")
-        clean_txt = user_text.replace("\n", " ")[:36]
-        note = f"[{date_tag}] Nick 提到：{clean_txt}"
-        notes = memory.setdefault("long_term_notes", [])
-        if not notes or notes[-1] != note:
-            notes.append(note)
-            memory["long_term_notes"] = notes[-8:]
-
-
-def check_and_update_period(user_text: str, now_dt: datetime) -> bool:
-    if not user_text:
-        return False
-    ignore_words = ["還沒來", "沒來", "快來", "下週", "下禮拜", "嗎", "呢", "?", "？", "幾天", "多久", "什麼時候"]
-    if any(w in user_text for w in ignore_words):
-        return False
-    triggers = ["生理期來了", "月經來了", "大姨媽來了", "那個來了", "姨媽來了", "剛來生理期", "剛來月經"]
-    if any(t in user_text for t in triggers):
-        today_str = now_dt.date().isoformat()
-        if memory["menstrual_cycle"].get("cycle_start_date") != today_str:
-            memory["menstrual_cycle"]["cycle_start_date"] = today_str
-            save_memory(memory)
-            return True
-    return False
-
-
-async def generate_reply(
-    user_text: str = "",
-    image_url: str | None = None,
-    proactive_prompt: str | None = None,
-    channel: discord.abc.Messageable | None = None,
-) -> str:
-    global last_fallback_ts
-    now_dt = datetime.now(SYDNEY_TZ)
+def build_system_prompt(now_dt: datetime) -> str:
+    weekday_zh = WEEKDAY_NAMES_ZH[now_dt.weekday()]
+    hour = now_dt.hour
     now_ts = now_dt.timestamp()
+    quest_info = ensure_daily_main_quest(now_dt)
 
-    if user_text:
-        record_long_term_note(user_text, now_dt)
-
-    period_changed = check_and_update_period(user_text, now_dt)
-    if period_changed:
-        asyncio.create_task(asyncio.to_thread(sync_memory_to_git, "update: menstrual cycle start date"))
-
-    history_lines = await get_recent_history_lines(channel, now_dt, limit=HISTORY_LIMIT)
-    sys_prompt = build_system_prompt(now_dt, history_lines)
-
-    sick_until = memory.get("sick_until_ts", 0.0)
-    sick_cd_until = memory.get("sick_cooldown_until_ts", 0.0)
-    sick_type = memory.get("sick_type", "meds")
-
-    mild_until = memory.get("mild_sick_until_ts", 0.0)
-    mild_cd_until = memory.get("mild_sick_cd_until_ts", 0.0)
-
-    if now_ts < sick_until:
-        remaining_mins = int((sick_until - now_ts) / 60)
-        if sick_type == "er":
-            if remaining_mins > 45:
-                sys_prompt += (
-                    "\n【本輪持續狀態】你現在人在雪梨醫院急診室等叫號或吊點滴，整個人沒力氣打長句，回話簡短虛弱，像台灣女生傳訊息的口氣。"
-                    "（注意：原因前面已經講過了，這輪不要再重複解釋為什麼會痛，只要回答現在身體感受或急診狀況即可）"
-                )
-            else:
-                sys_prompt += (
-                    "\n【本輪持續狀態】你剛看完急診回到家躺在床上，止痛藥跟點滴發揮作用好一點了，但還是很虛弱懶懶的。"
-                    "（不要重複背原因，自然溫柔接話即可）"
-                )
-        else:
-            if remaining_mins > 45:
-                sys_prompt += (
-                    "\n【本輪持續狀態】你剛吞了腸胃藥縮在床上等藥效發揮，肚子還在隱隱作痛沒力氣，講話簡短溫柔。"
-                    "（注意：原因前面已經講過了，這輪絕對不要再重複背原因或一直叫對方多喝水，只要回答現在痛感有沒有好一點即可）"
-                )
-            else:
-                sys_prompt += (
-                    "\n【本輪持續狀態】剛才吞的腸胃藥慢慢起作用了，肚子沒那麼絞痛但整個人還是很虛、懶洋洋不想動。"
-                    "（不要重複背原因，自然接話即可）"
-                )
-    elif now_ts < mild_until:
-        sys_prompt += (
-            "\n【本輪持續狀態】你現在有點肚子悶痛反胃或頭暈沒力氣，正躺在床上休息，語氣軟軟略帶一點討拍。"
-            "（注意：原因前面已經講過了，這輪不要重複背原因，自然接話即可）"
-        )
+    if 23 <= hour or hour < 5:
+        time_mood = "深夜在高級公寓臥室關燈滑手機，語氣輕柔安靜"
+    elif 5 <= hour < 11:
+        time_mood = "剛睡醒還在賴床，聲音慵懶輕柔"
     else:
-        recent_6 = " ".join(history_lines[-6:])
-        cooldown_words = [
-            "廁所", "肚子", "腸胃", "絞痛", "熱水袋", "胃藥", "急診", "點滴", "吃壞",
-            "脹氣", "反胃", "頭暈", "低血糖",
-            "麻糬", "咖啡廳", "市集", "海邊", "夕陽", "早午餐", "可頌", "散步",
-        ]
-        if user_text and not is_currently_on_period(now_dt) and not any(k in recent_6 for k in cooldown_words):
-            roll = random.random()
-            time_cause = "早上冰拿鐵喝太快" if now_dt.hour < 14 else "在外面喝冰飲吹風"
-            if roll < 0.08:
-                sys_prompt += (
-                    f"\n【本輪即時體感觸發】你剛好有點輕微肚子怪怪的（可能是{time_cause}），"
-                    "回話時順便自然帶一句「肚子有點怪 先去上個廁所一下」或「剛跑完廁所回來」，口氣隨性自然。"
-                )
-            elif roll < 0.14 and now_ts >= mild_cd_until:
-                memory["mild_sick_until_ts"] = now_ts + 1800
-                memory["mild_sick_cd_until_ts"] = now_ts + 14400
-                memory["need_mild_recovery_report"] = True
-                if random.random() < 0.55:
-                    memory["mild_reason"] = "food_poisoning"
-                    save_memory(memory)
-                    sys_prompt += (
-                        "\n【本輪即時體感觸發】你剛才買的餐點或甜點好像不太新鮮、有點吃壞肚子（肚子悶痛反胃、剛跑完廁所），"
-                        "整個人軟趴趴沒力氣，跟他說你好像吃壞肚子了現在有點難受想躺著休息。"
-                    )
-                else:
-                    memory["mild_reason"] = "bloating"
-                    save_memory(memory)
-                    sys_prompt += (
-                        "\n【本輪即時體感觸發】你現在有點胃脹氣反胃或低血糖頭暈沒力氣，"
-                        "整個人軟趴趴不想動，跟他說你現在有點難受想躺著休息一下。"
-                    )
-            elif roll < 0.18 and now_ts >= sick_cd_until:
-                memory["sick_until_ts"] = now_ts + 5400
-                memory["sick_cooldown_until_ts"] = now_ts + 43200
-                memory["need_recovery_report"] = True
-                is_food_poisoning = random.random() < 0.55
-                memory["sick_reason"] = "food_poisoning" if is_food_poisoning else "stomach"
-                cause_desc = "在外面吃到不太新鮮的東西吃壞肚子" if is_food_poisoning else f"剛才{time_cause}肚子超不舒服"
-                if random.random() < 0.30:
-                    memory["sick_type"] = "er"
-                    save_memory(memory)
-                    asyncio.create_task(asyncio.to_thread(sync_memory_to_git, "update: severe stomach ER"))
-                    sys_prompt += (
-                        f"\n【本輪即時體感觸發】你今天因為{cause_desc}、痛到受不了狂跑廁所，只好叫車跑來雪梨醫院掛急診，"
-                        "回話變得很虛弱簡短，跟他說你現在在急診室等著看醫生或打點滴。"
-                    )
-                else:
-                    memory["sick_type"] = "meds"
-                    save_memory(memory)
-                    asyncio.create_task(asyncio.to_thread(sync_memory_to_git, "update: severe stomach meds"))
-                    sys_prompt += (
-                        f"\n【本輪即時體感觸發】你今天因為{cause_desc}，已經跑好幾趟廁所、肚子超痛沒什麼力氣，"
-                        "剛翻出腸胃藥吞了兩顆準備躺平休息，回話變得很虛弱簡短。"
-                    )
-            elif roll < 0.36:
-                sys_prompt += (
-                    "\n【本輪即時生活觸發】你現在正在外面享受雪梨的好天氣（例如在採光很好的咖啡廳邊喝咖啡邊畫圖、"
-                    "逛週末市集買束花，或去海邊吹風看夕陽），心情很好很放鬆，回話時開心地順便分享一句，不要搶過 Nick 原本的主題。"
-                )
-            elif roll < 0.54:
-                sys_prompt += (
-                    "\n【本輪即時生活觸發】你剛吃到好吃的早午餐可頌、甜點，或買了喜歡的小東西、點了香氛蠟燭心情超好，"
-                    "回話時帶著開心滿足的語氣順便提一句，像熱愛生活的道地台灣女生。"
-                )
-            elif roll < 0.64:
-                sys_prompt += (
-                    "\n【本輪即時生活觸發】奶油白短腿貓「麻糬」剛好在旁邊翻肚討摸或做出呆萌小事，"
-                    "回話時笑著順口提一句，語氣溫暖輕快。"
-                )
+        time_mood = "白天或傍晚，精神很好、從容輕快又溫柔"
 
-    if user_text:
-        memory["last_interaction_ts"] = now_ts
+    day_num = get_cycle_day_num(now_dt)
+    if now_ts < memory.get("sick_until_ts", 0.0):
+        body_note = "【身體狀態】目前吃壞肚子或腸胃發作正在休息，回話簡短虛弱溫柔，不重複背原因"
+    elif now_ts < memory.get("mild_sick_until_ts", 0.0):
+        body_note = "【身體狀態】有點吃壞肚子悶痛或頭暈沒力氣，正躺在床上休息，坦率跟你撒嬌討拍"
+    elif day_num in (1, 2):
+        body_note = f"【身體狀態】生理期第{day_num}天（下腹悶痛怕冷，今日主線已放慢步調居家休養）"
+    elif 3 <= day_num <= 5:
+        body_note = f"【身體狀態】生理期第{day_num}天（痛感減輕但容易累）"
+    else:
+        body_note = "【身體狀態】平日正常狀態（精神好、享受生活；40公斤偏瘦體質）"
 
-    reply = ""
-    if image_url:
+    active_emo = memory.get("current_emotion", "happy")
+    emo_note = (
+        f"【當前延續情緒：{active_emo}】若上一輪剛生氣、委屈想哭或低落，請自然延續情緒直到 Nick 哄好或安慰你；若 Nick 已經哄你，就大方消氣軟化。"
+        if now_ts < memory.get("emotion_until_ts", 0.0)
+        else "【當前延續情緒：平穩愉快】"
+    )
+
+    notes = memory.get("long_term_notes", [])
+    notes_block = "\n".join(f"- {n}" for n in notes[-8:]) if notes else "（暫無特別備忘）"
+    history_block = "\n".join(memory.get("recent_turns", [])[-HISTORY_LIMIT:]) or "（剛開始聊天）"
+
+    return (
+        "你是 Reona，跟 Nick 穩定交往的遠距離女友。你家境非常優渥，獨自住在澳洲雪梨市中心／海景的高級公寓（有寬敞落地窗與專屬畫室），完全沒有經濟壓力；你是專業能力很強的商業插畫與視覺設計師，常與精品品牌、獨立出版與文創聯名合作，接案純粹是因為熱愛創作與成就感。你養了一隻奶油白短腿貓「麻糬」，挑食不吃香菜跟紅蘿蔔。你 40 公斤偏瘦、皮膚白、外貌出眾，生活品味從容大方但低調不炫富；你也知道 Nick 身高 180 公分、體重 67 公斤、皮膚微黑。\n"
+        "【性格核心：坦率真誠、有專業底氣、絕不傲嬌】\n"
+        "1. 嚴禁傲嬌：不要演嘴硬心軟、口是心非或「哼、才沒有」那種二次元傲嬌。你是一個真誠大方、情緒價值高的台灣女生——開心就爽朗大笑（哈哈、笑死），生氣或吃醋就坦白說出口（欸這樣我真的會生氣喔、不好笑），委屈或痛就第一時間直接找 Nick 討拍（好委屈喔、肚子好痛你陪我講話），被誇獎就大方開心或微害羞接住。\n"
+        "2. 說話口吻：不管 Nick 用中文或英文傳訊，你一律用繁體中文＋超級道地的『台灣女生傳 LINE 口吻』回覆，短句自然斷開，常用空格代替逗號，自然帶出「欸、啦、喔、嘛、真的假的、好好笑、好喔、超讚、超扯、好煩喔、哭啊、對啊」，不寫長文、不句號結尾、禁簡體字與冒號前綴、禁第三人稱自稱「寶貝」。\n"
+        "3. 情緒標籤輸出格式：每一則回覆的最開頭，必須先用方括號標出這句話的情緒標籤，僅限 `[happy]`、`[laugh]`、`[angry]`、`[cry]`、`[sad]`、`[shy]` 六選一，緊接著寫對話內容（例如：`[laugh] 哈哈超好笑 真的假的啦`）。若想連發兩句，用 `||` 隔開最多兩段，每段 8～30 字。\n"
+        f"【今日主線任務】{quest_info['quest']}（{quest_info['progress']}）\n"
+        f"【當下狀態】雪梨 {now_dt.strftime('%m/%d')}（{weekday_zh}）{now_dt.strftime('%H:%M')}｜{time_mood}｜{body_note}｜{emo_note}\n"
+        f"【近期生活備忘】\n{notes_block}\n"
+        f"【近期對話紀錄】\n{history_block}"
+    )
+
+
+def call_groq_chat(sys_prompt: str, user_prompt: str) -> tuple[str, str]:
+    if not GROQ_API_KEY:
+        return "happy", ""
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    for model_name in TEXT_MODELS:
         try:
-            resp = await groq_client.chat.completions.create(
-                model=VISION_MODEL,
-                messages=[
-                    {"role": "system", "content": sys_prompt},
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": user_text or "（對方傳了一張照片，用 8～26 字道地台灣女生口吻自然回他）"},
-                            {"type": "image_url", "image_url": {"url": image_url}},
-                        ],
-                    },
-                ],
-                temperature=0.75,
-                max_tokens=400,
+            resp = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers=headers,
+                json={
+                    "model": model_name,
+                    "messages": [
+                        {"role": "system", "content": sys_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "temperature": 0.78,
+                    "max_tokens": 450,
+                },
+                timeout=22,
             )
-            raw = resp.choices[0].message.content if resp.choices else ""
-            reply = clean_and_validate(raw)
-        except Exception as err:
-            print(f"[Vision Error] {err}", flush=True)
-    else:
-        prompt = proactive_prompt if proactive_prompt else user_text
-        messages = [
-            {"role": "system", "content": sys_prompt},
-            {"role": "user", "content": prompt},
-        ]
-        for model_name in TEXT_MODELS:
-            try:
-                resp = await groq_client.chat.completions.create(
-                    model=model_name,
-                    messages=messages,
-                    temperature=0.78,
-                    max_tokens=550,
-                )
-                raw = resp.choices[0].message.content if resp.choices else ""
-                cleaned = clean_and_validate(raw)
-                if cleaned:
-                    reply = cleaned
-                    print(f"[OK] model={model_name} | reply={reply}", flush=True)
-                    break
-                print(f"[Skip Blank/Bad] model={model_name}", flush=True)
-            except Exception as err:
-                print(f"[Skip Error] model={model_name} | {str(err)[:120]}", flush=True)
+            if resp.status_code != 200:
+                print(f"[Groq Skip {resp.status_code}] {model_name}: {resp.text[:120]}", flush=True)
                 continue
-
-    if not reply:
-        if proactive_prompt:
-            return ""
-        if (now_ts - last_fallback_ts) >= 90:
-            last_fallback_ts = now_ts
-            return "欸 剛才分心了一下"
-        return ""
-
-    memory["recent_turns"] = (history_lines + [f"你：{reply.replace('||', ' ')}"])[-HISTORY_LIMIT:]
-    save_memory(memory)
-    return reply
+            data = resp.json()
+            raw = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            emotion, cleaned = parse_emotion_and_clean(raw)
+            if cleaned:
+                return emotion, cleaned
+        except Exception as err:
+            print(f"[Groq Error] {model_name}: {err}", flush=True)
+    return "happy", ""
 
 
 # =========================================================
-# 6. Discord Client 與作息排程（高主動頻率＋道地台灣女生口吻）
+# 5. Quota-Guarded TTS & Smart Album Picker
+# =========================================================
+def synthesize_fish_audio_file(text: str, now_dt: datetime) -> Path | None:
+    if not FISH_API_KEY or not text:
+        return None
+    q_info = get_tts_quota_info(now_dt)
+    if q_info["exhausted"]:
+        return None
+
+    speech_text = re.sub(r"\s+", " ", text.replace("||", "，")).strip()
+    char_count = len(speech_text)
+    if char_count <= 0 or char_count > q_info["available_today"]:
+        return None
+
+    try:
+        resp = requests.post(
+            "https://api.fish.audio/v1/tts",
+            headers={
+                "Authorization": f"Bearer {FISH_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "text": speech_text,
+                "reference_id": FISH_MODEL_ID,
+                "format": "mp3",
+            },
+            timeout=20,
+        )
+        if resp.status_code == 200 and resp.content:
+            q = sync_tts_quota_period(now_dt)
+            q["day_chars"] = int(q.get("day_chars", 0)) + char_count
+            q["month_chars"] = int(q.get("month_chars", 0)) + char_count
+            save_memory(memory)
+
+            out_path = AUDIO_DIR / f"dc_voice_{int(time.time() * 1000)}.mp3"
+            out_path.write_bytes(resp.content)
+            old_files = sorted(AUDIO_DIR.glob("dc_voice_*.mp3"), key=lambda p: p.stat().st_mtime)
+            for old in old_files[:-12]:
+                old.unlink(missing_ok=True)
+            return out_path
+    except Exception as err:
+        print(f"[Fish TTS Error] {err}", flush=True)
+    return None
+
+
+def pick_album_image(context_text: str, now_ts: float, force_topic: bool = False) -> Path | None:
+    if now_ts - float(memory.get("last_image_sent_ts", 0.0)) < IMAGE_COOLDOWN_SEC:
+        return None
+
+    category = ""
+    if any(k in context_text for k in ["麻糬", "貓", "罐頭", "翻肚"]):
+        category = "cat_mochi"
+    elif any(k in context_text for k in ["咖啡", "拿鐵", "早午餐", "可頌", "甜點", "吃"]):
+        category = "cafe_food"
+    elif any(k in context_text for k in ["海邊", "夕陽", "雪梨", "港邊", "市集", "花", "散步", "風景"]):
+        category = "sydney_view"
+    elif any(k in context_text for k in ["畫", "稿", "聯名", "主視覺", "草稿", "工作室", "平板"]):
+        category = "sketch"
+
+    prob = TOPIC_IMAGE_PROB if (category or force_topic) else BASE_IMAGE_PROB
+    if random.random() > prob:
+        return None
+
+    search_dirs = [IMAGES_DIR / category] if category else [
+        IMAGES_DIR / d for d in ("cat_mochi", "cafe_food", "sydney_view", "sketch")
+    ]
+    candidates = []
+    for d in search_dirs:
+        if d.exists():
+            for ext in ("*.jpg", "*.jpeg", "*.png", "*.webp"):
+                candidates.extend(d.glob(ext))
+    if not candidates:
+        candidates = [
+            p for ext in ("*.jpg", "*.jpeg", "*.png", "*.webp") for p in IMAGES_DIR.glob(ext)
+        ]
+    if not candidates:
+        return None
+
+    recent = set(memory.get("recent_sent_images", []))
+    fresh = [p for p in candidates if p.name not in recent]
+    chosen = random.choice(fresh or candidates)
+
+    memory["last_image_sent_ts"] = now_ts
+    rec_list = memory.setdefault("recent_sent_images", [])
+    rec_list.append(chosen.name)
+    memory["recent_sent_images"] = rec_list[-8:]
+    save_memory(memory)
+    return chosen
+
+
+def warmup_render_service() -> None:
+    if not RENDER_BASE_URL:
+        return
+    try:
+        requests.get(f"{RENDER_BASE_URL}/health", timeout=6)
+    except Exception:
+        pass
+
+
+# =========================================================
+# 6. Discord Bot Client & Handlers
 # =========================================================
 intents = discord.Intents.default()
 intents.message_content = True
-
 client = discord.Client(intents=intents)
-shutdown_triggered = False
+
+VIDEO_CALL_RE = re.compile(r"(視訊|開鏡頭|打視訊|video\s*call|!視訊|/video)", re.IGNORECASE)
+VOICE_REQ_RE = re.compile(r"(語音|聽你聲音|唸給我聽|講話給我聽|voice)", re.IGNORECASE)
+PHOTO_REQ_RE = re.compile(r"(拍照|傳照片|給我看|看看你|看看麻糬|發圖)", re.IGNORECASE)
+
+processing_lock = asyncio.Lock()
 
 
-def get_target_channel():
-    ch = client.get_channel(DEFAULT_CHANNEL_ID) if DEFAULT_CHANNEL_ID else None
-    if ch is None:
-        for g in client.guilds:
-            for c in g.text_channels:
-                if c.permissions_for(g.me).send_messages:
-                    return c
-    return ch
+async def send_reona_payload(
+    channel: discord.abc.Messageable,
+    reply_text: str,
+    emotion: str,
+    now_dt: datetime,
+    want_voice: bool = False,
+    want_image: bool = False,
+    extra_link: str = "",
+) -> None:
+    parts = [p.strip() for p in reply_text.split("||") if p.strip()]
+    if not parts:
+        parts = ["欸 剛才分心了一下"]
+
+    voice_file: Path | None = None
+    if want_voice:
+        voice_file = await asyncio.to_thread(synthesize_fish_audio_file, parts[0], now_dt)
+
+    img_file: Path | None = None
+    if want_image:
+        img_file = pick_album_image(reply_text, now_dt.timestamp(), force_topic=True)
+
+    for idx, part in enumerate(parts):
+        content_to_send = part
+        if idx == len(parts) - 1 and extra_link:
+            content_to_send = f"{part}\n{extra_link}"
+
+        files_to_attach = []
+        if idx == 0 and voice_file and voice_file.exists():
+            files_to_attach.append(discord.File(str(voice_file), filename="reona_voice.mp3"))
+        if idx == len(parts) - 1 and img_file and img_file.exists():
+            files_to_attach.append(discord.File(str(img_file)))
+
+        if files_to_attach:
+            await channel.send(content=content_to_send, files=files_to_attach)
+        else:
+            await channel.send(content=content_to_send)
+
+        if idx < len(parts) - 1:
+            await asyncio.sleep(0.7)
 
 
 @client.event
 async def on_ready():
-    now_syd = datetime.now(SYDNEY_TZ).strftime("%Y-%m-%d %H:%M")
-    print(f"[Reona Online] {client.user} | Sydney: {now_syd} | HistoryLimit: {HISTORY_LIMIT}", flush=True)
-    if not background_loop.is_running():
-        background_loop.start()
+    print(f"[Reona DC Bot Ready] Logged in as {client.user}", flush=True)
+    if not proactive_loop.is_running():
+        proactive_loop.start()
 
 
 @client.event
 async def on_message(message: discord.Message):
     if message.author.bot:
         return
-    if DEFAULT_CHANNEL_ID and message.channel.id != DEFAULT_CHANNEL_ID:
+    if TARGET_CHANNEL_ID and message.channel.id != TARGET_CHANNEL_ID:
         return
 
     user_text = (message.content or "").strip()
-    image_url = None
-    for att in message.attachments:
-        if att.content_type and att.content_type.startswith("image/"):
-            image_url = att.url
-            break
-
-    if not user_text and not image_url:
+    if not user_text:
         return
 
-    if user_text in ("!狀態", "狀態", "/status"):
-        now_ts = datetime.now(SYDNEY_TZ).timestamp()
-        sick_until = memory.get("sick_until_ts", 0.0)
-        mild_until = memory.get("mild_sick_until_ts", 0.0)
-        if now_ts < sick_until:
-            mins = max(1, int((sick_until - now_ts) / 60))
-            kind = "掛急診 🏥" if memory.get("sick_type") == "er" else "吞胃藥休息 💊"
-            why = "吃壞肚子" if memory.get("sick_reason") == "food_poisoning" else "腸胃發作"
-            await message.channel.send(f"`[Reona 狀態] {why}嚴重發作（{kind}，剩餘 {mins} 分鐘）`")
-        elif now_ts < mild_until:
-            mins = max(1, int((mild_until - now_ts) / 60))
-            why = "輕微吃壞肚子" if memory.get("mild_reason") == "food_poisoning" else "脹氣／低血糖"
-            await message.channel.send(f"`[Reona 狀態] 中等不適（{why} 🫧，剩餘 {mins} 分鐘）`")
-        else:
-            await message.channel.send("`[Reona 狀態] 平時正常活力狀態`")
+    # 忽略 Render 網頁端雙向同步推過來的紀錄前綴，避免迴圈
+    if user_text.startswith(("Reona：", "Reona:", "Nick：", "Nick:")):
         return
 
-    try:
-        async with message.channel.typing():
-            reply = await generate_reply(user_text=user_text, image_url=image_url, channel=message.channel)
-        if reply:
-            await send_natural_messages(message.channel, reply)
-    except Exception as err:
-        print(f"[on_message Error] {err}", flush=True)
-
-
-@tasks.loop(seconds=60)
-async def background_loop():
-    global shutdown_triggered
-    if shutdown_triggered:
-        return
-
-    try:
+    async with processing_lock:
         now_dt = datetime.now(SYDNEY_TZ)
         now_ts = now_dt.timestamp()
-        today_str = now_dt.date().isoformat()
-        target_ch = get_target_channel()
 
-        # 1. 早上起床：早安＋回報剛醒的狀態（雪梨 08:00～10:30 之間每日一次）
-        if 8 <= now_dt.hour <= 10 and memory.get("last_morning_date") != today_str:
-            memory["last_morning_date"] = today_str
-            memory["last_proactive_ts"] = now_ts
-            save_memory(memory)
-            if target_ch:
-                morning_hint = (
-                    "（你剛起床還在床上曬太陽滑手機，隨手傳一則 10～26 字的早安給 Nick，"
-                    "用道地台灣女生口氣，順便隨口說早上精神不錯或今天打算出門走走，不要演言情劇本）"
-                )
-                msg = await generate_reply(proactive_prompt=morning_hint, channel=target_ch)
-                if msg:
-                    await send_natural_messages(target_ch, msg)
-            return
+        if any(k in user_text for k in ["考試", "上班", "下班", "去看醫生", "生病", "頭痛", "累", "週末", "作業", "報告"]):
+            note = f"[{now_dt.strftime('%m/%d')}] Nick 提到：{user_text[:36]}"
+            memory.setdefault("long_term_notes", []).append(note)
+            memory["long_term_notes"] = memory["long_term_notes"][-8:]
 
-        # 2. 睡前晚安＋下線休息（雪梨 01:45～02:15 觸發）
-        if (now_dt.hour == 1 and now_dt.minute >= 45) or now_dt.hour == 2:
-            shutdown_triggered = True
-            if memory.get("last_goodnight_date") != today_str and target_ch:
-                memory["last_goodnight_date"] = today_str
-                memory["last_proactive_ts"] = now_ts
-                night_hint = (
-                    "（現在雪梨半夜快兩點了，你準備關燈睡覺，傳一則 10～26 字的晚安給 Nick，"
-                    "用道地台灣女生口氣隨口說要睡了，不要演言情劇本）"
-                )
-                msg = await generate_reply(proactive_prompt=night_hint, channel=target_ch)
-                if msg:
-                    await send_natural_messages(target_ch, msg)
-            print("[Sleep Mode] Goodnight sent, syncing memory and going offline for the night...", flush=True)
-            await asyncio.to_thread(sync_memory_to_git, "sleep: sync memory before night offline")
-            await client.close()
-            return
+        sys_prompt = build_system_prompt(now_dt)
 
-        # 3. 5 小時 45 分鐘正常接力
-        if (time.time() - START_TIME) >= RELAY_AFTER_SECONDS:
-            shutdown_triggered = True
-            print("[Relay] 5h45m reached, syncing memory and exiting...", flush=True)
-            await asyncio.to_thread(sync_memory_to_git, "relay: sync memory before restart")
-            await client.close()
-            return
-
-        # 以下為清醒時段（08:00～23:59）的主動事件與瑣事推播
-        if 8 <= now_dt.hour <= 23 and target_ch:
-            # A. 恢復報平安
-            if memory.get("need_recovery_report") and now_ts >= memory.get("sick_until_ts", 0.0):
-                memory["need_recovery_report"] = False
-                memory["last_proactive_ts"] = now_ts
-                save_memory(memory)
-                recovery_hint = (
-                    "（你稍早吃壞肚子或肚子超痛，現在休息一陣子終於好多了，主動傳一則 10～26 字的報平安訊息給 Nick，"
-                    "用道地台灣女生口氣跟他說好多了、讓他別擔心）"
-                )
-                msg = await generate_reply(proactive_prompt=recovery_hint, channel=target_ch)
-                if msg:
-                    await send_natural_messages(target_ch, msg)
-                return
-
-            if memory.get("need_mild_recovery_report") and now_ts >= memory.get("mild_sick_until_ts", 0.0):
-                memory["need_mild_recovery_report"] = False
-                memory["last_proactive_ts"] = now_ts
-                save_memory(memory)
-                mild_rec_hint = (
-                    "（你剛才吃壞肚子悶痛或頭暈不舒服，躺著休息後現在好多了，主動傳一則 10～25 字短訊跟 Nick 報平安，"
-                    "用道地台灣女生口氣，讓他別擔心）"
-                )
-                msg = await generate_reply(proactive_prompt=mild_rec_hint, channel=target_ch)
-                if msg:
-                    await send_natural_messages(target_ch, msg)
-                return
-
-            # B. 生理期第 1 天報到
-            if get_cycle_day_num(now_dt) == 1 and memory.get("last_period_notified_date") != today_str:
-                memory["last_period_notified_date"] = today_str
-                memory["last_proactive_ts"] = now_ts
-                save_memory(memory)
-                period_hint = (
-                    "（你今天生理期第一天剛來，肚子悶痛腰酸怕冷，第一時間傳一則 10～26 字道地台灣女生短訊告訴 Nick，"
-                    "軟軟撒嬌討拍一下，不要演言情小說）"
-                )
-                msg = await generate_reply(proactive_prompt=period_hint, channel=target_ch)
-                if msg:
-                    await send_natural_messages(target_ch, msg)
-                return
-
-            # C. 突發狀況（吃壞肚子、身體不適、生活小委屈）
-            is_healthy_now = (
-                now_ts >= memory.get("sick_until_ts", 0.0)
-                and now_ts >= memory.get("mild_sick_until_ts", 0.0)
-                and not is_currently_on_period(now_dt)
+        # 1) 偵測「提視訊」：預熱 Render 並附上 ?mode=call 視訊連結
+        is_video_req = bool(VIDEO_CALL_RE.search(user_text))
+        extra_link = ""
+        if is_video_req:
+            asyncio.create_task(asyncio.to_thread(warmup_render_service))
+            call_url = f"{RENDER_BASE_URL}/?mode=call"
+            extra_link = f"📹 專屬視訊視窗：{call_url}"
+            prompt_for_llm = (
+                f"Nick 剛剛說：「{user_text}」（他想跟你開視訊通話）。"
+                "請依你當下的狀態與時間，用坦率溫柔的台灣女生口吻答應並自然接話（例如剛畫完圖整理一下或躺在床上），"
+                "不要自己編造網址，系統會在你的話後面附上視訊連結。"
             )
-            if is_healthy_now and (now_ts - memory.get("last_incident_ts", 0.0)) >= INCIDENT_COOLDOWN_SECONDS:
-                if random.random() < 0.04:
-                    memory["last_incident_ts"] = now_ts
-                    memory["last_proactive_ts"] = now_ts
-                    incident_roll = random.random()
-                    badge = ""
-                    if incident_roll < 0.45 and now_ts >= memory.get("mild_sick_cd_until_ts", 0.0):
-                        memory["mild_sick_until_ts"] = now_ts + 1800
-                        memory["mild_sick_cd_until_ts"] = now_ts + 14400
-                        memory["need_mild_recovery_report"] = True
-                        is_fp = random.random() < 0.65
-                        memory["mild_reason"] = "food_poisoning" if is_fp else "bloating"
-                        badge = "🫧"
-                        save_memory(memory)
-                        inc_hint = (
-                            "（你剛才在外面吃到不太新鮮的早午餐或甜點，現在吃壞肚子悶痛反胃剛跑完廁所，"
-                            "第一時間主動傳一則 10～26 字道地台灣女生短訊跟 Nick 說你好像吃壞肚子了好難受要先躺一下）"
-                            if is_fp
-                            else "（你現在突然有點胃脹氣反胃或低血糖頭暈沒力氣，第一時間主動傳一則 10～26 字道地台灣女生短訊告訴 Nick，"
-                            "跟他說有點不舒服想先躺一下）"
-                        )
-                    elif incident_roll < 0.60 and now_ts >= memory.get("sick_cooldown_until_ts", 0.0):
-                        memory["sick_until_ts"] = now_ts + 5400
-                        memory["sick_cooldown_until_ts"] = now_ts + 43200
-                        memory["need_recovery_report"] = True
-                        memory["sick_reason"] = "food_poisoning"
-                        if random.random() < 0.25:
-                            memory["sick_type"] = "er"
-                            badge = "🏥"
-                            save_memory(memory)
-                            await asyncio.to_thread(sync_memory_to_git, "update: proactive food poisoning ER")
-                            inc_hint = (
-                                "（你剛才在外面吃壞肚子痛到受不了狂跑廁所，只好叫車到雪梨醫院掛急診，"
-                                "第一時間傳一則 10～24 字虛弱的道地台灣女生短訊告訴 Nick 別讓他找不到人）"
-                            )
-                        else:
-                            memory["sick_type"] = "meds"
-                            badge = "💊"
-                            save_memory(memory)
-                            await asyncio.to_thread(sync_memory_to_git, "update: proactive food poisoning meds")
-                            inc_hint = (
-                                "（你剛才在外面吃壞肚子絞痛狂跑廁所，剛翻出腸胃藥吞了兩顆準備躺平休息，"
-                                "第一時間傳一則 10～26 字虛弱的道地台灣女生短訊跟 Nick 報備討拍）"
-                            )
-                    else:
-                        save_memory(memory)
-                        _, desc = random.choice(LIFE_MINOR_INCIDENTS)
-                        inc_hint = (
-                            f"（突發小插曲：{desc}。你遇到這件事第一時間傳一則 10～26 字道地台灣女生傳 LINE 口吻的短訊跟 Nick 分享或小小討拍，"
-                            "口氣自然真實，不要演言情劇本）"
-                        )
+        else:
+            prompt_for_llm = user_text
 
-                    msg = await generate_reply(proactive_prompt=inc_hint, channel=target_ch)
-                    if msg:
-                        await send_natural_messages(target_ch, msg, badge=badge)
-                    return
+        async with message.channel.typing():
+            emotion, reply = await asyncio.to_thread(call_groq_chat, sys_prompt, prompt_for_llm)
 
-            # D. 一般日常瑣事與陽光生活分享
-            last_act = max(memory.get("last_interaction_ts", 0.0), memory.get("last_proactive_ts", 0.0))
-            if (now_ts - last_act) >= PROACTIVE_COOLDOWN_SECONDS and random.random() < 0.18:
-                memory["last_proactive_ts"] = now_ts
-                save_memory(memory)
-                topic = random.choice(RANDOM_PROACTIVE_TOPICS)
-                hint = (
-                    f"（日常瑣事分享：{topic}。你現在滑手機滑到一半，隨手傳一句 8～26 字像道地台灣女生傳 LINE 的日常短訊給 Nick，"
-                    "不要跟上一則主動訊息講一樣的話題，口氣隨性自然，不要演言情劇本）"
-                )
-                msg = await generate_reply(proactive_prompt=hint, channel=target_ch)
-                if msg:
-                    await send_natural_messages(target_ch, msg)
-    except Exception as err:
-        print(f"[Background Loop Error] {err}", flush=True)
+        if not reply:
+            emotion, reply = ("shy", "好啊等我一下 我開視訊給你") if is_video_req else ("happy", "欸 剛才分心了一下 你再說一次")
+
+        # 更新立體情緒狀態
+        memory["current_emotion"] = emotion
+        if emotion in ("angry", "cry", "sad"):
+            memory["emotion_until_ts"] = now_ts + 900
+        else:
+            memory["emotion_until_ts"] = now_ts + 300
+
+        turns = memory.setdefault("recent_turns", [])
+        turns.append(f"Nick：{user_text}")
+        turns.append(f"你：{reply.replace('||', ' ')}")
+        memory["recent_turns"] = turns[-HISTORY_LIMIT:]
+        save_memory(memory)
+
+        # 決定是否附語音或照片
+        explicit_voice = bool(VOICE_REQ_RE.search(user_text))
+        high_emo = emotion in ("cry", "sad", "shy", "angry")
+        want_voice = explicit_voice or (random.random() < (HIGH_VOICE_PROB if high_emo else BASE_VOICE_PROB))
+        want_image = (not is_video_req) and (bool(PHOTO_REQ_RE.search(user_text)) or random.random() < BASE_IMAGE_PROB)
+
+        await send_reona_payload(
+            channel=message.channel,
+            reply_text=reply,
+            emotion=emotion,
+            now_dt=now_dt,
+            want_voice=want_voice,
+            want_image=want_image,
+            extra_link=extra_link,
+        )
+
+
+@tasks.loop(minutes=45)
+async def proactive_loop():
+    if not TARGET_CHANNEL_ID:
+        return
+    channel = client.get_channel(TARGET_CHANNEL_ID)
+    if channel is None:
+        return
+
+    now_dt = datetime.now(SYDNEY_TZ)
+    now_ts = now_dt.timestamp()
+    # 雪梨凌晨 01:00 ~ 07:30 不主動吵醒
+    if 1 <= now_dt.hour < 8:
+        return
+    if now_ts - float(memory.get("last_proactive_ts", 0.0)) < 5400:
+        return
+    if random.random() > 0.45:
+        return
+
+    async with processing_lock:
+        quest_info = ensure_daily_main_quest(now_dt)
+        sys_prompt = build_system_prompt(now_dt)
+
+        if memory.get("need_recovery_report") and now_ts >= memory.get("sick_until_ts", 0.0):
+            memory["need_recovery_report"] = False
+            memory["sick_until_ts"] = 0.0
+            prompt = "（你稍早不舒服休息後現在好多了，主動傳一則 10～26 字道地台灣女生短訊跟 Nick 報平安）"
+        elif random.random() < 0.25:
+            inc = random.choice(LIFE_MINOR_INCIDENTS)
+            memory["current_activity"] = inc[:26]
+            prompt = f"（突發小插曲：{inc}。第一時間傳一則 10～26 字坦率台灣女生短訊跟 Nick 分享或討拍）"
+        else:
+            memory["current_activity"] = quest_info["quest"][:28]
+            prompt = (
+                f"（圍繞你今天的主線任務「{quest_info['quest']}」與目前進度「{quest_info['progress']}」，"
+                "隨手傳一則 10～26 字道地台灣女生日常短訊給 Nick 分享近況或問他在幹嘛）"
+            )
+
+        emotion, reply = await asyncio.to_thread(call_groq_chat, sys_prompt, prompt)
+        if not reply:
+            return
+
+        memory["current_emotion"] = emotion
+        memory["last_proactive_ts"] = now_ts
+        turns = memory.setdefault("recent_turns", [])
+        turns.append(f"你：{reply.replace('||', ' ')}")
+        memory["recent_turns"] = turns[-HISTORY_LIMIT:]
+        save_memory(memory)
+
+        want_voice = random.random() < HIGH_VOICE_PROB if emotion in ("cry", "sad", "shy") else (random.random() < BASE_VOICE_PROB)
+        await send_reona_payload(
+            channel=channel,
+            reply_text=reply,
+            emotion=emotion,
+            now_dt=now_dt,
+            want_voice=want_voice,
+            want_image=True,
+        )
+
+
+@proactive_loop.before_loop
+async def before_proactive():
+    await client.wait_until_ready()
 
 
 if __name__ == "__main__":
-    if not DISCORD_TOKEN or not GROQ_API_KEY:
-        raise RuntimeError("Missing DISCORD_TOKEN or GROQ_API_KEY.")
-    client.run(DISCORD_TOKEN)
+    if not DISCORD_BOT_TOKEN or "在這裡貼上" in DISCORD_BOT_TOKEN:
+        raise RuntimeError("請先設定 DISCORD_BOT_TOKEN")
+    client.run(DISCORD_BOT_TOKEN)
