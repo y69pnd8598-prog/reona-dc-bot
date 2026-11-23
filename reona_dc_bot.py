@@ -438,7 +438,8 @@ async def hydrate_memory_from_channel(channel: discord.abc.Messageable) -> None:
             if not txt or txt.startswith("（系統狀態："):
                 continue
             role = "Reona" if msg.author.id == client.user.id else "Nick"
-            fetched.append(f"{role}:{re.sub(r'\s+', ' ', txt)[:60]}")
+            clean_txt = re.sub(r"\s+", " ", txt)[:60]
+            fetched.append(f"{role}:{clean_txt}")
         if fetched:
             fetched.reverse()
             memory["recent_turns"] = fetched[-HISTORY_LIMIT:]
