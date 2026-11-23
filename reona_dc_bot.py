@@ -14,7 +14,7 @@ import discord
 from discord.ext import tasks
 
 # =========================================================
-# 1. Configuration
+# 1. Configuration & Multi-Key Rotation Pool
 # =========================================================
 DISCORD_BOT_TOKEN = (
     os.getenv("DISCORD_BOT_TOKEN")
@@ -26,7 +26,23 @@ TARGET_CHANNEL_ID = int(
     (os.getenv("DISCORD_CHANNEL_ID") or "0").strip() or "0"
 )
 
-GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or "").strip()
+def load_groq_key_pool() -> list[str]:
+    """支援在 GROQ_API_KEY 用逗號/換行填入多把鑰匙，也支援 GROQ_API_KEY_1 ~ _5"""
+    keys = []
+    raw_multi = os.getenv("GROQ_API_KEY") or ""
+    for part in re.split(r"[,;\s\n]+", raw_multi.strip()):
+        if part.strip():
+            keys.append(part.strip())
+    for idx in range(1, 6):
+        k = (os.getenv(f"GROQ_API_KEY_{idx}") or "").strip()
+        if k:
+            keys.append(k)
+    return list(dict.fromkeys(keys))
+
+GROQ_KEY_POOL = load_groq_key_pool()
+_current_key_idx = 0
+_key_cooldown_until: dict[str, float] = {}  # 記錄遇到 429 的鑰匙暫時冷卻時間
+
 FISH_API_KEY = (os.getenv("FISH_API_KEY") or "").strip()
 FISH_MODEL_ID = (
     os.getenv("FISH_MODEL_ID") or "7f92f8afb8ec43bf81429cc1c9199cb1"
@@ -49,7 +65,6 @@ BASE_IMAGE_PROB = 0.15
 TOPIC_IMAGE_PROB = 0.40
 IMAGE_COOLDOWN_SEC = 1200
 
-# 使用 Groq 秒回純對話模型（不輸出冗長 <think> 思考段，避免耗盡 tokens 變空字串）
 _env_model = (os.getenv("GROQ_TEXT_MODEL") or "").strip()
 TEXT_MODELS = [m for m in dict.fromkeys([
     _env_model,
@@ -75,13 +90,13 @@ for sub in ("cat_mochi", "cafe_food", "sydney_view", "sketch"):
 # 2. Daily Main Quests & Life Events
 # =========================================================
 DAILY_QUEST_TEMPLATES = [
-    "幫澳洲精品香氛品牌繪製秋季聯名包裝主視覺草稿，下午在工作室線上下對稿",
-    "完成獨立出版書籍封面插畫細節精修，傍晚去雪梨港邊散步買鮮花布置畫室",
-    "整理海外文創聯名打樣樣品與色彩校對，中午去常去的採光咖啡廳吃早午餐",
-    "替高級甜點品牌設計節慶禮盒插畫，下午在家邊點木質香氛邊陪麻糬午睡",
-    "把這週商業視覺專案定案交稿，晚上打算去海景餐廳吃頓好的犒賞自己",
-    "為精品雜誌專欄畫雪梨生活隨筆插畫，午後在公寓大落地窗邊曬太陽構思配色",
-    "跟海外策展團隊確認限量版畫輸出規格，忙完去逛市集挑幾件生活小物",
+    ("幫澳洲精品香氛品牌畫秋季聯名草稿，下午線上對稿", "畫香氛聯名草稿"),
+    ("完成獨立出版書籍封面精修，傍晚去港邊散步買花", "精修書籍封面插畫"),
+    ("整理文創聯名打樣樣品與校色，中午去採光咖啡廳", "整理聯名打樣校色"),
+    ("替高級甜點品牌設計禮盒插畫，下午在家邊點香氛邊畫圖", "畫甜點禮盒插畫"),
+    ("把這週商業視覺專案定案交稿，晚上去海景餐廳吃晚餐", "準備商業專案交稿"),
+    ("為精品雜誌專欄畫雪梨生活插畫，午後在落地窗邊構思配色", "畫雜誌專欄插畫"),
+    ("跟海外策展團隊確認限量版畫輸出規格，忙完去逛市集", "確認限量版畫輸出規格"),
 ]
 
 LIFE_MINOR_INCIDENTS = [
@@ -92,7 +107,7 @@ LIFE_MINOR_INCIDENTS = [
 ]
 
 # =========================================================
-# 3. Persistent Memory (自動讀取舊記憶＋即時存回 Git)
+# 3. Persistent Memory
 # =========================================================
 DEFAULT_MEMORY = {
     "recent_turns": [],
@@ -104,6 +119,7 @@ DEFAULT_MEMORY = {
     "daily_main_quest": {
         "date_key": "",
         "quest": "",
+        "short_label": "畫商業插畫",
         "progress": "早上剛開始準備",
     },
     "current_emotion": "happy",
@@ -146,7 +162,6 @@ def load_memory() -> dict:
                 merged[k].update(v)
             else:
                 merged[k] = v
-        # 相容舊版記憶檔欄位（如 history / notes）
         if not merged["recent_turns"] and isinstance(data.get("history"), list):
             merged["recent_turns"] = [str(x) for x in data["history"][-HISTORY_LIMIT:]]
         if not merged["long_term_notes"] and isinstance(data.get("notes"), list):
@@ -161,7 +176,6 @@ def load_memory() -> dict:
 
 
 def sync_memory_to_git_bg() -> None:
-    """背景把最新記憶檔同步回 GitHub，確保重啟或下一棒接力都能讀到記憶。"""
     global _last_git_sync_ts
     now = time.time()
     if now - _last_git_sync_ts < 120:
@@ -217,10 +231,14 @@ def ensure_daily_main_quest(now_dt: datetime) -> dict:
     today_key = now_dt.strftime("%Y-%m-%d")
     q_obj = memory.setdefault("daily_main_quest", {})
     if q_obj.get("date_key") != today_key or not q_obj.get("quest"):
+        full_q, short_q = random.choice(DAILY_QUEST_TEMPLATES)
         q_obj["date_key"] = today_key
-        q_obj["quest"] = random.choice(DAILY_QUEST_TEMPLATES)
+        q_obj["quest"] = full_q
+        q_obj["short_label"] = short_q
         q_obj["progress"] = "早上剛開始準備"
         save_memory(memory)
+    elif not q_obj.get("short_label"):
+        q_obj["short_label"] = "畫商業插畫"
 
     hour = now_dt.hour
     if 6 <= hour < 12:
@@ -294,7 +312,7 @@ def get_cycle_day_num(now_dt: datetime) -> int:
 
 
 # =========================================================
-# 4. Fast Prompt, Emotion Detection & Smart Fallback
+# 4. Fast Prompt, Key-Rotation Client & Smart Fallback
 # =========================================================
 THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 BAD_CHAR_RE = re.compile(r"[\u3040-\u309f\u30a0-\u30ff姎懓懞擝奼懅鼉齾玈尞攟臙屴尛沝炋朰攴攕襾]")
@@ -353,9 +371,21 @@ def clean_reply_text(raw: str) -> tuple[str, str]:
 
 
 def context_aware_fallback(user_text: str, now_dt: datetime) -> str:
-    """當 API 偶爾限流或網路抖動時，依據記憶與當下主線給出自然短句，絕不重複說『剛才分心』。"""
-    quest_short = ensure_daily_main_quest(now_dt)["quest"].split("，")[0][:14]
+    """僅當所有鑰匙都暫時達上限時啟用，保證語意貼合、不截斷文字"""
+    short_q = ensure_daily_main_quest(now_dt).get("short_label", "畫商業插畫")
     u = user_text.strip()
+    if any(k in u for k in ["辛苦", "加油", "累不累"]):
+        return random.choice([
+            "還好啦 謝謝你心疼我 你也要休息喔",
+            "聽到你這麼說就不累了 嘿嘿",
+            "剛告一段落啦 你那邊忙完了沒",
+        ])
+    if any(k in u for k in ["在幹嘛", "做什麼", "忙什麼"]):
+        return random.choice([
+            f"剛在{short_q} 麻糬在旁邊睡翻了",
+            f"正準備收尾{short_q} 你呢在忙嗎",
+            "剛喝口水休息一下 順便看你訊息",
+        ])
     if any(k in u for k in ["謝謝", "謝啦", "愛你"]):
         return random.choice([
             "跟我客氣什麼啦 快去忙你的",
@@ -364,15 +394,14 @@ def context_aware_fallback(user_text: str, now_dt: datetime) -> str:
         ])
     if any(k in u for k in ["寶貝", "在嗎", "哈囉", "嗨", "人呢"]):
         return random.choice([
-            f"在啦 剛在弄{quest_short} 怎麼了",
+            f"在啦 剛在{short_q} 怎麼了",
             "在呀 怎麼突然叫我 快說",
             "在呢 剛滑一下手機 找我幹嘛",
-            "欸 在這裡啦 今天過得還好嗎",
         ])
     return random.choice([
-        f"對啊 我剛還在忙{quest_short}呢",
-        "真的假的 欸你繼續講我在聽",
+        f"對啊 我剛還在{short_q}呢",
         "好喔 晚點忙完再好好跟你聊",
+        "欸 剛在看螢幕 你再跟我多說一點",
     ])
 
 
@@ -421,38 +450,62 @@ def build_compact_prompt(now_dt: datetime, lightweight_proactive: bool = False) 
 
 
 def call_groq_chat(sys_prompt: str, user_prompt: str, max_tokens: int = 85) -> tuple[str, str]:
-    if not GROQ_API_KEY:
+    """支援多組 GROQ_API_KEY 自動輪替：遇到 429 立刻標記冷卻並切換下一把鑰匙"""
+    global _current_key_idx
+    if not GROQ_KEY_POOL:
         return "happy", ""
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    for model_name in TEXT_MODELS:
-        try:
-            resp = requests.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers=headers,
-                json={
-                    "model": model_name,
-                    "messages": [
-                        {"role": "system", "content": sys_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    "temperature": 0.75,
-                    "max_tokens": max_tokens,
-                },
-                timeout=12,
-            )
-            if resp.status_code != 200:
-                print(f"[Groq Skip {resp.status_code}] {model_name}: {resp.text[:100]}", flush=True)
-                continue
-            data = resp.json()
-            raw = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-            emotion, cleaned = clean_reply_text(raw)
-            if cleaned:
-                return emotion, cleaned
-        except Exception as err:
-            print(f"[Groq Error] {model_name}: {err}", flush=True)
+
+    now_ts = time.time()
+    num_keys = len(GROQ_KEY_POOL)
+
+    for step in range(num_keys):
+        idx = (_current_key_idx + step) % num_keys
+        api_key = GROQ_KEY_POOL[idx]
+
+        # 若該鑰匙仍在 429 冷卻期（例如 10 分鐘內），直接跳過換下一把
+        if now_ts < _key_cooldown_until.get(api_key, 0.0):
+            continue
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        for model_name in TEXT_MODELS:
+            try:
+                resp = requests.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers=headers,
+                    json={
+                        "model": model_name,
+                        "messages": [
+                            {"role": "system", "content": sys_prompt},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                        "temperature": 0.75,
+                        "max_tokens": max_tokens,
+                    },
+                    timeout=12,
+                )
+                if resp.status_code == 429:
+                    # 這把鑰匙觸發速率/額度上限，冷卻 15 分鐘並立刻換下一把鑰匙
+                    _key_cooldown_until[api_key] = now_ts + 900
+                    _current_key_idx = (idx + 1) % num_keys
+                    print(f"[Key #{idx+1} 429 -> Switch to Key #{_current_key_idx+1}]", flush=True)
+                    break
+                if resp.status_code != 200:
+                    print(f"[Groq Skip {resp.status_code}] Key#{idx+1} {model_name}", flush=True)
+                    continue
+
+                data = resp.json()
+                raw = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                emotion, cleaned = clean_reply_text(raw)
+                if cleaned:
+                    _current_key_idx = idx
+                    return emotion, cleaned
+            except Exception as err:
+                print(f"[Groq Error] Key#{idx+1} {model_name}: {err}", flush=True)
+
     return "happy", ""
 
 
@@ -569,7 +622,6 @@ processing_lock = asyncio.Lock()
 
 
 async def hydrate_history_from_discord(channel: discord.abc.Messageable) -> None:
-    """若本地記憶檔為空，啟動時自動從 DC 頻道最近訊息回補對話記憶。"""
     if memory.get("recent_turns"):
         return
     try:
@@ -631,7 +683,10 @@ async def send_reona_payload(
 
 @client.event
 async def on_ready():
-    print(f"[Reona DC Bot Ready] Logged in as {client.user} | Render={RENDER_BASE_URL}", flush=True)
+    print(
+        f"[Reona DC Bot Ready] Logged in as {client.user} | Keys={len(GROQ_KEY_POOL)} | Render={RENDER_BASE_URL}",
+        flush=True,
+    )
     if TARGET_CHANNEL_ID:
         ch = client.get_channel(TARGET_CHANNEL_ID)
         if ch is not None:
