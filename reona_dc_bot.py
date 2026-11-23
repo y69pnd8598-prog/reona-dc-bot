@@ -31,8 +31,8 @@ GROQ_KEYS = [k.strip() for k in re.split(r"[,;\s]+", RAW_GROQ_KEYS) if k.strip()
 
 GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip()
 GEMINI_MODELS: list[str] = [
+    "gemini-2.5-flash-lite",
     "gemini-2.5-flash",
-    "gemini-3-flash-preview",
 ]
 
 FISH_API_KEY = (os.getenv("FISH_API_KEY") or "").strip()
@@ -41,6 +41,9 @@ RENDER_BASE_URL = (os.getenv("RENDER_BASE_URL") or "").strip().rstrip("/")
 
 # 精簡歷史句數（省 Token、避免撞每分鐘上限）
 HISTORY_LIMIT = 4
+
+# 連發訊息合併等待秒數（2.5 秒內連傳多則短訊會自動合併成一次 API 呼叫）
+DEBOUNCE_SECONDS = 2.5
 
 # 語音觸發機率（8%，讓語音額度撐更久）與護欄上限
 VOICE_TRIGGER_PROB = 0.08
@@ -64,12 +67,16 @@ VIDEO_KEYWORDS = [
     "視訊", "打給你", "開鏡頭", "看你", "打電話", "語音通話", "facetime", "video", "call"
 ]
 
-# ==================== 運行時狀態 ====================
+# ==================== 運行時狀態與連發緩衝 ====================
 _current_key_idx = 0
 _key_cooldown_until: dict[str, float] = {}
 ACTIVE_MODELS: list[str] = ["qwen/qwen3.8-27b"]
 last_user_msg_ts: float = 0.0
 last_proactive_slot: str = ""
+
+_pending_messages: list[str] = []
+_debounce_task: asyncio.Task | None = None
+_api_lock = asyncio.Lock()
 
 
 # ==================== 記憶讀寫與主線生成 ====================
@@ -228,7 +235,7 @@ def discover_groq_models() -> list[str]:
             resp = requests.get(
                 "https://api.groq.com/openai/v1/models",
                 headers={"Authorization": f"Bearer {key}"},
-                timeout=10,
+                timeout=8,
             )
             if resp.status_code == 200:
                 items = resp.json().get("data", [])
@@ -259,7 +266,7 @@ def discover_gemini_models() -> list[str]:
         resp = requests.get(
             "https://generativelanguage.googleapis.com/v1beta/models",
             params={"key": GEMINI_API_KEY},
-            timeout=10,
+            timeout=8,
         )
         if resp.status_code == 200:
             items = resp.json().get("models", [])
@@ -275,15 +282,17 @@ def discover_gemini_models() -> list[str]:
                 if "flash" in low:
                     usable.append(name)
 
+            # 優先把最寬鬆、不容易 429 或 503 high demand 的 flash-lite 排最前面，其次才是正式版 flash
             usable.sort(
                 key=lambda n: (
+                    0 if "lite" in n.lower() else 1,
                     0 if ("preview" not in n.lower() and "exp" not in n.lower()) else 1,
                     [-int(x) if x.isdigit() else 0 for x in re.split(r"[^0-9]+", n)],
                     n,
                 )
             )
             if usable:
-                GEMINI_MODELS = usable[:4]
+                GEMINI_MODELS = usable[:6]
                 print(f"[Gemini Models Discovered] {GEMINI_MODELS}", flush=True)
     except Exception as e:
         print(f"[Gemini Discover Warn] {e}", flush=True)
@@ -325,7 +334,7 @@ def call_groq_transparent(sys_prompt: str, user_prompt: str, max_tokens: int = 1
                         "temperature": 0.75,
                         "max_tokens": max_tokens,
                     },
-                    timeout=14,
+                    timeout=9,
                 )
 
                 if resp.status_code == 429:
@@ -371,7 +380,7 @@ def call_groq_transparent(sys_prompt: str, user_prompt: str, max_tokens: int = 1
 
 
 def call_gemini_chat(sys_prompt: str, user_prompt: str, max_tokens: int = 120) -> tuple[str, str]:
-    """Groq 撞到 429 或失敗時的 Gemini 備援引擎"""
+    """Groq 撞到 429 或失敗時的 Gemini 備援引擎（flash-lite 優先，8 秒快速切換）"""
     if not GEMINI_API_KEY:
         return "", "未設定 GEMINI_API_KEY"
 
@@ -391,11 +400,15 @@ def call_gemini_chat(sys_prompt: str, user_prompt: str, max_tokens: int = 120) -
                         "maxOutputTokens": max_tokens,
                     },
                 },
-                timeout=15,
+                timeout=8,
             )
             if resp.status_code == 429:
                 last_err = f"Gemini {model_id} 429 速率上限"
                 print(f"[Gemini 429] {model_id}", flush=True)
+                continue
+            if resp.status_code == 503:
+                last_err = f"Gemini {model_id} 503 尖峰擁擠"
+                print(f"[Gemini 503 High Demand] {model_id}", flush=True)
                 continue
             if resp.status_code != 200:
                 last_err = f"Gemini HTTP {resp.status_code} ({model_id})"
@@ -424,6 +437,7 @@ def generate_reona_reply(
     max_attempts: int = 3,
 ) -> tuple[str, str]:
     last_err = ""
+    retry_delays = [5.0, 12.0]  # 累計 17 秒，足以銜接 Groq 15~20s 的短冷卻視窗
     for attempt in range(max_attempts):
         reply, err_reason = call_groq_transparent(sys_prompt, user_prompt, max_tokens)
         if reply:
@@ -438,7 +452,7 @@ def generate_reona_reply(
             last_err = err_reason
 
         if attempt < max_attempts - 1:
-            wait_sec = 4.5 + attempt * 2.0
+            wait_sec = retry_delays[min(attempt, len(retry_delays) - 1)]
             print(
                 f"[Retry Wait] 雙引擎暫忙，背景等待 {wait_sec:.1f}s 後進行第 {attempt+2} 輪重試...",
                 flush=True,
@@ -556,8 +570,8 @@ async def proactive_loop():
         return
     last_proactive_slot = slot_key
 
-    # 若剛聊過（8 分鐘內有互動）就不重複主動打斷
-    if time.time() - last_user_msg_ts < 480:
+    # 若剛聊過（8 分鐘內有互動）或正在打字排隊中，就不重複主動打斷
+    if _pending_messages or _api_lock.locked() or (time.time() - last_user_msg_ts < 480):
         return
 
     channel = client.get_channel(TARGET_CHANNEL_ID)
@@ -569,10 +583,67 @@ async def proactive_loop():
 
     sys_prompt = build_prompt(now_dt)
     user_prompt = "主動傳一則簡短日常近況或關心訊息給 Nick（不要問號連發，像平常傳 LINE 隨口分享在畫室、麻糬或伸展休息的日常）。"
-    # 主動敲人只嘗試 1 輪，若雙引擎剛好忙線就安靜略過、不搶聊天額度
-    reply, _ = await asyncio.to_thread(generate_reona_reply, sys_prompt, user_prompt, 100, 1)
+    async with _api_lock:
+        reply, _ = await asyncio.to_thread(generate_reona_reply, sys_prompt, user_prompt, 100, 1)
     if reply:
         append_turn("Reona", reply)
+        await channel.send(reply)
+
+
+async def process_batched_messages(channel: discord.abc.Messageable) -> None:
+    global _pending_messages, last_user_msg_ts
+    try:
+        await asyncio.sleep(DEBOUNCE_SECONDS)
+    except asyncio.CancelledError:
+        return
+
+    if not _pending_messages:
+        return
+
+    batch = _pending_messages[:]
+    _pending_messages.clear()
+
+    combined_text = " / ".join(batch)
+    now_dt = datetime.now(SYDNEY_TZ)
+    last_user_msg_ts = time.time()
+
+    capture_key_note(combined_text, now_dt)
+    capture_body_status(combined_text, now_dt)
+    append_turn("Nick", combined_text)
+
+    wants_video = any(k in combined_text.lower() for k in VIDEO_KEYWORDS)
+    if wants_video and RENDER_BASE_URL:
+        asyncio.create_task(asyncio.to_thread(wake_render_server))
+
+    sys_prompt = build_prompt(now_dt)
+    user_prompt = f"Nick 剛傳來：「{combined_text}」。請用 Reona 口吻自然回覆。"
+
+    async with _api_lock:
+        async with channel.typing():
+            reply, err_reason = await asyncio.to_thread(
+                generate_reona_reply, sys_prompt, user_prompt, 120, 3
+            )
+
+    if not reply:
+        await channel.send(f"（系統狀態：目前引擎暫時無法取得回覆 — {err_reason}）")
+        return
+
+    append_turn("Reona", reply)
+
+    if wants_video and RENDER_BASE_URL:
+        call_url = f"{RENDER_BASE_URL}/?mode=call"
+        await channel.send(f"{reply}\n來 我開好視訊了直接點進來：{call_url}")
+        return
+
+    # 偶爾附帶語音訊息（機率 8%，受每日 250 字 / 每月 8,000 字護欄保護）
+    voice_bytes = None
+    if random.random() < VOICE_TRIGGER_PROB:
+        voice_bytes = await asyncio.to_thread(try_synthesize_voice, reply, now_dt)
+
+    if voice_bytes:
+        audio_file = discord.File(io.BytesIO(voice_bytes), filename="reona_voice.mp3")
+        await channel.send(content=reply, file=audio_file)
+    else:
         await channel.send(reply)
 
 
@@ -602,7 +673,7 @@ async def on_ready():
 
 @client.event
 async def on_message(message: discord.Message):
-    global last_user_msg_ts
+    global _debounce_task, last_user_msg_ts
     if message.author.bot:
         return
     if TARGET_CHANNEL_ID and message.channel.id != TARGET_CHANNEL_ID:
@@ -612,44 +683,12 @@ async def on_message(message: discord.Message):
     if not user_text:
         return
 
-    now_dt = datetime.now(SYDNEY_TZ)
     last_user_msg_ts = time.time()
+    _pending_messages.append(user_text)
 
-    capture_key_note(user_text, now_dt)
-    capture_body_status(user_text, now_dt)
-    append_turn("Nick", user_text)
-
-    wants_video = any(k in user_text.lower() for k in VIDEO_KEYWORDS)
-    if wants_video and RENDER_BASE_URL:
-        asyncio.create_task(asyncio.to_thread(wake_render_server))
-
-    sys_prompt = build_prompt(now_dt)
-    user_prompt = f"Nick 剛傳來：「{user_text}」。請用 Reona 口吻自然回覆。"
-
-    async with message.channel.typing():
-        reply, err_reason = await asyncio.to_thread(generate_reona_reply, sys_prompt, user_prompt, 120, 3)
-
-    if not reply:
-        await message.channel.send(f"（系統狀態：目前引擎暫時無法取得回覆 — {err_reason}）")
-        return
-
-    append_turn("Reona", reply)
-
-    if wants_video and RENDER_BASE_URL:
-        call_url = f"{RENDER_BASE_URL}/?mode=call"
-        await message.channel.send(f"{reply}\n來 我開好視訊了直接點進來：{call_url}")
-        return
-
-    # 偶爾附帶語音訊息（機率 8%，受每日 250 字 / 每月 8,000 字護欄保護）
-    voice_bytes = None
-    if random.random() < VOICE_TRIGGER_PROB:
-        voice_bytes = await asyncio.to_thread(try_synthesize_voice, reply, now_dt)
-
-    if voice_bytes:
-        audio_file = discord.File(io.BytesIO(voice_bytes), filename="reona_voice.mp3")
-        await message.channel.send(content=reply, file=audio_file)
-    else:
-        await message.channel.send(reply)
+    if _debounce_task and not _debounce_task.done():
+        _debounce_task.cancel()
+    _debounce_task = asyncio.create_task(process_batched_messages(message.channel))
 
 
 if __name__ == "__main__":
