@@ -5,7 +5,7 @@ import time
 import random
 import asyncio
 import io
-from datetime import datetime, timedelta
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import requests
@@ -30,9 +30,9 @@ RAW_GROQ_KEYS = (os.getenv("GROQ_API_KEY") or "").strip()
 GROQ_KEYS = [k.strip() for k in re.split(r"[,;\s]+", RAW_GROQ_KEYS) if k.strip()]
 
 GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip()
-GEMINI_MODELS = [
+GEMINI_MODELS: list[str] = [
     "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
+    "gemini-3-flash-preview",
 ]
 
 FISH_API_KEY = (os.getenv("FISH_API_KEY") or "").strip()
@@ -42,7 +42,8 @@ RENDER_BASE_URL = (os.getenv("RENDER_BASE_URL") or "").strip().rstrip("/")
 # 精簡歷史句數（省 Token、避免撞每分鐘上限）
 HISTORY_LIMIT = 4
 
-# 語音護欄上限（每日 250 字 / 每月 8,000 字）
+# 語音觸發機率（8%，讓語音額度撐更久）與護欄上限
+VOICE_TRIGGER_PROB = 0.08
 DAILY_VOICE_CHAR_LIMIT = 250
 MONTHLY_VOICE_CHAR_LIMIT = 8000
 
@@ -51,6 +52,12 @@ WEEKDAY_NAMES_ZH = ["週一", "週二", "週三", "週四", "週五", "週六", 
 KEY_FACT_KEYWORDS = [
     "考試", "面試", "上班", "下班", "醫生", "看診", "生病", "發燒", "頭痛",
     "約", "見面", "飛機", "搬家", "截止", "交件", "報告", "作業", "重要"
+]
+
+BODY_STATUS_KEYWORDS = [
+    "身體", "吃藥", "藥", "睡", "精神", "累", "疲憊", "頭痛", "發燒",
+    "生病", "感冒", "舒服", "不舒服", "恢復", "心跳", "胸悶",
+    "胃", "肚子", "腸胃", "拉肚子", "腹瀉", "反酸", "胃痛", "脹氣", "噁心", "沒胃口"
 ]
 
 VIDEO_KEYWORDS = [
@@ -64,11 +71,13 @@ ACTIVE_MODELS: list[str] = ["qwen/qwen3.8-27b"]
 last_user_msg_ts: float = 0.0
 last_proactive_slot: str = ""
 
+
 # ==================== 記憶讀寫與主線生成 ====================
 def default_memory() -> dict:
     return {
         "recent_turns": [],
         "long_term_notes": [],
+        "body_status": [],
         "daily_quest": {"date": "", "quest": ""},
         "voice_usage": {
             "date": "",
@@ -110,13 +119,13 @@ def ensure_daily_main_quest(now_dt: datetime) -> dict:
         return dq
 
     quest_pool = [
-        "幫雜誌跨頁插畫上主色調與光影",
-        "整理出版社新繪本分鏡草稿",
-        "去邦代海邊咖啡廳畫速寫靈感",
-        "幫麻糬梳毛順便採買進口貓罐頭",
-        "調整商業委託主視覺的色彩層次",
-        "逛雪梨週末手作市集找顏料素材",
-        "完成品牌聯名包裝插畫的完稿細節",
+        "幫雜誌跨頁商業插畫上主色調與光影",
+        "整理出版社新繪本分鏡草稿與色票",
+        "去邦代海邊咖啡廳畫速寫抓靈感",
+        "幫挑食奶油貓麻糬梳毛並採買進口罐頭",
+        "調整品牌聯名主視覺的色彩層次與細節",
+        "逛雪梨週末手作市集挑進口水彩顏料",
+        "在海景畫室完成精品包裝插畫完稿",
     ]
     seed_idx = (now_dt.year * 1000 + now_dt.timetuple().tm_yday) % len(quest_pool)
     dq["date"] = today_str
@@ -138,6 +147,19 @@ def capture_key_note(user_text: str, now_dt: datetime) -> None:
             memory["long_term_notes"] = notes[-2:]
 
 
+def capture_body_status(user_text: str, now_dt: datetime) -> None:
+    txt = re.sub(r"\s+", " ", (user_text or "").strip())
+    if not txt or len(txt) < 2:
+        return
+    if any(k in txt for k in BODY_STATUS_KEYWORDS):
+        stamp = now_dt.strftime("%m/%d")
+        compact = f"{stamp} {txt[:14]}"
+        statuses = memory.setdefault("body_status", [])
+        if compact not in statuses:
+            statuses.append(compact)
+            memory["body_status"] = statuses[-1:]
+
+
 def append_turn(role_prefix: str, text: str) -> None:
     cleaned = re.sub(r"\s+", " ", (text or "").strip())
     if not cleaned:
@@ -157,6 +179,8 @@ def clean_reply_text(raw: str) -> str:
     txt = txt.replace("「", "").replace("」", "").replace('"', "").strip()
     # 嚴禁第三人稱自稱「寶貝」
     txt = re.sub(r"寶貝(想|要|剛|在|正在|也|去|吃|畫|睡|忙)", r"我\1", txt)
+    # 台灣女生 LINE 口吻：去掉句尾多餘句號，改用自然空格斷句
+    txt = txt.replace("。", " ")
     txt = re.sub(r"\s+", " ", txt).strip()
     return txt
 
@@ -171,12 +195,19 @@ def build_prompt(now_dt: datetime) -> str:
     notes = memory.get("long_term_notes", [])[-2:]
     key_note_str = "；".join(notes) if notes else "無"
 
+    statuses = memory.get("body_status", [])[-1:]
+    body_str = statuses[0] if statuses else "無"
+
     return (
-        "Reona（第一人稱「我」），Nick 女友，住雪梨海景公寓與畫室，商業插畫師，養挑食奶油貓麻糬。"
-        "坦率真誠、不傲嬌。一律繁體中文台灣女生 LINE 短句（8～20字），空格斷句，禁簡體、禁冒號前綴、禁第三人稱自稱「寶貝」。"
-        f"\n時間：{now_dt.strftime('%m/%d')}（{weekday_zh}）{now_dt.strftime('%H:%M')}｜主線：{quest_info['quest'][:24]}"
-        f"\n備忘：{key_note_str}"
-        f"\n近期：{history_str}"
+        "你是 Reona（第一人稱「我」），Nick 的台灣女友。家境優渥、生活品味從容，住雪梨海景公寓並有獨立畫室，"
+        "商業插畫師，養挑食奶油貓「麻糬」。體質偏怕冷、手腳易冰涼、對灰塵花粉輕微過敏，趕畫稿時肩頸手腕易痠緊。"
+        "腸胃天生敏感（症狀含胃脹氣、胃痛、反酸、沒胃口、吃油辣或喝冰飲易絞痛拉肚子），嚴重度分三級："
+        "平常輕微僅偶爾脹氣沒胃口、趕稿壓力大或吃錯東西時中度發作需吃腸胃藥喝溫粥、極少數嚴重時會痛到無力畫畫只能躺床熱敷休息。"
+        "個性溫柔坦率、絕不傲嬌、不說教。超道地台灣女生傳 LINE 口吻：一律繁體中文短句（8～20字），"
+        "空格斷句不打句號，禁簡體、禁冒號前綴、禁第三人稱自稱「寶貝」。"
+        f"\n雪梨時間：{now_dt.strftime('%m/%d')}（{weekday_zh}）{now_dt.strftime('%H:%M')}｜今日主線：{quest_info['quest'][:26]}"
+        f"\n重要備忘：{key_note_str}｜Nick狀態：{body_str}"
+        f"\n近期對話：{history_str}"
     )
 
 
@@ -220,6 +251,45 @@ def discover_groq_models() -> list[str]:
             print(f"[Groq Discover Warn] Key#{idx+1}: {e}", flush=True)
 
     return ACTIVE_MODELS
+
+
+def discover_gemini_models() -> list[str]:
+    global GEMINI_MODELS
+    if not GEMINI_API_KEY:
+        return GEMINI_MODELS
+    try:
+        resp = requests.get(
+            "https://generativelanguage.googleapis.com/v1beta/models",
+            params={"key": GEMINI_API_KEY},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            items = resp.json().get("models", [])
+            usable = []
+            for m in items:
+                methods = m.get("supportedGenerationMethods", [])
+                name = (m.get("name") or "").replace("models/", "")
+                low = name.lower()
+                if "generateContent" not in methods:
+                    continue
+                if any(bad in low for bad in ("image", "tts", "audio", "embedding", "veo", "imagen", "gemma", "pro", "latest")):
+                    continue
+                if "flash" in low:
+                    usable.append(name)
+
+            usable.sort(
+                key=lambda n: (
+                    0 if ("preview" not in n.lower() and "exp" not in n.lower()) else 1,
+                    [-int(x) if x.isdigit() else 0 for x in re.split(r"[^0-9]+", n)],
+                    n,
+                )
+            )
+            if usable:
+                GEMINI_MODELS = usable[:4]
+                print(f"[Gemini Models Discovered] {GEMINI_MODELS}", flush=True)
+    except Exception as e:
+        print(f"[Gemini Discover Warn] {e}", flush=True)
+    return GEMINI_MODELS
 
 
 def call_groq_transparent(sys_prompt: str, user_prompt: str, max_tokens: int = 120) -> tuple[str, str]:
@@ -481,7 +551,7 @@ async def proactive_loop():
             return
 
     sys_prompt = build_prompt(now_dt)
-    user_prompt = "主動傳一則簡短日常近況或關心訊息給 Nick（不要問號連發，像平常傳 LINE 隨口分享）。"
+    user_prompt = "主動傳一則簡短日常近況或關心訊息給 Nick（不要問號連發，像平常傳 LINE 隨口分享在畫室、麻糬或伸展休息的日常）。"
     reply, _ = await asyncio.to_thread(generate_reona_reply, sys_prompt, user_prompt, 100)
     if reply:
         append_turn("Reona", reply)
@@ -491,10 +561,11 @@ async def proactive_loop():
 @client.event
 async def on_ready():
     discover_groq_models()
+    discover_gemini_models()
     print(
         f"[Reona Ready] User={client.user} | Channel={TARGET_CHANNEL_ID} | "
         f"GroqKeys={len(GROQ_KEYS)} | Gemini={'ON' if GEMINI_API_KEY else 'OFF'} | "
-        f"Models={ACTIVE_MODELS}",
+        f"GroqModels={ACTIVE_MODELS} | GeminiModels={GEMINI_MODELS}",
         flush=True,
     )
     if TARGET_CHANNEL_ID:
@@ -527,6 +598,7 @@ async def on_message(message: discord.Message):
     last_user_msg_ts = time.time()
 
     capture_key_note(user_text, now_dt)
+    capture_body_status(user_text, now_dt)
     append_turn("Nick", user_text)
 
     wants_video = any(k in user_text.lower() for k in VIDEO_KEYWORDS)
@@ -550,9 +622,9 @@ async def on_message(message: discord.Message):
         await message.channel.send(f"{reply}\n來 我開好視訊了直接點進來：{call_url}")
         return
 
-    # 偶爾附帶語音訊息（受每日 250 字 / 每月 8,000 字護欄保護）
+    # 偶爾附帶語音訊息（機率 8%，受每日 250 字 / 每月 8,000 字護欄保護）
     voice_bytes = None
-    if random.random() < 0.25:
+    if random.random() < VOICE_TRIGGER_PROB:
         voice_bytes = await asyncio.to_thread(try_synthesize_voice, reply, now_dt)
 
     if voice_bytes:
