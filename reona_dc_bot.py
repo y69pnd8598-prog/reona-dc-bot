@@ -68,13 +68,14 @@ IMAGE_COOLDOWN_SEC = 1200
 _env_model = (os.getenv("GROQ_TEXT_MODEL") or "").strip()
 TEXT_MODELS = [m for m in dict.fromkeys([
     _env_model,
-    "llama-3.3-70b-versatile",
-    "llama-3.1-8b-instant",
+    "openai/gpt-oss-20b",
+    "qwen/qwen3.8-27b",
+    "meta-llama/llama-4-scout-17b-16e-instruct",
 ]) if m]
 
 SYDNEY_TZ = ZoneInfo("Australia/Sydney")
 WEEKDAY_NAMES_ZH = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
-HISTORY_LIMIT = 14
+HISTORY_LIMIT = 20
 
 BASE_DIR = Path(__file__).resolve().parent
 MEMORY_FILE = BASE_DIR / "reona_memory.json"
@@ -449,7 +450,7 @@ def build_compact_prompt(now_dt: datetime, lightweight_proactive: bool = False) 
     return f"{base_persona}\n記憶備忘：{notes_str}\n近期對話：\n{history_str}"
 
 
-def call_groq_chat(sys_prompt: str, user_prompt: str, max_tokens: int = 85) -> tuple[str, str]:
+def call_groq_chat(sys_prompt: str, user_prompt: str, max_tokens: int = 180) -> tuple[str, str]:
     """支援多組 GROQ_API_KEY 自動輪替：遇到 429 立刻標記冷卻並切換下一把鑰匙"""
     global _current_key_idx
     if not GROQ_KEY_POOL:
