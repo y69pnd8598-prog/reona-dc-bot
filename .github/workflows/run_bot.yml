@@ -32,6 +32,8 @@ jobs:
       - name: Run Reona Bot
         env:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          TARGET_CHANNEL_ID: ${{ secrets.TARGET_CHANNEL_ID }}
           DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           FISH_API_KEY: ${{ secrets.FISH_API_KEY }}
@@ -44,8 +46,8 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          if [ -f web_reona_memory.json ]; then
-            git add web_reona_memory.json
+          if [ -f reona_memory.json ]; then
+            git add reona_memory.json
             git diff --staged --quiet || git commit -m "chore: sync Reona memory state"
             git push || true
           fi
