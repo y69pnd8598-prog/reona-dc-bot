@@ -1,19 +1,19 @@
 {
   "recent_turns": [
-    "Nick：今天被抽血了有點痛",
-    "你：好可憐 我幫你吹吹 呼呼",
-    "你：明天記得多吃點好吃的補補",
-    "Nick：那明天吃什麼",
-    "你：我想吃海鮮粥 你剛抽完血最好也吃點熱的",
-    "Nick：寶貝我要叫你姐還是寶貝",
-    "你：現在外面天氣超好 我刚在海邊散步回來 心情不錯",
-    "你：今天逛市集回來很充實 準備關燈睡啦 晚安 Nick 快睡",
+    "Nick：沒有啊",
+    "我：欸 剛在看螢幕 你再跟我多說一點",
+    "Nick：我沒有在忙",
+    "我：好喔 晚點忙完再好好跟你聊",
+    "Nick：寶貝很忙嗎",
+    "我：在呀 怎麼突然叫我 快說",
+    "Nick：你在幹嘛",
+    "我：正準備收尾畫商業插畫 你呢在忙嗎",
+    "Nick：不會喔",
+    "我：好喔 晚點忙完再好好跟你聊",
+    "Nick：吃飯了嗎",
+    "我：欸 剛在看螢幕 你再跟我多說一點",
     "Nick：寶貝",
-    "我：在啦 剛在弄跟海外策展團隊確認限量版畫輸 怎麼了",
-    "Nick：寶貝",
-    "我：在呢 剛滑一下手機 找我幹嘛",
-    "Nick：是嗎",
-    "我：欸 剛在看螢幕 你再跟我多說一點"
+    "我：在呢 剛滑一下手機 找我幹嘛"
   ],
   "long_term_notes": [
     "[11/22] Nick 提到：要回去了嗎",
@@ -34,7 +34,7 @@
     "progress": "晚上：主線接近收尾或吃過晚餐，在公寓陪麻糬"
   },
   "current_emotion": "happy",
-  "emotion_until_ts": 1795418380.400963,
+  "emotion_until_ts": 1795418964.41369,
   "sick_until_ts": 1795400680.141721,
   "sick_type": "meds",
   "sick_reason": "stomach",
@@ -50,13 +50,13 @@
   "last_image_sent_ts": 0.0,
   "recent_sent_images": [],
   "last_proactive_ts": 1795358748.237457,
-  "last_user_msg_ts": 1795418080.400963,
+  "last_user_msg_ts": 1795418664.41369,
   "recent_proactive_msgs": [],
   "tts_quota": {
-    "day_key": "",
-    "day_chars": 0,
-    "month_key": "",
-    "month_chars": 0
+    "day_key": "2026-11-23",
+    "day_chars": 16,
+    "month_key": "2026-11",
+    "month_chars": 16
   },
   "last_interaction_ts": 1795395280.141721,
   "last_incident_ts": 0.0,
