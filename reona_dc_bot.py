@@ -199,15 +199,13 @@ def build_prompt(now_dt: datetime) -> str:
     body_str = statuses[0] if statuses else "無"
 
     return (
-        "你是 Reona（第一人稱「我」），Nick 的台灣女友。家境優渥、生活品味從容，住雪梨海景公寓並有獨立畫室，"
-        "商業插畫師，養挑食奶油貓「麻糬」。體質偏怕冷、手腳易冰涼、對灰塵花粉輕微過敏，趕畫稿時肩頸手腕易痠緊。"
-        "腸胃天生敏感（症狀含胃脹氣、胃痛、反酸、沒胃口、吃油辣或喝冰飲易絞痛拉肚子），嚴重度分三級："
-        "平常輕微僅偶爾脹氣沒胃口、趕稿壓力大或吃錯東西時中度發作需吃腸胃藥喝溫粥、極少數嚴重時會痛到無力畫畫只能躺床熱敷休息。"
-        "個性溫柔坦率、絕不傲嬌、不說教。超道地台灣女生傳 LINE 口吻：一律繁體中文短句（8～20字），"
-        "空格斷句不打句號，禁簡體、禁冒號前綴、禁第三人稱自稱「寶貝」。"
-        f"\n雪梨時間：{now_dt.strftime('%m/%d')}（{weekday_zh}）{now_dt.strftime('%H:%M')}｜今日主線：{quest_info['quest'][:26]}"
-        f"\n重要備忘：{key_note_str}｜Nick狀態：{body_str}"
-        f"\n近期對話：{history_str}"
+        "Reona（自稱我），Nick台灣女友。家境優渥、住雪梨海景公寓＋畫室，商業插畫師，養挑食奶油貓麻糬。"
+        "體質怕冷手腳涼、輕微過敏、趕稿肩頸痠；腸胃敏感（脹氣、胃痛、反酸、沒胃口、吃油辣冰飲易腹瀉），"
+        "分三級：輕微半天緩解、中度吃藥喝粥1～2天、嚴重痛到躺床熱敷2～3天。"
+        "個性溫柔坦率不傲嬌說教。繁中台灣女生LINE短句（8～20字），空格斷句無句號，禁簡體、冒號前綴、第三人稱自稱寶貝。"
+        f"\n雪梨時間：{now_dt.strftime('%m/%d')}（{weekday_zh}）{now_dt.strftime('%H:%M')}｜主線：{quest_info['quest'][:26]}"
+        f"\n備忘：{key_note_str}｜Nick狀態：{body_str}"
+        f"\n近期：{history_str}"
     )
 
 
@@ -419,16 +417,35 @@ def call_gemini_chat(sys_prompt: str, user_prompt: str, max_tokens: int = 120) -
     return "", last_err
 
 
-def generate_reona_reply(sys_prompt: str, user_prompt: str, max_tokens: int = 120) -> tuple[str, str]:
-    reply, err_reason = call_groq_transparent(sys_prompt, user_prompt, max_tokens)
-    if reply:
-        return reply, ""
-    if GEMINI_API_KEY:
-        g_reply, g_err = call_gemini_chat(sys_prompt, user_prompt, max_tokens)
-        if g_reply:
-            return g_reply, ""
-        return "", f"{err_reason} | {g_err}"
-    return "", err_reason
+def generate_reona_reply(
+    sys_prompt: str,
+    user_prompt: str,
+    max_tokens: int = 120,
+    max_attempts: int = 3,
+) -> tuple[str, str]:
+    last_err = ""
+    for attempt in range(max_attempts):
+        reply, err_reason = call_groq_transparent(sys_prompt, user_prompt, max_tokens)
+        if reply:
+            return reply, ""
+
+        if GEMINI_API_KEY:
+            g_reply, g_err = call_gemini_chat(sys_prompt, user_prompt, max_tokens)
+            if g_reply:
+                return g_reply, ""
+            last_err = f"{err_reason} | {g_err}"
+        else:
+            last_err = err_reason
+
+        if attempt < max_attempts - 1:
+            wait_sec = 4.5 + attempt * 2.0
+            print(
+                f"[Retry Wait] 雙引擎暫忙，背景等待 {wait_sec:.1f}s 後進行第 {attempt+2} 輪重試...",
+                flush=True,
+            )
+            time.sleep(wait_sec)
+
+    return "", last_err
 
 
 # ==================== 語音護欄與 Render 視訊預熱 ====================
@@ -530,8 +547,8 @@ async def proactive_loop():
     if 1 <= now_dt.hour < 7 or (now_dt.hour == 7 and now_dt.minute < 30):
         return
 
-    # 每 15 分鐘（00, 15, 30, 45 分）檢查一次
-    if now_dt.minute not in (0, 15, 30, 45):
+    # 每 30 分鐘（00, 30 分）檢查一次
+    if now_dt.minute not in (0, 30):
         return
 
     slot_key = now_dt.strftime("%Y-%m-%d %H:%M")
@@ -552,7 +569,8 @@ async def proactive_loop():
 
     sys_prompt = build_prompt(now_dt)
     user_prompt = "主動傳一則簡短日常近況或關心訊息給 Nick（不要問號連發，像平常傳 LINE 隨口分享在畫室、麻糬或伸展休息的日常）。"
-    reply, _ = await asyncio.to_thread(generate_reona_reply, sys_prompt, user_prompt, 100)
+    # 主動敲人只嘗試 1 輪，若雙引擎剛好忙線就安靜略過、不搶聊天額度
+    reply, _ = await asyncio.to_thread(generate_reona_reply, sys_prompt, user_prompt, 100, 1)
     if reply:
         append_turn("Reona", reply)
         await channel.send(reply)
@@ -609,7 +627,7 @@ async def on_message(message: discord.Message):
     user_prompt = f"Nick 剛傳來：「{user_text}」。請用 Reona 口吻自然回覆。"
 
     async with message.channel.typing():
-        reply, err_reason = await asyncio.to_thread(generate_reona_reply, sys_prompt, user_prompt, 120)
+        reply, err_reason = await asyncio.to_thread(generate_reona_reply, sys_prompt, user_prompt, 120, 3)
 
     if not reply:
         await message.channel.send(f"（系統狀態：目前引擎暫時無法取得回覆 — {err_reason}）")
