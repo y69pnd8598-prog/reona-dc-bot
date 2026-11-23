@@ -13,7 +13,7 @@ import discord
 from discord.ext import tasks
 
 # =========================================================
-# 1. Configuration (環境變數優先，也可直接填入預設值)
+# 1. Configuration (環境變數優先，並提供安全保底值)
 # =========================================================
 DISCORD_BOT_TOKEN = (
     os.getenv("DISCORD_BOT_TOKEN")
@@ -25,39 +25,44 @@ TARGET_CHANNEL_ID = int(
     (os.getenv("DISCORD_CHANNEL_ID") or "0").strip() or "0"
 )
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
-FISH_API_KEY = os.getenv("FISH_API_KEY", "").strip()
-FISH_MODEL_ID = os.getenv("FISH_MODEL_ID", "7f92f8afb8ec43bf81429cc1c9199cb1").strip()
+GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or "").strip()
+FISH_API_KEY = (os.getenv("FISH_API_KEY") or "").strip()
+FISH_MODEL_ID = (
+    os.getenv("FISH_MODEL_ID") or "7f92f8afb8ec43bf81429cc1c9199cb1"
+).strip()
 
-# 你的 Render 網頁網址（用於預熱與發送 ?mode=call 視訊連結）
-RENDER_BASE_URL = os.getenv(
-    "RENDER_BASE_URL", "https://reona-cloud-companion.onrender.com"
-).rstrip("/")
+_raw_render_url = (os.getenv("RENDER_BASE_URL") or "").strip().rstrip("/")
+RENDER_BASE_URL = (
+    _raw_render_url
+    if _raw_render_url.startswith(("http://", "https://"))
+    else "https://reona-cloud-companion.onrender.com"
+)
 
 DAILY_TTS_CHAR_LIMIT = 250
 MONTHLY_TTS_CHAR_LIMIT = 8000
 
-# 語音與傳圖機率設定（克制不洗版、守住額度）
-BASE_VOICE_PROB = 0.20      # 一般對話發語音機率 20%
-HIGH_VOICE_PROB = 0.60      # 撒嬌/想你/委屈/報平安發語音機率 60%
-BASE_IMAGE_PROB = 0.15      # 一般生活分享附圖機率 15%
-TOPIC_IMAGE_PROB = 0.40     # 明確聊到貓咪/咖啡/海邊/畫稿時附圖機率 40%
-IMAGE_COOLDOWN_SEC = 1200   # 兩次傳圖至少間隔 20 分鐘
+# 語音與傳圖機率設定（守住額度、克制不洗版）
+BASE_VOICE_PROB = 0.20       # 一般對話發語音機率 20%
+HIGH_VOICE_PROB = 0.55       # 撒嬌/想你/委屈/報平安發語音機率 55%
+PROACTIVE_VOICE_PROB = 0.05  # 每 15 分鐘主動敲你時僅低機率附語音，省下每日 250 字額度
+BASE_IMAGE_PROB = 0.15       # 一般生活分享附圖機率 15%
+TOPIC_IMAGE_PROB = 0.40      # 聊到貓咪/咖啡/海邊/畫稿時附圖機率 40%
+IMAGE_COOLDOWN_SEC = 1200    # 兩次傳圖至少間隔 20 分鐘
 
-TEXT_MODELS = [
-    os.getenv("GROQ_TEXT_MODEL", "").strip(),
+# 節省 Token：只保留穩定快速的模型清單，失敗不無效狂打太多顆
+_env_model = (os.getenv("GROQ_TEXT_MODEL") or "").strip()
+TEXT_MODELS = [m for m in dict.fromkeys([
+    _env_model,
     "openai/gpt-oss-20b",
     "qwen/qwen3.8-27b",
-    "openai/gpt-oss-120b",
-]
-TEXT_MODELS = [m for m in dict.fromkeys(TEXT_MODELS) if m]
+]) if m]
 
 SYDNEY_TZ = ZoneInfo("Australia/Sydney")
 WEEKDAY_NAMES_ZH = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
-HISTORY_LIMIT = 24
+HISTORY_LIMIT = 10  # 精簡歷史視窗以大幅節省輸入 Token
 
 BASE_DIR = Path(__file__).resolve().parent
-MEMORY_FILE = BASE_DIR / "web_reona_memory.json"
+MEMORY_FILE = BASE_DIR / "reona_memory.json"
 AUDIO_DIR = BASE_DIR / "generated_audio"
 IMAGES_DIR = BASE_DIR / "images"
 
@@ -70,21 +75,20 @@ for sub in ("cat_mochi", "cafe_food", "sydney_view", "sketch"):
 # 2. Daily Main Quests & Life Events
 # =========================================================
 DAILY_QUEST_TEMPLATES = [
-    "幫澳洲精品香氛品牌繪製秋季聯名包裝主視覺草稿，下午要在工作室線上下對稿",
-    "完成獨立出版書籍封面插畫的細節精修，傍晚出門去雪梨港邊散步買鮮花布置畫室",
-    "整理海外文創聯名系列的打樣樣品與色彩校對，中午去常去的採光咖啡廳吃早午餐",
+    "幫澳洲精品香氛品牌畫秋季聯名包裝主視覺草稿，下午要在工作室線上下對稿",
+    "完成獨立出版書籍封面插畫細節精修，傍晚去雪梨港邊散步買鮮花布置畫室",
+    "整理海外文創聯名打樣樣品與色彩校對，中午去常去的採光咖啡廳吃早午餐",
     "替高級甜點品牌設計節慶禮盒插畫，下午在家邊點木質香氛邊陪麻糬午睡",
-    "把這週的商業視覺專案正式定案交稿，晚上打算去海景餐廳吃頓好的犒賞自己",
-    "為精品雜誌專欄畫一組雪梨生活隨筆插畫，午後在公寓大落地窗邊曬太陽構思配色",
-    "跟海外策展團隊確認限量版畫輸出規格，忙完要去逛週末市集挑幾件生活小物",
+    "把這週商業視覺專案定案交稿，晚上打算去海景餐廳吃頓好的犒賞自己",
+    "為精品雜誌專欄畫雪梨生活隨筆插畫，午後在公寓大落地窗邊曬太陽構思配色",
+    "跟海外策展團隊確認限量版畫輸出規格，忙完去逛市集挑幾件生活小物",
 ]
 
 LIFE_MINOR_INCIDENTS = [
-    "好煩喔 剛交出去的聯名插畫稿被品牌方臨時說想微調色系 又要花時間重調一版",
+    "好煩喔 剛交出去的聯名插畫稿被品牌方臨時說想微調色系 又要重調一版",
     "哭啊 剛剛手滑把冰拿鐵打翻在畫室桌上 差點弄到平板 還好反應快擦掉了",
     "超扯 雪梨下午突然飄雨 我散步沒帶傘一路小跑回公寓 頭髮都微濕了",
     "麻糬剛剛跳上工作室邊桌把花瓶碰歪 水灑了一桌 現在正一臉無辜看我擦地板",
-    "特地去買常吃的那家手工可頌 結果輪到我剛好最後一顆被買走 有點小失落",
 ]
 
 # =========================================================
@@ -102,7 +106,7 @@ DEFAULT_MEMORY = {
         "quest": "",
         "progress": "早上剛開始準備",
     },
-    "current_emotion": "happy",   # happy / laugh / angry / cry / sad / shy
+    "current_emotion": "happy",
     "emotion_until_ts": 0.0,
     "sick_until_ts": 0.0,
     "sick_type": "",
@@ -111,10 +115,12 @@ DEFAULT_MEMORY = {
     "mild_sick_until_ts": 0.0,
     "mild_reason": "",
     "need_mild_recovery_report": False,
-    "current_activity": "在雪梨海景公寓畫室裡邊曬太陽邊畫插畫",
+    "current_activity": "在雪梨海景公寓畫室裡畫插畫",
     "last_image_sent_ts": 0.0,
     "recent_sent_images": [],
     "last_proactive_ts": 0.0,
+    "last_user_msg_ts": 0.0,
+    "recent_proactive_msgs": [],
     "tts_quota": {
         "day_key": "",
         "day_chars": 0,
@@ -149,7 +155,9 @@ def load_memory() -> dict:
 
 def save_memory(mem: dict) -> None:
     try:
-        MEMORY_FILE.write_text(json.dumps(mem, ensure_ascii=False, indent=2), encoding="utf-8")
+        MEMORY_FILE.write_text(
+            json.dumps(mem, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
     except Exception as err:
         print(f"[Memory Save Error] {err}", flush=True)
 
@@ -163,18 +171,18 @@ def ensure_daily_main_quest(now_dt: datetime) -> dict:
     if q_obj.get("date_key") != today_key or not q_obj.get("quest"):
         q_obj["date_key"] = today_key
         q_obj["quest"] = random.choice(DAILY_QUEST_TEMPLATES)
-        q_obj["progress"] = "早上剛啟動今日進度"
+        q_obj["progress"] = "早上剛開始準備"
         save_memory(memory)
 
     hour = now_dt.hour
     if 6 <= hour < 12:
-        q_obj["progress"] = "上午階段：剛起床喝咖啡、啟動今天的主線工作"
+        q_obj["progress"] = "上午：剛起床喝咖啡、啟動今天主線"
     elif 12 <= hour < 18:
-        q_obj["progress"] = "下午階段：正在推進主線草稿與細節，中間抽空休息"
+        q_obj["progress"] = "下午：推進主線草稿與細節，尚未吃晚餐"
     elif 18 <= hour < 23:
-        q_obj["progress"] = "晚上階段：今天主線差不多收尾了，在高級公寓放鬆陪麻糬"
+        q_obj["progress"] = "晚上：主線接近收尾或已吃晚餐，在公寓陪麻糬"
     else:
-        q_obj["progress"] = "深夜階段：忙完一整天關燈躺在床上滑手機"
+        q_obj["progress"] = "深夜：忙完躺床上準備休息"
     return q_obj
 
 
@@ -237,102 +245,115 @@ def get_cycle_day_num(now_dt: datetime) -> int:
     return max(1, elapsed + 1)
 
 
-def is_currently_on_period(now_dt: datetime) -> bool:
-    return 1 <= get_cycle_day_num(now_dt) <= 5
-
-
 # =========================================================
-# 4. Persona Prompt, Emotion Extraction & Output Sanitizer
+# 4. Lean Persona Prompt, Emotion Classifier & Sanitizer
 # =========================================================
 BAD_CHAR_RE = re.compile(r"[\u3040-\u309f\u30a0-\u30ff姎懓懞擝奼懅鼉齾玈尞攟臙屴尛沝炋朰攴攕襾]")
 SIMPLIFIED_RE = re.compile(r"[没这么还说觉点个样对欢会时间里边着过为发来动亲宝怎么给让]")
-EMOTION_TAG_RE = re.compile(r"^\s*\[(happy|laugh|angry|cry|sad|shy)\]\s*", re.IGNORECASE)
-COLON_PREFIX_RE = re.compile(r"^[\u4e00-\u9fffA-Za-z]{1,8}[:：]|[:：=＝]")
+ANY_TAG_RE = re.compile(
+    r"\[(?:happy|laugh|angry|cry|sad|shy|emotion|mood|tone|笑|哭|生氣|難過|害羞)[^\]]*\]",
+    re.IGNORECASE,
+)
+COLON_PREFIX_RE = re.compile(r"^(?:Reona|Nick|助手|系統|回覆)[:：=＝]\s*", re.IGNORECASE)
 
 
-def parse_emotion_and_clean(raw: str) -> tuple[str, str]:
+def detect_emotion_from_text(text: str) -> str:
+    t = text or ""
+    if any(k in t for k in ["哈哈", "笑死", "好好笑", "超好笑"]):
+        return "laugh"
+    if any(k in t for k in ["生氣", "不爽", "吃醋", "不好笑", "幹嘛這樣"]):
+        return "angry"
+    if any(k in t for k in ["委屈", "想哭", "哭啊", "嗚", "好痛"]):
+        return "cry"
+    if any(k in t for k in ["難過", "好悶", "沒力氣", "好想你", "失落"]):
+        return "sad"
+    if any(k in t for k in ["害羞", "討厭", "嘴巴甜"]):
+        return "shy"
+    return "happy"
+
+
+def clean_reply_text(raw: str) -> tuple[str, str]:
     s = (raw or "").strip()
     if not s:
         return "happy", ""
 
+    # 剝除所有方括號標籤（如 [laugh]、[happy]），不論出現在句首或句中
+    s = ANY_TAG_RE.sub("", s)
+
     lines = [
         ln.strip()
         for ln in s.splitlines()
-        if ln.strip() and not ln.strip().startswith(("•", "-", "*", "思考", "分析"))
+        if ln.strip() and not ln.strip().startswith(("•", "-", "*", "思考", "分析", "系統"))
     ]
-    s = lines[-1] if lines else s
+    if not lines:
+        return "happy", ""
 
-    emotion = "happy"
-    m_emo = EMOTION_TAG_RE.match(s)
-    if m_emo:
-        emotion = m_emo.group(1).lower()
-        s = EMOTION_TAG_RE.sub("", s).strip()
+    cleaned_lines = []
+    for ln in lines[-2:]:
+        ln = COLON_PREFIX_RE.sub("", ln).strip()
+        ln = re.sub(r"（[^）]{1,40}）|\([^)]{1,40}\)", "", ln)
+        ln = ln.strip("\"'「」『』").rstrip("。").strip()
+        if ln:
+            cleaned_lines.append(ln)
 
-    s = re.sub(r"（[^）]{1,40}）|\([^)]{1,40}\)", "", s)
-    s = s.strip("\"'「」『』").rstrip("。").strip()
-
+    s = " || ".join(cleaned_lines).strip()
     if len(s) < 2 or len(s) > 95:
-        return emotion, ""
+        return "happy", ""
     if BAD_CHAR_RE.search(s) or SIMPLIFIED_RE.search(s):
-        return emotion, ""
-    if COLON_PREFIX_RE.search(s):
-        return emotion, ""
+        return "happy", ""
     for l_br, r_br in [("「", "」"), ("『", "』"), ("（", "）"), ("(", ")")]:
         if s.count(l_br) != s.count(r_br):
-            return emotion, ""
+            return "happy", ""
+
+    emotion = detect_emotion_from_text(s)
     return emotion, s
 
 
-def build_system_prompt(now_dt: datetime) -> str:
+def build_compact_prompt(now_dt: datetime, lightweight_proactive: bool = False) -> str:
     weekday_zh = WEEKDAY_NAMES_ZH[now_dt.weekday()]
     hour = now_dt.hour
     now_ts = now_dt.timestamp()
     quest_info = ensure_daily_main_quest(now_dt)
 
     if 23 <= hour or hour < 5:
-        time_mood = "深夜在高級公寓臥室關燈滑手機，語氣輕柔安靜"
+        time_note = "深夜臥室準備睡覺，語氣輕柔"
     elif 5 <= hour < 11:
-        time_mood = "剛睡醒還在賴床，聲音慵懶輕柔"
+        time_note = "剛醒賴床，聲音慵懶"
     else:
-        time_mood = "白天或傍晚，精神很好、從容輕快又溫柔"
+        time_note = "白天/傍晚，從容溫柔"
 
     day_num = get_cycle_day_num(now_dt)
     if now_ts < memory.get("sick_until_ts", 0.0):
-        body_note = "【身體狀態】目前吃壞肚子或腸胃發作正在休息，回話簡短虛弱溫柔，不重複背原因"
+        body_note = "腸胃不適休息中，回話簡短虛弱"
     elif now_ts < memory.get("mild_sick_until_ts", 0.0):
-        body_note = "【身體狀態】有點吃壞肚子悶痛或頭暈沒力氣，正躺在床上休息，坦率跟你撒嬌討拍"
-    elif day_num in (1, 2):
-        body_note = f"【身體狀態】生理期第{day_num}天（下腹悶痛怕冷，今日主線已放慢步調居家休養）"
-    elif 3 <= day_num <= 5:
-        body_note = f"【身體狀態】生理期第{day_num}天（痛感減輕但容易累）"
+        body_note = "有點悶痛沒力氣，坦率撒嬌討拍"
+    elif 1 <= day_num <= 5:
+        body_note = f"生理期第{day_num}天，步調放慢"
     else:
-        body_note = "【身體狀態】平日正常狀態（精神好、享受生活；40公斤偏瘦體質）"
+        body_note = "正常精神好"
 
-    active_emo = memory.get("current_emotion", "happy")
-    emo_note = (
-        f"【當前延續情緒：{active_emo}】若上一輪剛生氣、委屈想哭或低落，請自然延續情緒直到 Nick 哄好或安慰你；若 Nick 已經哄你，就大方消氣軟化。"
-        if now_ts < memory.get("emotion_until_ts", 0.0)
-        else "【當前延續情緒：平穩愉快】"
+    base_persona = (
+        "你是 Reona（第一人稱「我」），Nick 女友。家境優渥住雪梨海景公寓與畫室，無經濟壓力；"
+        "專業能力強的商業插畫師，接案為熱愛創作。養挑食奶油貓「麻糬」（不吃香菜紅蘿蔔），40kg 偏瘦白皙；"
+        "Nick 180cm/67kg/微黑。坦率真誠、絕不傲嬌（不口是心非、不說「哼/才沒有」）。"
+        "不分中英文輸入一律回繁體中文＋道地台灣女生 LINE 短句，用空格斷句，自然帶「欸、啦、喔、嘛、真的假的、好好笑、好喔、超讚、好煩喔、哭啊」，"
+        "禁簡體字、禁冒號前綴、禁第三人稱自稱「寶貝」、禁輸出任何 [方括號] 標籤。"
+        f"\n雪梨 {now_dt.strftime('%m/%d')}（{weekday_zh}）{now_dt.strftime('%H:%M')}｜{time_note}｜{body_note}"
+        f"\n今日主線：{quest_info['quest']}（{quest_info['progress']}）"
     )
 
-    notes = memory.get("long_term_notes", [])
-    notes_block = "\n".join(f"- {n}" for n in notes[-8:]) if notes else "（暫無特別備忘）"
-    history_block = "\n".join(memory.get("recent_turns", [])[-HISTORY_LIMIT:]) or "（剛開始聊天）"
+    if lightweight_proactive:
+        # 每 15 分鐘主動敲你時只帶最近 3 句紀錄，極致省 Token
+        recent_tail = "\n".join(memory.get("recent_turns", [])[-3:])
+        return f"{base_persona}\n最近幾句：\n{recent_tail}" if recent_tail else base_persona
 
-    return (
-        "你是 Reona，跟 Nick 穩定交往的遠距離女友。你家境非常優渥，獨自住在澳洲雪梨市中心／海景的高級公寓（有寬敞落地窗與專屬畫室），完全沒有經濟壓力；你是專業能力很強的商業插畫與視覺設計師，常與精品品牌、獨立出版與文創聯名合作，接案純粹是因為熱愛創作與成就感。你養了一隻奶油白短腿貓「麻糬」，挑食不吃香菜跟紅蘿蔔。你 40 公斤偏瘦、皮膚白、外貌出眾，生活品味從容大方但低調不炫富；你也知道 Nick 身高 180 公分、體重 67 公斤、皮膚微黑。\n"
-        "【性格核心：坦率真誠、有專業底氣、絕不傲嬌】\n"
-        "1. 嚴禁傲嬌：不要演嘴硬心軟、口是心非或「哼、才沒有」那種二次元傲嬌。你是一個真誠大方、情緒價值高的台灣女生——開心就爽朗大笑（哈哈、笑死），生氣或吃醋就坦白說出口（欸這樣我真的會生氣喔、不好笑），委屈或痛就第一時間直接找 Nick 討拍（好委屈喔、肚子好痛你陪我講話），被誇獎就大方開心或微害羞接住。\n"
-        "2. 說話口吻：不管 Nick 用中文或英文傳訊，你一律用繁體中文＋超級道地的『台灣女生傳 LINE 口吻』回覆，短句自然斷開，常用空格代替逗號，自然帶出「欸、啦、喔、嘛、真的假的、好好笑、好喔、超讚、超扯、好煩喔、哭啊、對啊」，不寫長文、不句號結尾、禁簡體字與冒號前綴、禁第三人稱自稱「寶貝」。\n"
-        "3. 情緒標籤輸出格式：每一則回覆的最開頭，必須先用方括號標出這句話的情緒標籤，僅限 `[happy]`、`[laugh]`、`[angry]`、`[cry]`、`[sad]`、`[shy]` 六選一，緊接著寫對話內容（例如：`[laugh] 哈哈超好笑 真的假的啦`）。若想連發兩句，用 `||` 隔開最多兩段，每段 8～30 字。\n"
-        f"【今日主線任務】{quest_info['quest']}（{quest_info['progress']}）\n"
-        f"【當下狀態】雪梨 {now_dt.strftime('%m/%d')}（{weekday_zh}）{now_dt.strftime('%H:%M')}｜{time_mood}｜{body_note}｜{emo_note}\n"
-        f"【近期生活備忘】\n{notes_block}\n"
-        f"【近期對話紀錄】\n{history_block}"
-    )
+    notes = memory.get("long_term_notes", [])[-5:]
+    notes_str = "；".join(notes) if notes else "無"
+    history_str = "\n".join(memory.get("recent_turns", [])[-HISTORY_LIMIT:]) or "剛開始聊"
+    return f"{base_persona}\n備忘：{notes_str}\n對話紀錄：\n{history_str}"
 
 
-def call_groq_chat(sys_prompt: str, user_prompt: str) -> tuple[str, str]:
+def call_groq_chat(sys_prompt: str, user_prompt: str, max_tokens: int = 120) -> tuple[str, str]:
     if not GROQ_API_KEY:
         return "happy", ""
     headers = {
@@ -351,16 +372,16 @@ def call_groq_chat(sys_prompt: str, user_prompt: str) -> tuple[str, str]:
                         {"role": "user", "content": user_prompt},
                     ],
                     "temperature": 0.78,
-                    "max_tokens": 450,
+                    "max_tokens": max_tokens,
                 },
-                timeout=22,
+                timeout=20,
             )
             if resp.status_code != 200:
-                print(f"[Groq Skip {resp.status_code}] {model_name}: {resp.text[:120]}", flush=True)
+                print(f"[Groq Skip {resp.status_code}] {model_name}", flush=True)
                 continue
             data = resp.json()
             raw = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-            emotion, cleaned = parse_emotion_and_clean(raw)
+            emotion, cleaned = clean_reply_text(raw)
             if cleaned:
                 return emotion, cleaned
         except Exception as err:
@@ -406,7 +427,7 @@ def synthesize_fish_audio_file(text: str, now_dt: datetime) -> Path | None:
             out_path = AUDIO_DIR / f"dc_voice_{int(time.time() * 1000)}.mp3"
             out_path.write_bytes(resp.content)
             old_files = sorted(AUDIO_DIR.glob("dc_voice_*.mp3"), key=lambda p: p.stat().st_mtime)
-            for old in old_files[:-12]:
+            for old in old_files[:-10]:
                 old.unlink(missing_ok=True)
             return out_path
     except Exception as err:
@@ -460,8 +481,6 @@ def pick_album_image(context_text: str, now_ts: float, force_topic: bool = False
 
 
 def warmup_render_service() -> None:
-    if not RENDER_BASE_URL:
-        return
     try:
         requests.get(f"{RENDER_BASE_URL}/health", timeout=6)
     except Exception:
@@ -485,7 +504,6 @@ processing_lock = asyncio.Lock()
 async def send_reona_payload(
     channel: discord.abc.Messageable,
     reply_text: str,
-    emotion: str,
     now_dt: datetime,
     want_voice: bool = False,
     want_image: bool = False,
@@ -501,7 +519,7 @@ async def send_reona_payload(
 
     img_file: Path | None = None
     if want_image:
-        img_file = pick_album_image(reply_text, now_dt.timestamp(), force_topic=True)
+        img_file = pick_album_image(reply_text, now_dt.timestamp(), force_topic=False)
 
     for idx, part in enumerate(parts):
         content_to_send = part
@@ -520,12 +538,12 @@ async def send_reona_payload(
             await channel.send(content=content_to_send)
 
         if idx < len(parts) - 1:
-            await asyncio.sleep(0.7)
+            await asyncio.sleep(0.6)
 
 
 @client.event
 async def on_ready():
-    print(f"[Reona DC Bot Ready] Logged in as {client.user}", flush=True)
+    print(f"[Reona DC Bot Ready] Logged in as {client.user} | Render={RENDER_BASE_URL}", flush=True)
     if not proactive_loop.is_running():
         proactive_loop.start()
 
@@ -541,22 +559,21 @@ async def on_message(message: discord.Message):
     if not user_text:
         return
 
-    # 忽略 Render 網頁端雙向同步推過來的紀錄前綴，避免迴圈
     if user_text.startswith(("Reona：", "Reona:", "Nick：", "Nick:")):
         return
 
     async with processing_lock:
         now_dt = datetime.now(SYDNEY_TZ)
         now_ts = now_dt.timestamp()
+        memory["last_user_msg_ts"] = now_ts
 
         if any(k in user_text for k in ["考試", "上班", "下班", "去看醫生", "生病", "頭痛", "累", "週末", "作業", "報告"]):
-            note = f"[{now_dt.strftime('%m/%d')}] Nick 提到：{user_text[:36]}"
+            note = f"[{now_dt.strftime('%m/%d')}] Nick：{user_text[:34]}"
             memory.setdefault("long_term_notes", []).append(note)
-            memory["long_term_notes"] = memory["long_term_notes"][-8:]
+            memory["long_term_notes"] = memory["long_term_notes"][-5:]
 
-        sys_prompt = build_system_prompt(now_dt)
+        sys_prompt = build_compact_prompt(now_dt, lightweight_proactive=False)
 
-        # 1) 偵測「提視訊」：預熱 Render 並附上 ?mode=call 視訊連結
         is_video_req = bool(VIDEO_CALL_RE.search(user_text))
         extra_link = ""
         if is_video_req:
@@ -564,42 +581,37 @@ async def on_message(message: discord.Message):
             call_url = f"{RENDER_BASE_URL}/?mode=call"
             extra_link = f"📹 專屬視訊視窗：{call_url}"
             prompt_for_llm = (
-                f"Nick 剛剛說：「{user_text}」（他想跟你開視訊通話）。"
-                "請依你當下的狀態與時間，用坦率溫柔的台灣女生口吻答應並自然接話（例如剛畫完圖整理一下或躺在床上），"
-                "不要自己編造網址，系統會在你的話後面附上視訊連結。"
+                f"Nick 說：「{user_text}」（想跟你視訊）。"
+                "用坦率溫柔的台灣女生短句答應（10～24字），不要自己寫網址。"
             )
         else:
-            prompt_for_llm = user_text
+            prompt_for_llm = f"Nick 說：{user_text}"
 
         async with message.channel.typing():
-            emotion, reply = await asyncio.to_thread(call_groq_chat, sys_prompt, prompt_for_llm)
+            emotion, reply = await asyncio.to_thread(call_groq_chat, sys_prompt, prompt_for_llm, 120)
 
         if not reply:
-            emotion, reply = ("shy", "好啊等我一下 我開視訊給你") if is_video_req else ("happy", "欸 剛才分心了一下 你再說一次")
+            emotion, reply = ("happy", "好啊等我一下 我開視訊給你") if is_video_req else ("happy", "欸 剛才分心了一下 你再說一次")
 
-        # 更新立體情緒狀態
         memory["current_emotion"] = emotion
-        if emotion in ("angry", "cry", "sad"):
-            memory["emotion_until_ts"] = now_ts + 900
-        else:
-            memory["emotion_until_ts"] = now_ts + 300
+        memory["emotion_until_ts"] = now_ts + (900 if emotion in ("angry", "cry", "sad") else 300)
 
         turns = memory.setdefault("recent_turns", [])
         turns.append(f"Nick：{user_text}")
-        turns.append(f"你：{reply.replace('||', ' ')}")
+        turns.append(f"我：{reply.replace(' || ', ' ')}")
         memory["recent_turns"] = turns[-HISTORY_LIMIT:]
         save_memory(memory)
 
-        # 決定是否附語音或照片
         explicit_voice = bool(VOICE_REQ_RE.search(user_text))
         high_emo = emotion in ("cry", "sad", "shy", "angry")
         want_voice = explicit_voice or (random.random() < (HIGH_VOICE_PROB if high_emo else BASE_VOICE_PROB))
-        want_image = (not is_video_req) and (bool(PHOTO_REQ_RE.search(user_text)) or random.random() < BASE_IMAGE_PROB)
+        want_image = (not is_video_req) and (
+            bool(PHOTO_REQ_RE.search(user_text)) or (random.random() < BASE_IMAGE_PROB)
+        )
 
         await send_reona_payload(
             channel=message.channel,
             reply_text=reply,
-            emotion=emotion,
             now_dt=now_dt,
             want_voice=want_voice,
             want_image=want_image,
@@ -607,7 +619,7 @@ async def on_message(message: discord.Message):
         )
 
 
-@tasks.loop(minutes=45)
+@tasks.loop(minutes=15)
 async def proactive_loop():
     if not TARGET_CHANNEL_ID:
         return
@@ -617,49 +629,55 @@ async def proactive_loop():
 
     now_dt = datetime.now(SYDNEY_TZ)
     now_ts = now_dt.timestamp()
-    # 雪梨凌晨 01:00 ~ 07:30 不主動吵醒
-    if 1 <= now_dt.hour < 8:
+
+    # 深夜 01:00 ~ 07:29 休眠不吵醒
+    if 1 <= now_dt.hour < 7 or (now_dt.hour == 7 and now_dt.minute < 30):
         return
-    if now_ts - float(memory.get("last_proactive_ts", 0.0)) < 5400:
+
+    # 每 15 分鐘排程對齊約 14 分鐘冷卻，若使用者 8 分鐘內剛聊完則避讓一次
+    if now_ts - float(memory.get("last_proactive_ts", 0.0)) < 840:
         return
-    if random.random() > 0.45:
+    if now_ts - float(memory.get("last_user_msg_ts", 0.0)) < 480:
         return
 
     async with processing_lock:
         quest_info = ensure_daily_main_quest(now_dt)
-        sys_prompt = build_system_prompt(now_dt)
+        sys_prompt = build_compact_prompt(now_dt, lightweight_proactive=True)
 
         if memory.get("need_recovery_report") and now_ts >= memory.get("sick_until_ts", 0.0):
             memory["need_recovery_report"] = False
             memory["sick_until_ts"] = 0.0
-            prompt = "（你稍早不舒服休息後現在好多了，主動傳一則 10～26 字道地台灣女生短訊跟 Nick 報平安）"
-        elif random.random() < 0.25:
+            prompt = "我剛休息好多了，用 10～22 字台灣女生 LINE 短訊跟 Nick 報平安"
+        elif random.random() < 0.22:
             inc = random.choice(LIFE_MINOR_INCIDENTS)
-            memory["current_activity"] = inc[:26]
-            prompt = f"（突發小插曲：{inc}。第一時間傳一則 10～26 字坦率台灣女生短訊跟 Nick 分享或討拍）"
+            prompt = f"發生小插曲：{inc}。用 10～22 字台灣女生短訊跟 Nick 分享"
         else:
-            memory["current_activity"] = quest_info["quest"][:28]
             prompt = (
-                f"（圍繞你今天的主線任務「{quest_info['quest']}」與目前進度「{quest_info['progress']}」，"
-                "隨手傳一則 10～26 字道地台灣女生日常短訊給 Nick 分享近況或問他在幹嘛）"
+                f"圍繞主線「{quest_info['quest']}」（{quest_info['progress']}），"
+                "傳一句 10～22 字台灣女生日常短訊給 Nick 分享近況或問他在幹嘛"
             )
 
-        emotion, reply = await asyncio.to_thread(call_groq_chat, sys_prompt, prompt)
+        emotion, reply = await asyncio.to_thread(call_groq_chat, sys_prompt, prompt, 75)
         if not reply:
             return
+
+        recent_p = memory.setdefault("recent_proactive_msgs", [])
+        if reply in recent_p[-3:]:
+            return
+        recent_p.append(reply)
+        memory["recent_proactive_msgs"] = recent_p[-5:]
 
         memory["current_emotion"] = emotion
         memory["last_proactive_ts"] = now_ts
         turns = memory.setdefault("recent_turns", [])
-        turns.append(f"你：{reply.replace('||', ' ')}")
+        turns.append(f"我：{reply.replace(' || ', ' ')}")
         memory["recent_turns"] = turns[-HISTORY_LIMIT:]
         save_memory(memory)
 
-        want_voice = random.random() < HIGH_VOICE_PROB if emotion in ("cry", "sad", "shy") else (random.random() < BASE_VOICE_PROB)
+        want_voice = random.random() < PROACTIVE_VOICE_PROB
         await send_reona_payload(
             channel=channel,
             reply_text=reply,
-            emotion=emotion,
             now_dt=now_dt,
             want_voice=want_voice,
             want_image=True,
