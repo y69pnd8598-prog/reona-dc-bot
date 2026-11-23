@@ -4,6 +4,7 @@ import json
 import time
 import random
 import asyncio
+import subprocess
 from pathlib import Path
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
@@ -13,7 +14,7 @@ import discord
 from discord.ext import tasks
 
 # =========================================================
-# 1. Configuration (環境變數優先，並提供安全保底值)
+# 1. Configuration
 # =========================================================
 DISCORD_BOT_TOKEN = (
     os.getenv("DISCORD_BOT_TOKEN")
@@ -41,25 +42,24 @@ RENDER_BASE_URL = (
 DAILY_TTS_CHAR_LIMIT = 250
 MONTHLY_TTS_CHAR_LIMIT = 8000
 
-# 語音與傳圖機率設定（守住額度、克制不洗版）
-BASE_VOICE_PROB = 0.20       # 一般對話發語音機率 20%
-HIGH_VOICE_PROB = 0.55       # 撒嬌/想你/委屈/報平安發語音機率 55%
-PROACTIVE_VOICE_PROB = 0.05  # 每 15 分鐘主動敲你時僅低機率附語音，省下每日 250 字額度
-BASE_IMAGE_PROB = 0.15       # 一般生活分享附圖機率 15%
-TOPIC_IMAGE_PROB = 0.40      # 聊到貓咪/咖啡/海邊/畫稿時附圖機率 40%
-IMAGE_COOLDOWN_SEC = 1200    # 兩次傳圖至少間隔 20 分鐘
+BASE_VOICE_PROB = 0.20
+HIGH_VOICE_PROB = 0.55
+PROACTIVE_VOICE_PROB = 0.05
+BASE_IMAGE_PROB = 0.15
+TOPIC_IMAGE_PROB = 0.40
+IMAGE_COOLDOWN_SEC = 1200
 
-# 節省 Token：只保留穩定快速的模型清單，失敗不無效狂打太多顆
+# 使用 Groq 秒回純對話模型（不輸出冗長 <think> 思考段，避免耗盡 tokens 變空字串）
 _env_model = (os.getenv("GROQ_TEXT_MODEL") or "").strip()
 TEXT_MODELS = [m for m in dict.fromkeys([
     _env_model,
-    "openai/gpt-oss-20b",
-    "qwen/qwen3.8-27b",
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
 ]) if m]
 
 SYDNEY_TZ = ZoneInfo("Australia/Sydney")
 WEEKDAY_NAMES_ZH = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
-HISTORY_LIMIT = 10  # 精簡歷史視窗以大幅節省輸入 Token
+HISTORY_LIMIT = 14
 
 BASE_DIR = Path(__file__).resolve().parent
 MEMORY_FILE = BASE_DIR / "reona_memory.json"
@@ -75,7 +75,7 @@ for sub in ("cat_mochi", "cafe_food", "sydney_view", "sketch"):
 # 2. Daily Main Quests & Life Events
 # =========================================================
 DAILY_QUEST_TEMPLATES = [
-    "幫澳洲精品香氛品牌畫秋季聯名包裝主視覺草稿，下午要在工作室線上下對稿",
+    "幫澳洲精品香氛品牌繪製秋季聯名包裝主視覺草稿，下午在工作室線上下對稿",
     "完成獨立出版書籍封面插畫細節精修，傍晚去雪梨港邊散步買鮮花布置畫室",
     "整理海外文創聯名打樣樣品與色彩校對，中午去常去的採光咖啡廳吃早午餐",
     "替高級甜點品牌設計節慶禮盒插畫，下午在家邊點木質香氛邊陪麻糬午睡",
@@ -92,7 +92,7 @@ LIFE_MINOR_INCIDENTS = [
 ]
 
 # =========================================================
-# 3. Shared Persistent State & Quota Management
+# 3. Persistent Memory (自動讀取舊記憶＋即時存回 Git)
 # =========================================================
 DEFAULT_MEMORY = {
     "recent_turns": [],
@@ -129,6 +129,8 @@ DEFAULT_MEMORY = {
     },
 }
 
+_last_git_sync_ts = 0.0
+
 
 def load_memory() -> dict:
     default_start = (datetime.now(SYDNEY_TZ).date() - timedelta(days=22)).isoformat()
@@ -144,6 +146,11 @@ def load_memory() -> dict:
                 merged[k].update(v)
             else:
                 merged[k] = v
+        # 相容舊版記憶檔欄位（如 history / notes）
+        if not merged["recent_turns"] and isinstance(data.get("history"), list):
+            merged["recent_turns"] = [str(x) for x in data["history"][-HISTORY_LIMIT:]]
+        if not merged["long_term_notes"] and isinstance(data.get("notes"), list):
+            merged["long_term_notes"] = [str(x) for x in data["notes"][-8:]]
         if not merged["menstrual_cycle"].get("cycle_start_date"):
             merged["menstrual_cycle"]["cycle_start_date"] = default_start
         return merged
@@ -153,11 +160,52 @@ def load_memory() -> dict:
         return mem
 
 
-def save_memory(mem: dict) -> None:
+def sync_memory_to_git_bg() -> None:
+    """背景把最新記憶檔同步回 GitHub，確保重啟或下一棒接力都能讀到記憶。"""
+    global _last_git_sync_ts
+    now = time.time()
+    if now - _last_git_sync_ts < 120:
+        return
+    _last_git_sync_ts = now
+    try:
+        if not (BASE_DIR / ".git").exists():
+            return
+        subprocess.run(
+            ["git", "config", "user.name", "github-actions[bot]"],
+            cwd=BASE_DIR, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "github-actions[bot]@users.noreply.github.com"],
+            cwd=BASE_DIR, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        subprocess.run(
+            ["git", "add", MEMORY_FILE.name],
+            cwd=BASE_DIR, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        diff = subprocess.run(
+            ["git", "diff", "--staged", "--quiet"],
+            cwd=BASE_DIR, check=False
+        )
+        if diff.returncode != 0:
+            subprocess.run(
+                ["git", "commit", "-m", "chore: sync Reona memory"],
+                cwd=BASE_DIR, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+            subprocess.run(
+                ["git", "push"],
+                cwd=BASE_DIR, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+    except Exception:
+        pass
+
+
+def save_memory(mem: dict, push_git: bool = False) -> None:
     try:
         MEMORY_FILE.write_text(
             json.dumps(mem, ensure_ascii=False, indent=2), encoding="utf-8"
         )
+        if push_git:
+            asyncio.create_task(asyncio.to_thread(sync_memory_to_git_bg))
     except Exception as err:
         print(f"[Memory Save Error] {err}", flush=True)
 
@@ -178,9 +226,9 @@ def ensure_daily_main_quest(now_dt: datetime) -> dict:
     if 6 <= hour < 12:
         q_obj["progress"] = "上午：剛起床喝咖啡、啟動今天主線"
     elif 12 <= hour < 18:
-        q_obj["progress"] = "下午：推進主線草稿與細節，尚未吃晚餐"
+        q_obj["progress"] = "下午：推進主線草稿與細節，還沒吃晚餐"
     elif 18 <= hour < 23:
-        q_obj["progress"] = "晚上：主線接近收尾或已吃晚餐，在公寓陪麻糬"
+        q_obj["progress"] = "晚上：主線接近收尾或吃過晚餐，在公寓陪麻糬"
     else:
         q_obj["progress"] = "深夜：忙完躺床上準備休息"
     return q_obj
@@ -246,15 +294,15 @@ def get_cycle_day_num(now_dt: datetime) -> int:
 
 
 # =========================================================
-# 4. Lean Persona Prompt, Emotion Classifier & Sanitizer
+# 4. Fast Prompt, Emotion Detection & Smart Fallback
 # =========================================================
+THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 BAD_CHAR_RE = re.compile(r"[\u3040-\u309f\u30a0-\u30ff姎懓懞擝奼懅鼉齾玈尞攟臙屴尛沝炋朰攴攕襾]")
-SIMPLIFIED_RE = re.compile(r"[没这么还说觉点个样对欢会时间里边着过为发来动亲宝怎么给让]")
 ANY_TAG_RE = re.compile(
     r"\[(?:happy|laugh|angry|cry|sad|shy|emotion|mood|tone|笑|哭|生氣|難過|害羞)[^\]]*\]",
     re.IGNORECASE,
 )
-COLON_PREFIX_RE = re.compile(r"^(?:Reona|Nick|助手|系統|回覆)[:：=＝]\s*", re.IGNORECASE)
+COLON_PREFIX_RE = re.compile(r"^(?:Reona|Nick|助手|系統|回覆|我)[:：=＝]\s*", re.IGNORECASE)
 
 
 def detect_emotion_from_text(text: str) -> str:
@@ -277,13 +325,13 @@ def clean_reply_text(raw: str) -> tuple[str, str]:
     if not s:
         return "happy", ""
 
-    # 剝除所有方括號標籤（如 [laugh]、[happy]），不論出現在句首或句中
-    s = ANY_TAG_RE.sub("", s)
+    s = THINK_BLOCK_RE.sub("", s).strip()
+    s = ANY_TAG_RE.sub("", s).strip()
 
     lines = [
         ln.strip()
         for ln in s.splitlines()
-        if ln.strip() and not ln.strip().startswith(("•", "-", "*", "思考", "分析", "系統"))
+        if ln.strip() and not ln.strip().startswith(("•", "-", "*", "思考", "分析", "系統", "<think>"))
     ]
     if not lines:
         return "happy", ""
@@ -297,16 +345,35 @@ def clean_reply_text(raw: str) -> tuple[str, str]:
             cleaned_lines.append(ln)
 
     s = " || ".join(cleaned_lines).strip()
-    if len(s) < 2 or len(s) > 95:
+    if len(s) < 2 or len(s) > 90:
         return "happy", ""
-    if BAD_CHAR_RE.search(s) or SIMPLIFIED_RE.search(s):
+    if BAD_CHAR_RE.search(s):
         return "happy", ""
-    for l_br, r_br in [("「", "」"), ("『", "』"), ("（", "）"), ("(", ")")]:
-        if s.count(l_br) != s.count(r_br):
-            return "happy", ""
+    return detect_emotion_from_text(s), s
 
-    emotion = detect_emotion_from_text(s)
-    return emotion, s
+
+def context_aware_fallback(user_text: str, now_dt: datetime) -> str:
+    """當 API 偶爾限流或網路抖動時，依據記憶與當下主線給出自然短句，絕不重複說『剛才分心』。"""
+    quest_short = ensure_daily_main_quest(now_dt)["quest"].split("，")[0][:14]
+    u = user_text.strip()
+    if any(k in u for k in ["謝謝", "謝啦", "愛你"]):
+        return random.choice([
+            "跟我客氣什麼啦 快去忙你的",
+            "嘿嘿 不客氣呀 隨時找我",
+            "少來 我們之間還說謝謝喔",
+        ])
+    if any(k in u for k in ["寶貝", "在嗎", "哈囉", "嗨", "人呢"]):
+        return random.choice([
+            f"在啦 剛在弄{quest_short} 怎麼了",
+            "在呀 怎麼突然叫我 快說",
+            "在呢 剛滑一下手機 找我幹嘛",
+            "欸 在這裡啦 今天過得還好嗎",
+        ])
+    return random.choice([
+        f"對啊 我剛還在忙{quest_short}呢",
+        "真的假的 欸你繼續講我在聽",
+        "好喔 晚點忙完再好好跟你聊",
+    ])
 
 
 def build_compact_prompt(now_dt: datetime, lightweight_proactive: bool = False) -> str:
@@ -336,24 +403,24 @@ def build_compact_prompt(now_dt: datetime, lightweight_proactive: bool = False) 
         "你是 Reona（第一人稱「我」），Nick 女友。家境優渥住雪梨海景公寓與畫室，無經濟壓力；"
         "專業能力強的商業插畫師，接案為熱愛創作。養挑食奶油貓「麻糬」（不吃香菜紅蘿蔔），40kg 偏瘦白皙；"
         "Nick 180cm/67kg/微黑。坦率真誠、絕不傲嬌（不口是心非、不說「哼/才沒有」）。"
-        "不分中英文輸入一律回繁體中文＋道地台灣女生 LINE 短句，用空格斷句，自然帶「欸、啦、喔、嘛、真的假的、好好笑、好喔、超讚、好煩喔、哭啊」，"
+        "一律用繁體中文＋道地台灣女生 LINE 短句回覆（每次 8～26 字，講一個重點就好，絕不寫長文），"
+        "用空格斷句，自然帶「欸、啦、喔、嘛、真的假的、好好笑、好喔、超讚、好煩喔、哭啊」，"
         "禁簡體字、禁冒號前綴、禁第三人稱自稱「寶貝」、禁輸出任何 [方括號] 標籤。"
         f"\n雪梨 {now_dt.strftime('%m/%d')}（{weekday_zh}）{now_dt.strftime('%H:%M')}｜{time_note}｜{body_note}"
         f"\n今日主線：{quest_info['quest']}（{quest_info['progress']}）"
     )
 
     if lightweight_proactive:
-        # 每 15 分鐘主動敲你時只帶最近 3 句紀錄，極致省 Token
-        recent_tail = "\n".join(memory.get("recent_turns", [])[-3:])
+        recent_tail = "\n".join(memory.get("recent_turns", [])[-4:])
         return f"{base_persona}\n最近幾句：\n{recent_tail}" if recent_tail else base_persona
 
-    notes = memory.get("long_term_notes", [])[-5:]
+    notes = memory.get("long_term_notes", [])[-6:]
     notes_str = "；".join(notes) if notes else "無"
     history_str = "\n".join(memory.get("recent_turns", [])[-HISTORY_LIMIT:]) or "剛開始聊"
-    return f"{base_persona}\n備忘：{notes_str}\n對話紀錄：\n{history_str}"
+    return f"{base_persona}\n記憶備忘：{notes_str}\n近期對話：\n{history_str}"
 
 
-def call_groq_chat(sys_prompt: str, user_prompt: str, max_tokens: int = 120) -> tuple[str, str]:
+def call_groq_chat(sys_prompt: str, user_prompt: str, max_tokens: int = 85) -> tuple[str, str]:
     if not GROQ_API_KEY:
         return "happy", ""
     headers = {
@@ -371,13 +438,13 @@ def call_groq_chat(sys_prompt: str, user_prompt: str, max_tokens: int = 120) -> 
                         {"role": "system", "content": sys_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
-                    "temperature": 0.78,
+                    "temperature": 0.75,
                     "max_tokens": max_tokens,
                 },
-                timeout=20,
+                timeout=12,
             )
             if resp.status_code != 200:
-                print(f"[Groq Skip {resp.status_code}] {model_name}", flush=True)
+                print(f"[Groq Skip {resp.status_code}] {model_name}: {resp.text[:100]}", flush=True)
                 continue
             data = resp.json()
             raw = data.get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -416,7 +483,7 @@ def synthesize_fish_audio_file(text: str, now_dt: datetime) -> Path | None:
                 "reference_id": FISH_MODEL_ID,
                 "format": "mp3",
             },
-            timeout=20,
+            timeout=18,
         )
         if resp.status_code == 200 and resp.content:
             q = sync_tts_quota_period(now_dt)
@@ -501,6 +568,27 @@ PHOTO_REQ_RE = re.compile(r"(拍照|傳照片|給我看|看看你|看看麻糬|�
 processing_lock = asyncio.Lock()
 
 
+async def hydrate_history_from_discord(channel: discord.abc.Messageable) -> None:
+    """若本地記憶檔為空，啟動時自動從 DC 頻道最近訊息回補對話記憶。"""
+    if memory.get("recent_turns"):
+        return
+    try:
+        fetched = []
+        async for msg in channel.history(limit=12):
+            txt = (msg.content or "").strip()
+            if not txt or "專屬視訊視窗" in txt:
+                continue
+            speaker = "我" if msg.author.bot else "Nick"
+            fetched.append(f"{speaker}：{txt.splitlines()[0][:50]}")
+        if fetched:
+            fetched.reverse()
+            memory["recent_turns"] = fetched[-HISTORY_LIMIT:]
+            save_memory(memory)
+            print(f"[Memory Hydrated] Loaded {len(fetched)} turns from DC history.", flush=True)
+    except Exception as err:
+        print(f"[Hydrate Skip] {err}", flush=True)
+
+
 async def send_reona_payload(
     channel: discord.abc.Messageable,
     reply_text: str,
@@ -511,7 +599,7 @@ async def send_reona_payload(
 ) -> None:
     parts = [p.strip() for p in reply_text.split("||") if p.strip()]
     if not parts:
-        parts = ["欸 剛才分心了一下"]
+        parts = ["在啦 怎麼了"]
 
     voice_file: Path | None = None
     if want_voice:
@@ -538,12 +626,16 @@ async def send_reona_payload(
             await channel.send(content=content_to_send)
 
         if idx < len(parts) - 1:
-            await asyncio.sleep(0.6)
+            await asyncio.sleep(0.5)
 
 
 @client.event
 async def on_ready():
     print(f"[Reona DC Bot Ready] Logged in as {client.user} | Render={RENDER_BASE_URL}", flush=True)
+    if TARGET_CHANNEL_ID:
+        ch = client.get_channel(TARGET_CHANNEL_ID)
+        if ch is not None:
+            await hydrate_history_from_discord(ch)
     if not proactive_loop.is_running():
         proactive_loop.start()
 
@@ -570,7 +662,7 @@ async def on_message(message: discord.Message):
         if any(k in user_text for k in ["考試", "上班", "下班", "去看醫生", "生病", "頭痛", "累", "週末", "作業", "報告"]):
             note = f"[{now_dt.strftime('%m/%d')}] Nick：{user_text[:34]}"
             memory.setdefault("long_term_notes", []).append(note)
-            memory["long_term_notes"] = memory["long_term_notes"][-5:]
+            memory["long_term_notes"] = memory["long_term_notes"][-6:]
 
         sys_prompt = build_compact_prompt(now_dt, lightweight_proactive=False)
 
@@ -582,16 +674,20 @@ async def on_message(message: discord.Message):
             extra_link = f"📹 專屬視訊視窗：{call_url}"
             prompt_for_llm = (
                 f"Nick 說：「{user_text}」（想跟你視訊）。"
-                "用坦率溫柔的台灣女生短句答應（10～24字），不要自己寫網址。"
+                "用坦率溫柔的台灣女生短句答應（10～22字），不要自己寫網址。"
             )
         else:
-            prompt_for_llm = f"Nick 說：{user_text}"
+            prompt_for_llm = f"Nick 說：「{user_text}」。直接接話回一句 8～24 字短句。"
 
         async with message.channel.typing():
-            emotion, reply = await asyncio.to_thread(call_groq_chat, sys_prompt, prompt_for_llm, 120)
+            emotion, reply = await asyncio.to_thread(call_groq_chat, sys_prompt, prompt_for_llm, 85)
 
         if not reply:
-            emotion, reply = ("happy", "好啊等我一下 我開視訊給你") if is_video_req else ("happy", "欸 剛才分心了一下 你再說一次")
+            if is_video_req:
+                emotion, reply = "happy", "好啊等我一下 我開視訊給你"
+            else:
+                reply = context_aware_fallback(user_text, now_dt)
+                emotion = detect_emotion_from_text(reply)
 
         memory["current_emotion"] = emotion
         memory["emotion_until_ts"] = now_ts + (900 if emotion in ("angry", "cry", "sad") else 300)
@@ -600,7 +696,7 @@ async def on_message(message: discord.Message):
         turns.append(f"Nick：{user_text}")
         turns.append(f"我：{reply.replace(' || ', ' ')}")
         memory["recent_turns"] = turns[-HISTORY_LIMIT:]
-        save_memory(memory)
+        save_memory(memory, push_git=True)
 
         explicit_voice = bool(VOICE_REQ_RE.search(user_text))
         high_emo = emotion in ("cry", "sad", "shy", "angry")
@@ -630,11 +726,8 @@ async def proactive_loop():
     now_dt = datetime.now(SYDNEY_TZ)
     now_ts = now_dt.timestamp()
 
-    # 深夜 01:00 ~ 07:29 休眠不吵醒
     if 1 <= now_dt.hour < 7 or (now_dt.hour == 7 and now_dt.minute < 30):
         return
-
-    # 每 15 分鐘排程對齊約 14 分鐘冷卻，若使用者 8 分鐘內剛聊完則避讓一次
     if now_ts - float(memory.get("last_proactive_ts", 0.0)) < 840:
         return
     if now_ts - float(memory.get("last_user_msg_ts", 0.0)) < 480:
@@ -657,7 +750,7 @@ async def proactive_loop():
                 "傳一句 10～22 字台灣女生日常短訊給 Nick 分享近況或問他在幹嘛"
             )
 
-        emotion, reply = await asyncio.to_thread(call_groq_chat, sys_prompt, prompt, 75)
+        emotion, reply = await asyncio.to_thread(call_groq_chat, sys_prompt, prompt, 65)
         if not reply:
             return
 
@@ -672,7 +765,7 @@ async def proactive_loop():
         turns = memory.setdefault("recent_turns", [])
         turns.append(f"我：{reply.replace(' || ', ' ')}")
         memory["recent_turns"] = turns[-HISTORY_LIMIT:]
-        save_memory(memory)
+        save_memory(memory, push_git=True)
 
         want_voice = random.random() < PROACTIVE_VOICE_PROB
         await send_reona_payload(
