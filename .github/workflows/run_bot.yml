@@ -39,6 +39,7 @@ jobs:
           FISH_API_KEY: ${{ secrets.FISH_API_KEY }}
           FISH_MODEL_ID: ${{ secrets.FISH_MODEL_ID }}
           RENDER_BASE_URL: ${{ secrets.RENDER_BASE_URL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           timeout -s INT 330m python reona_dc_bot.py || true
 
