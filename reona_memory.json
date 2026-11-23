@@ -13,7 +13,9 @@
     "Nick：吃飯了嗎",
     "我：欸 剛在看螢幕 你再跟我多說一點",
     "Nick：寶貝",
-    "我：在呢 剛滑一下手機 找我幹嘛"
+    "我：在呢 剛滑一下手機 找我幹嘛",
+    "Nick：寶貝",
+    "我：在呀 剛忙完 快說"
   ],
   "long_term_notes": [
     "[11/22] Nick 提到：要回去了嗎",
@@ -34,7 +36,7 @@
     "progress": "晚上：主線接近收尾或吃過晚餐，在公寓陪麻糬"
   },
   "current_emotion": "happy",
-  "emotion_until_ts": 1795418964.41369,
+  "emotion_until_ts": 1795419355.083276,
   "sick_until_ts": 1795400680.141721,
   "sick_type": "meds",
   "sick_reason": "stomach",
@@ -50,7 +52,7 @@
   "last_image_sent_ts": 0.0,
   "recent_sent_images": [],
   "last_proactive_ts": 1795358748.237457,
-  "last_user_msg_ts": 1795418664.41369,
+  "last_user_msg_ts": 1795419055.083276,
   "recent_proactive_msgs": [],
   "tts_quota": {
     "day_key": "2026-11-23",
