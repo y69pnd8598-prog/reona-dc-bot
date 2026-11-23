@@ -14,20 +14,22 @@ import discord
 from discord.ext import tasks
 
 # =========================================================
-# 1. Configuration & Multi-Key Rotation Pool
+# 1. Configuration & Multi-Key Rotation Pool (相容既有 Secrets)
 # =========================================================
 DISCORD_BOT_TOKEN = (
     os.getenv("DISCORD_BOT_TOKEN")
     or os.getenv("DISCORD_TOKEN")
-    or "在這裡貼上你的_DC_BOT_TOKEN"
+    or ""
 ).strip()
 
+# 同時支援 TARGET_CHANNEL_ID 與 DISCORD_CHANNEL_ID
 TARGET_CHANNEL_ID = int(
-    (os.getenv("DISCORD_CHANNEL_ID") or "0").strip() or "0"
+    (os.getenv("TARGET_CHANNEL_ID") or os.getenv("DISCORD_CHANNEL_ID") or "0").strip() or "0"
 )
 
+
 def load_groq_key_pool() -> list[str]:
-    """支援在 GROQ_API_KEY 用逗號/換行填入多把鑰匙，也支援 GROQ_API_KEY_1 ~ _5"""
+    """支援在 GROQ_API_KEY 用逗號/換行/分號串接多把鑰匙，也支援 GROQ_API_KEY_1 ~ _5"""
     keys = []
     raw_multi = os.getenv("GROQ_API_KEY") or ""
     for part in re.split(r"[,;\s\n]+", raw_multi.strip()):
@@ -39,9 +41,10 @@ def load_groq_key_pool() -> list[str]:
             keys.append(k)
     return list(dict.fromkeys(keys))
 
+
 GROQ_KEY_POOL = load_groq_key_pool()
 _current_key_idx = 0
-_key_cooldown_until: dict[str, float] = {}  # 記錄遇到 429 的鑰匙暫時冷卻時間
+_key_cooldown_until: dict[str, float] = {}
 
 FISH_API_KEY = (os.getenv("FISH_API_KEY") or "").strip()
 FISH_MODEL_ID = (
@@ -65,17 +68,16 @@ BASE_IMAGE_PROB = 0.15
 TOPIC_IMAGE_PROB = 0.40
 IMAGE_COOLDOWN_SEC = 1200
 
-_env_model = (os.getenv("GROQ_TEXT_MODEL") or "").strip()
-TEXT_MODELS = [m for m in dict.fromkeys([
-    _env_model,
+# 直接使用目前 Groq 可用模型，不讓舊的 GROQ_MODEL / GROQ_TEXT_MODEL 蓋掉
+TEXT_MODELS = [
     "openai/gpt-oss-20b",
     "qwen/qwen3.8-27b",
     "meta-llama/llama-4-scout-17b-16e-instruct",
-]) if m]
+]
 
 SYDNEY_TZ = ZoneInfo("Australia/Sydney")
 WEEKDAY_NAMES_ZH = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
-HISTORY_LIMIT = 20
+HISTORY_LIMIT = 14
 
 BASE_DIR = Path(__file__).resolve().parent
 MEMORY_FILE = BASE_DIR / "reona_memory.json"
@@ -364,7 +366,7 @@ def clean_reply_text(raw: str) -> tuple[str, str]:
             cleaned_lines.append(ln)
 
     s = " || ".join(cleaned_lines).strip()
-    if len(s) < 2 or len(s) > 90:
+    if len(s) < 2 or len(s) > 95:
         return "happy", ""
     if BAD_CHAR_RE.search(s):
         return "happy", ""
@@ -372,7 +374,6 @@ def clean_reply_text(raw: str) -> tuple[str, str]:
 
 
 def context_aware_fallback(user_text: str, now_dt: datetime) -> str:
-    """僅當所有鑰匙都暫時達上限時啟用，保證語意貼合、不截斷文字"""
     short_q = ensure_daily_main_quest(now_dt).get("short_label", "畫商業插畫")
     u = user_text.strip()
     if any(k in u for k in ["辛苦", "加油", "累不累"]):
@@ -451,7 +452,6 @@ def build_compact_prompt(now_dt: datetime, lightweight_proactive: bool = False) 
 
 
 def call_groq_chat(sys_prompt: str, user_prompt: str, max_tokens: int = 180) -> tuple[str, str]:
-    """支援多組 GROQ_API_KEY 自動輪替：遇到 429 立刻標記冷卻並切換下一把鑰匙"""
     global _current_key_idx
     if not GROQ_KEY_POOL:
         return "happy", ""
@@ -463,7 +463,6 @@ def call_groq_chat(sys_prompt: str, user_prompt: str, max_tokens: int = 180) -> 
         idx = (_current_key_idx + step) % num_keys
         api_key = GROQ_KEY_POOL[idx]
 
-        # 若該鑰匙仍在 429 冷卻期（例如 10 分鐘內），直接跳過換下一把
         if now_ts < _key_cooldown_until.get(api_key, 0.0):
             continue
 
@@ -486,10 +485,9 @@ def call_groq_chat(sys_prompt: str, user_prompt: str, max_tokens: int = 180) -> 
                         "temperature": 0.75,
                         "max_tokens": max_tokens,
                     },
-                    timeout=12,
+                    timeout=14,
                 )
                 if resp.status_code == 429:
-                    # 這把鑰匙觸發速率/額度上限，冷卻 15 分鐘並立刻換下一把鑰匙
                     _key_cooldown_until[api_key] = now_ts + 900
                     _current_key_idx = (idx + 1) % num_keys
                     print(f"[Key #{idx+1} 429 -> Switch to Key #{_current_key_idx+1}]", flush=True)
@@ -685,7 +683,7 @@ async def send_reona_payload(
 @client.event
 async def on_ready():
     print(
-        f"[Reona DC Bot Ready] Logged in as {client.user} | Keys={len(GROQ_KEY_POOL)} | Render={RENDER_BASE_URL}",
+        f"[Reona DC Bot Ready] Logged in as {client.user} | Channel={TARGET_CHANNEL_ID} | Keys={len(GROQ_KEY_POOL)} | Render={RENDER_BASE_URL}",
         flush=True,
     )
     if TARGET_CHANNEL_ID:
@@ -736,7 +734,7 @@ async def on_message(message: discord.Message):
             prompt_for_llm = f"Nick 說：「{user_text}」。直接接話回一句 8～24 字短句。"
 
         async with message.channel.typing():
-            emotion, reply = await asyncio.to_thread(call_groq_chat, sys_prompt, prompt_for_llm, 85)
+            emotion, reply = await asyncio.to_thread(call_groq_chat, sys_prompt, prompt_for_llm, 180)
 
         if not reply:
             if is_video_req:
@@ -806,7 +804,7 @@ async def proactive_loop():
                 "傳一句 10～22 字台灣女生日常短訊給 Nick 分享近況或問他在幹嘛"
             )
 
-        emotion, reply = await asyncio.to_thread(call_groq_chat, sys_prompt, prompt, 65)
+        emotion, reply = await asyncio.to_thread(call_groq_chat, sys_prompt, prompt, 150)
         if not reply:
             return
 
@@ -839,6 +837,6 @@ async def before_proactive():
 
 
 if __name__ == "__main__":
-    if not DISCORD_BOT_TOKEN or "在這裡貼上" in DISCORD_BOT_TOKEN:
-        raise RuntimeError("請先設定 DISCORD_BOT_TOKEN")
+    if not DISCORD_BOT_TOKEN:
+        raise RuntimeError("請先在 Secrets 設定 DISCORD_BOT_TOKEN 或 DISCORD_TOKEN")
     client.run(DISCORD_BOT_TOKEN)
