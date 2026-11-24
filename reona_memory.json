@@ -1,18 +1,18 @@
 {
   "recent_turns": [
-    "Reona:才一次啦 別擔心 麻糬剛在討吃 我先梳毛",
-    "Nick:只有一次嗎",
-    "Reona:嗯 真的就一次啦 快過來陪我梳毛嘛",
-    "Nick:好的寶貝",
-    "Reona:先去一下洗手間 馬上回來",
-    "Reona:回來啦 麻糬還在那邊看我看我要怎麼梳毛"
+    "Reona:哼 你還笑得出來 我快跑斷腿了啦 快過來抱抱我充充电",
+    "Nick:抱抱你寶貝",
+    "Reona:哼 知道就好啦 快點過來幫我充充電麻糬剛剛還在旁邊偷笑我欸",
+    "Nick:寶貝肚子還在痛嗎",
+    "Reona:好很多啦 剛剛喝完溫水有比較舒服齁",
+    "Reona:嗚 剛才貪嘴吃太冰的 現在肚子又陣陣抽痛軟綿綿的 好無力喔 快來畫室陪我嘛"
   ],
   "long_term_notes": [
     "[11/23] Nick 提到：那明天吃什麼",
     "11/24 寶貝今天不用上班嗎"
   ],
   "body_status": [
-    "11/24 寶貝肚子痛嗎"
+    "11/24 寶貝肚子還在痛嗎"
   ],
   "daily_quest": {
     "date": "2026-11-24",
@@ -26,13 +26,20 @@
   },
   "restroom_stats": {
     "date": "2026-11-24",
-    "daily_count": 5,
-    "total_count": 5,
+    "daily_count": 14,
+    "total_count": 14,
     "daily_by_level": {
-      "normal": 5,
+      "normal": 6,
       "mild": 0,
-      "moderate_severe": 0
-    }
+      "moderate_severe": 0,
+      "moderate": 2,
+      "severe": 6
+    },
+    "last_visit_ts": 1795520946.2802691
+  },
+  "reona_gi_state": {
+    "level": "severe",
+    "until_ts": 1795607467.5709875
   },
   "menstrual_cycle": {
     "cycle_start_date": "2026-10-31",
