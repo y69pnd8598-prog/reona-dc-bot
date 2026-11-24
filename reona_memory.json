@@ -1,50 +1,52 @@
 {
   "recent_turns": [
-    "Nick:我在陪你了",
-    "Reona:尼... 胃裡酸水又頂上來了好酸喔... 下腹還是像絞碎一樣劇烈絞痛 剛剛又跑去廁所現在腿軟得縮在被窩裡冒冷汗 身體好重好虛脫喔 妳快來抱抱我啦",
-    "Nick:寶貝好一點了嗎",
-    "Reona:哪裡好一點啦... 胃裡酸水還是一直往上頂好酸喔 下腹像絞碎一樣劇烈絞痛 剛剛又跑去廁所現在腿軟得縮在被窩裡冒冷汗 身體好虛脫喔 尼趕快來陪我啦",
-    "Nick:我在陪你了",
-    "Reona:尼... 肚子還是一陣陣絞痛翻攪 胃裡酸水又頂上來了啦... 剛剛又跑去廁所 腿軟得連站起來的力氣都沒有 身體好虛喔..."
+    "Nick:那我小力一點",
+    "Reona:欸 胃裡還在翻酸水 肚子像有手在裡面抓著絞痛 爬不起來啦嘛",
+    "Nick:寶貝現在呢",
+    "Reona:齁 油膩東西在肚裡翻騰 下腹絞痛 軟綿綿的"
   ],
   "long_term_notes": [
     "[11/23] Nick 提到：那明天吃什麼",
     "11/24 寶貝今天不用上班嗎"
   ],
   "body_status": [
-    "11/24 肚子很痛嗎"
+    "11/25 我揉揉寶貝的肚子"
   ],
+  "nick_location": "",
   "daily_quest": {
-    "date": "2026-11-24",
-    "quest": "幫挑食奶油貓麻糬梳毛並採買進口罐頭"
+    "date": "2026-11-25",
+    "quest": "調整品牌聯名主視覺細節"
   },
   "daily_dinner": {
-    "date": "2026-11-24",
-    "dinner": "清淡暖胃的白粥配燙青菜"
+    "date": "2026-11-25",
+    "dinner": "清淡暖胃白粥配燙青菜"
+  },
+  "daily_outing": {
+    "date": "2026-11-25",
+    "place": "寶貝今天去哪裡啦"
   },
   "voice_usage": {
-    "date": "2026-11-24",
-    "daily_chars": 248,
+    "date": "2026-11-25",
+    "daily_chars": 233,
     "month": "2026-11",
-    "monthly_chars": 324
+    "monthly_chars": 557
   },
   "restroom_stats": {
-    "date": "2026-11-24",
-    "daily_count": 15,
-    "total_count": 15,
+    "date": "2026-11-25",
+    "daily_count": 1,
+    "total_count": 16,
     "daily_by_level": {
-      "normal": 6,
+      "normal": 0,
       "mild": 0,
-      "moderate_severe": 0,
-      "moderate": 2,
-      "severe": 7
+      "moderate": 0,
+      "severe": 1
     },
-    "last_visit_ts": 1795524077.4048257
+    "last_visit_ts": 1795527014.7508974
   },
   "reona_gi_state": {
     "level": "severe",
-    "until_ts": 1795596493.1972923,
-    "cause": "冰飲加辣食刺激太重引起反覆腹瀉腿軟"
+    "until_ts": 1795559674.1749835,
+    "cause": "吃了偏油膩的食物鬧肚子"
   },
   "menstrual_cycle": {
     "cycle_start_date": "2026-10-31",
