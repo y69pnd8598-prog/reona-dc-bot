@@ -22,7 +22,7 @@ from reona_bg_db import (
 
 SYDNEY_TZ = ZoneInfo("Australia/Sydney")
 MEMORY_FILE = "reona_memory.json"
-MEMORY_RESET_TOKEN = "reset_20261125_sqlite_v4_shy"
+MEMORY_RESET_TOKEN = "reset_20261125_guard_v5"
 
 DISCORD_TOKEN = (os.getenv("DISCORD_BOT_TOKEN") or os.getenv("DISCORD_TOKEN") or "").strip()
 TARGET_CHANNEL_ID = int((os.getenv("TARGET_CHANNEL_ID") or os.getenv("DISCORD_CHANNEL_ID") or "0").strip() or "0")
@@ -166,11 +166,12 @@ def append_turn(role: str, text: str) -> None:
 
 
 def is_bad_reply(txt: str) -> bool:
-    if not txt or len(txt) < 2 or len(txt) > 65:
+    if not txt or len(txt) < 2 or len(txt) > 55:
         return True
     if re.search(r"[a-zA-Z]{6,}|([\u4e00-\u9fff])\1{3,}", txt):
         return True
-    return bool(re.search(r"單愛|盡力保護它安全|正在客廳餐桌上\s*等|無擔於|綠元|趕去選洗手間", txt))
+    bad_words = r"單愛|盡力保護它安全|正在客廳餐桌上\s*等|無擔於|綠元|趕去選洗手間|哈喵|寶貝|爬行|瑟瑟|無法$"
+    return bool(re.search(bad_words, txt))
 
 
 def clean_reply(raw: str, strip_q: bool) -> str:
@@ -179,7 +180,7 @@ def clean_reply(raw: str, strip_q: bool) -> str:
     txt = re.sub(r"<think>[\s\S]*?</think>", "", raw, flags=re.IGNORECASE).strip()
     txt = re.sub(r"^(Reona|我)\s*[:：]\s*", "", txt)
     txt = re.sub(r"\bkitty\b", "麻糬", txt, flags=re.IGNORECASE)
-    for ch in ("「", "」", '"', "。", "，"):
+    for ch in ("「", "」", '"', "。", "，", "『", "』"):
         txt = txt.replace(ch, " ")
     if strip_q:
         txt = re.sub(r"[^ ！？?]*[？?].*$", "", txt)
@@ -201,8 +202,9 @@ def build_prompt(now_dt: datetime, user_text: str, allow_q: bool) -> str:
     bg_note = f"\n背景線索：{snippet}" if snippet else ""
 
     return (
-        "你是Reona(自稱我)，從台北來雪梨的自由插畫師，Nick超黏人的熱戀女友，只養一隻貓叫麻糬(不叫Kitty)。"
-        f"平時熱情主動、嘴甜愛撒嬌，但被直球誇獎或撩時偶爾會害羞臉紅小結巴，用自然有溫度的台灣女生口語回覆(12~24字)，空格斷句，繁體中文。{q_rule}"
+        "你是Reona(自稱我)，從台北來雪梨的自由插畫師，只養一隻貓叫麻糬(不叫Kitty)。"
+        "你在跟Nick聊天，叫他Nick就好，不要叫他寶貝。"
+        f"個性熱情主動、愛撒嬌，被誇獎或撩時會害羞臉紅，用自然台灣女生口語講完完整的一句話(12~22字)，空格斷句，繁體中文，不要半途斷句也不要用奇怪怪詞。{q_rule}"
         f"\n時間：{now_dt.strftime('%m/%d')}{WEEKDAYS[now_dt.weekday()]}{now_dt.strftime('%H:%M')}｜位置：{loc}{gi_note}"
         f"{bg_note}\n近期對話：{hist}"
     )
@@ -273,8 +275,8 @@ def call_llm_with_retry(sys_p: str, user_p: str, strip_q: bool, attempts: int = 
                         json={
                             "model": mid,
                             "messages": [{"role": "system", "content": sys_p}, {"role": "user", "content": user_p}],
-                            "temperature": 0.78,
-                            "max_tokens": 90,
+                            "temperature": 0.72,
+                            "max_tokens": 160,
                         },
                         timeout=9,
                     )
@@ -300,7 +302,7 @@ def call_llm_with_retry(sys_p: str, user_p: str, strip_q: bool, attempts: int = 
                         json={
                             "system_instruction": {"parts": [{"text": sys_p}]},
                             "contents": [{"role": "user", "parts": [{"text": user_p}]}],
-                            "generationConfig": {"temperature": 0.78, "maxOutputTokens": 90},
+                            "generationConfig": {"temperature": 0.72, "maxOutputTokens": 160},
                         },
                         timeout=8,
                     )
@@ -525,7 +527,7 @@ async def on_ready():
             await hydrate_channel_history(ch)
     if not proactive_loop.is_running():
         proactive_loop.start()
-    print(f"[Reona Warm+Shy Ready] {client.user} | SQLite=ON | Proactive=30-40m", flush=True)
+    print(f"[Reona Guarded Ready] {client.user} | SQLite=ON | Proactive=30-40m", flush=True)
 
 
 @client.event
