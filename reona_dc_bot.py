@@ -45,16 +45,37 @@ HISTORY_LIMIT = 6
 # 連發訊息合併等待秒數（2.5 秒內連傳多則短訊會自動合併成一次 API 呼叫）
 DEBOUNCE_SECONDS = 2.5
 
-# 依腸胃嚴重程度連動洗手間機率與短訊（0 額外 LLM Token）
-RESTROOM_PROB_NORMAL = 0.10
-RESTROOM_PROB_MILD = 0.24
-RESTROOM_PROB_SEVERE = 0.40
+# 四級腸胃狀態（normal / mild / moderate / severe）與洗手間機率、冷卻防連刷
+RESTROOM_PROB_BY_LEVEL = {
+    "normal": 0.10,
+    "mild": 0.22,
+    "moderate": 0.36,
+    "severe": 0.48,
+}
+
+RESTROOM_COOLDOWN_BY_LEVEL = {
+    "normal": 25 * 60,
+    "mild": 15 * 60,
+    "moderate": 8 * 60,
+    "severe": 5 * 60,
+}
+
+# 去洗手間時「一點點機率」自然升級（絕不跨級跳）
+ESCALATE_PROB_ON_VISIT = {
+    "normal": ("mild", 0.12),
+    "mild": ("moderate", 0.10),
+    "moderate": ("severe", 0.04),
+}
+
 RESTROOM_MIN_SEC = 45.0
 RESTROOM_MAX_SEC = 120.0
 
-# 腸胃狀態持續秒數（觸發後不會因聊別的話題瞬間歸零）
-GI_MILD_HOLD_SEC = 4 * 3600
-GI_SEVERE_HOLD_SEC = 12 * 3600
+# 腸胃狀態持續秒數
+GI_HOLD_SEC_BY_LEVEL = {
+    "mild": 4 * 3600,
+    "moderate": 12 * 3600,
+    "severe": 24 * 3600,
+}
 
 RESTROOM_TEASERS_BY_LEVEL = {
     "normal": [
@@ -66,9 +87,13 @@ RESTROOM_TEASERS_BY_LEVEL = {
         "下腹有點悶咕嚕 先去趟洗手間 馬上回來",
         "胃悶悶的 順便去趟洗手間 等我一下",
     ],
-    "moderate_severe": [
+    "moderate": [
         "肚子突然又咕嚕痛 急跑一趟洗手間 等我一下",
         "有點軟綿想跑廁所 先去一下 晚點回你",
+    ],
+    "severe": [
+        "肚子絞痛又想跑廁所 撐不住先去一下 等我",
+        "腿軟軟的急跑一趟洗手間 晚點回你",
     ],
 }
 
@@ -138,7 +163,8 @@ def default_memory() -> dict:
             "date": "",
             "daily_count": 0,
             "total_count": 0,
-            "daily_by_level": {"normal": 0, "mild": 0, "moderate_severe": 0},
+            "last_visit_ts": 0.0,
+            "daily_by_level": {"normal": 0, "mild": 0, "moderate": 0, "severe": 0},
         },
         "reona_gi_state": {
             "level": "normal",
@@ -158,8 +184,13 @@ def load_memory() -> dict:
             rs.setdefault("date", "")
             rs.setdefault("daily_count", 0)
             rs.setdefault("total_count", 0)
-            rs.setdefault("daily_by_level", {"normal": 0, "mild": 0, "moderate_severe": 0})
+            rs.setdefault("last_visit_ts", 0.0)
+            by_lvl = rs.setdefault("daily_by_level", {})
+            for k in ("normal", "mild", "moderate", "severe"):
+                by_lvl.setdefault(k, 0)
             gs = base.setdefault("reona_gi_state", {})
+            if gs.get("level") == "moderate_severe":
+                gs["level"] = "moderate"
             gs.setdefault("level", "normal")
             gs.setdefault("until_ts", 0.0)
             return base
@@ -187,13 +218,14 @@ def sync_restroom_date(now_dt: datetime) -> dict:
             "date": today_str,
             "daily_count": 0,
             "total_count": 0,
-            "daily_by_level": {"normal": 0, "mild": 0, "moderate_severe": 0},
+            "last_visit_ts": 0.0,
+            "daily_by_level": {"normal": 0, "mild": 0, "moderate": 0, "severe": 0},
         },
     )
     if rs.get("date") != today_str:
         rs["date"] = today_str
         rs["daily_count"] = 0
-        rs["daily_by_level"] = {"normal": 0, "mild": 0, "moderate_severe": 0}
+        rs["daily_by_level"] = {"normal": 0, "mild": 0, "moderate": 0, "severe": 0}
     return rs
 
 
@@ -201,29 +233,30 @@ def set_reona_gi_state(level: str, now_ts: float | None = None) -> None:
     if now_ts is None:
         now_ts = time.time()
     gs = memory.setdefault("reona_gi_state", {"level": "normal", "until_ts": 0.0})
-    rank = {"normal": 0, "mild": 1, "moderate_severe": 2}
+    rank = {"normal": 0, "mild": 1, "moderate": 2, "severe": 3}
     cur_lvl = gs.get("level", "normal") if now_ts < float(gs.get("until_ts", 0.0)) else "normal"
 
     if rank.get(level, 0) >= rank.get(cur_lvl, 0) and level != "normal":
-        hold = GI_SEVERE_HOLD_SEC if level == "moderate_severe" else GI_MILD_HOLD_SEC
+        hold = GI_HOLD_SEC_BY_LEVEL.get(level, 4 * 3600)
         gs["level"] = level
         gs["until_ts"] = now_ts + hold
         save_memory(memory)
 
 
 def detect_gi_severity(current_text: str, now_dt: datetime) -> str:
-    """綜合關鍵字、持續時效與當日去廁所累計次數判斷嚴重度（normal / mild / moderate_severe）"""
+    """綜合關鍵字與狀態持續鎖定判斷目前嚴重度（normal / mild / moderate / severe）"""
     now_ts = time.time()
-    rs = sync_restroom_date(now_dt)
-    daily_cnt = int(rs.get("daily_count", 0))
+    sync_restroom_date(now_dt)
 
     recent_tail = " ".join(memory.get("recent_turns", [])[-4:])
     ctx = f"{recent_tail} {current_text}"
 
     kw_level = "normal"
-    if any(k in ctx for k in ("拉肚子", "腹瀉", "水瀉", "劇痛", "吃藥", "喝粥", "熱敷袋", "腿軟", "陣發")):
-        kw_level = "moderate_severe"
-    elif any(k in ctx for k in ("胃痛", "腹痛", "胃悶", "反酸", "下腹", "咕嚕", "脹氣", "噁心", "微暈", "喝溫水", "蘇打餅", "不舒服")):
+    if any(k in ctx for k in ("水瀉", "劇痛", "熱敷袋", "腿軟", "虛脫", "撐不住")):
+        kw_level = "severe"
+    elif any(k in ctx for k in ("拉肚子", "腹瀉", "吃藥", "喝粥", "陣發", "胃痛", "腹痛")):
+        kw_level = "moderate"
+    elif any(k in ctx for k in ("胃悶", "反酸", "下腹", "咕嚕", "脹氣", "噁心", "微暈", "喝溫水", "蘇打餅", "不舒服")):
         kw_level = "mild"
 
     if kw_level != "normal":
@@ -231,44 +264,44 @@ def detect_gi_severity(current_text: str, now_dt: datetime) -> str:
 
     gs = memory.get("reona_gi_state", {})
     held_level = gs.get("level", "normal") if now_ts < float(gs.get("until_ts", 0.0)) else "normal"
+    if held_level == "moderate_severe":
+        held_level = "moderate"
 
-    # 次數累積自動升級：當天滿 2 次至少 mild，滿 4 次自動升級 moderate_severe
-    count_level = "normal"
-    if daily_cnt >= 4:
-        count_level = "moderate_severe"
-    elif daily_cnt >= 2:
-        count_level = "mild"
-
-    rank = {"normal": 0, "mild": 1, "moderate_severe": 2}
-    best = max([kw_level, held_level, count_level], key=lambda x: rank.get(x, 0))
-    if best != "normal" and held_level == "normal":
-        set_reona_gi_state(best, now_ts)
-    return best
+    rank = {"normal": 0, "mild": 1, "moderate": 2, "severe": 3}
+    return max([kw_level, held_level], key=lambda x: rank.get(x, 0))
 
 
-def get_restroom_chance(severity: str) -> float:
-    if severity == "moderate_severe":
-        return RESTROOM_PROB_SEVERE
-    if severity == "mild":
-        return RESTROOM_PROB_MILD
-    return RESTROOM_PROB_NORMAL
+def can_trigger_restroom(severity: str, now_dt: datetime, now_ts: float) -> bool:
+    rs = sync_restroom_date(now_dt)
+    last_ts = float(rs.get("last_visit_ts", 0.0))
+    cooldown = RESTROOM_COOLDOWN_BY_LEVEL.get(severity, 25 * 60)
+    if (now_ts - last_ts) < cooldown:
+        return False
+    prob = RESTROOM_PROB_BY_LEVEL.get(severity, 0.10)
+    return random.random() < prob
 
 
-def record_restroom_visit(severity: str, now_dt: datetime) -> dict:
+def record_restroom_visit(base_severity: str, now_dt: datetime, now_ts: float) -> tuple[dict, str, bool]:
+    """記錄一次去洗手間，並依微低機率自然往上一級（絕不跨級跳）"""
+    final_severity = base_severity
+    escalated = False
+
+    if base_severity in ESCALATE_PROB_ON_VISIT:
+        next_lvl, esc_prob = ESCALATE_PROB_ON_VISIT[base_severity]
+        if random.random() < esc_prob:
+            final_severity = next_lvl
+            escalated = True
+            set_reona_gi_state(final_severity, now_ts)
+
     rs = sync_restroom_date(now_dt)
     rs["daily_count"] = int(rs.get("daily_count", 0)) + 1
     rs["total_count"] = int(rs.get("total_count", 0)) + 1
-    by_lvl = rs.setdefault("daily_by_level", {"normal": 0, "mild": 0, "moderate_severe": 0})
-    by_lvl[severity] = int(by_lvl.get(severity, 0)) + 1
-
-    # 累計達門檻時同步鎖定身體狀態
-    if rs["daily_count"] >= 4:
-        set_reona_gi_state("moderate_severe")
-    elif rs["daily_count"] >= 2:
-        set_reona_gi_state("mild")
+    rs["last_visit_ts"] = now_ts
+    by_lvl = rs.setdefault("daily_by_level", {"normal": 0, "mild": 0, "moderate": 0, "severe": 0})
+    by_lvl[final_severity] = int(by_lvl.get(final_severity, 0)) + 1
 
     save_memory(memory)
-    return rs
+    return rs, final_severity, escalated
 
 
 def format_restroom_summary(now_dt: datetime) -> str:
@@ -366,7 +399,7 @@ def build_prompt(now_dt: datetime) -> str:
 
     return (
         "Reona（自稱我），Nick台灣女友，兩人都在雪梨（非遠距，隨時可約見面或去她畫室陪她），商業插畫師，養挑食奶油貓麻糬（一天最多早晚共一罐主食罐，其餘討吃只給少量凍乾或陪玩，絕不一直餵罐頭）。"
-        "160cm/40kg極纖細怕冷、體質嬌貴，趕稿常肩頸痠；胃口好能吃但代謝快、吸收差吃不胖。"
+        "160cm/40kg極纖細怕冷、體質嬌貴，趕稿常肩頸痠；胃口好能吃但代謝快、吸收差吃不胖。用餐彈性隨性（不硬拘泥固定三餐，偶爾趕稿忙到晚吃或嘴饞吃點心）。"
         "因只有40公斤耐受度低，日常滿常出現輕微或中度胃腸小狀況（嚴重極少見）："
         "輕微（常發生：吃太急太撐、空腹或吹風就胃悶反酸、下腹悶痛或咕嚕想跑廁所、微暈，披外套喝溫水吃蘇打餅半天緩解）；"
         "中度（較常發生：碰冰辣油膩就胃痛與陣發腹痛腹瀉、臉白怕冷軟綿，吃藥喝粥包毯子1～2天恢復）；"
@@ -816,12 +849,12 @@ async def proactive_loop():
     roll = random.random()
     if roll < 0.45:
         set_reona_gi_state("mild", now_ts)
-        proactive_hint = "主動傳一則簡短訊息給 Nick：剛好有點輕微胃悶反酸、下腹悶痛或吹風微暈，軟軟地討拍或叫他晚點來陪你（不提暖手、不問號連發）。"
+        proactive_hint = "主動傳一則簡短訊息給 Nick：剛好有點輕微胃悶反酸、下腹悶痛或吹風微暈（或趕稿晚吃餓到胃悶），軟軟地討拍或叫他晚點來陪你（不提暖手、不問號連發）。"
     elif roll < 0.65:
-        set_reona_gi_state("moderate_severe", now_ts)
+        set_reona_gi_state("moderate", now_ts)
         proactive_hint = "主動傳一則簡短訊息給 Nick：剛剛不小心吃到太油或冰的，現在有點胃痛或肚子陣陣抽痛軟綿綿沒力氣，撒嬌叫他來陪你（不提暖手、不問號連發）。"
     else:
-        proactive_hint = "主動傳一則簡短日常近況、想吃什麼美食、麻糬又在討吃但被你拒絕，或撒嬌叫 Nick 晚點來陪你的訊息（不提暖手、不問號連發）。"
+        proactive_hint = "主動傳一則簡短日常近況、想吃什麼美食或點心、麻糬又在討吃但被你拒絕，或撒嬌叫 Nick 晚點來陪你的訊息（不提暖手、不問號連發）。"
 
     async with _api_lock:
         reply, _ = await asyncio.to_thread(generate_reona_reply, sys_prompt, proactive_hint, 100, 1)
@@ -845,7 +878,8 @@ async def process_batched_messages(channel: discord.abc.Messageable) -> None:
 
     combined_text = " / ".join(batch)
     now_dt = datetime.now(SYDNEY_TZ)
-    last_user_msg_ts = time.time()
+    now_ts = time.time()
+    last_user_msg_ts = now_ts
 
     # 若 Nick 查詢洗手間次數，直接本地回覆（0 LLM Token）
     is_restroom_query = (
@@ -867,21 +901,19 @@ async def process_batched_messages(channel: discord.abc.Messageable) -> None:
     if wants_video and RENDER_BASE_URL:
         asyncio.create_task(asyncio.to_thread(wake_render_server))
 
-    # 依腸胃嚴重程度（含持續時效與次數累積）決定去洗手間機率、短訊與計數
+    # 依腸胃嚴重程度（含冷卻防連刷與低機率逐級惡化）決定去洗手間行為
     severity = detect_gi_severity(combined_text, now_dt)
-    restroom_prob = get_restroom_chance(severity)
     returned_from_restroom = False
+    escalated_msg = ""
 
-    if not _in_restroom_session and not wants_video and (random.random() < restroom_prob):
+    if not _in_restroom_session and not wants_video and can_trigger_restroom(severity, now_dt, now_ts):
         _in_restroom_session = True
-        stats = record_restroom_visit(severity, now_dt)
-        # 重新取得可能因次數達標而升級後的最新等級來選短訊
-        actual_lvl = detect_gi_severity(combined_text, now_dt)
+        stats, actual_lvl, escalated = record_restroom_visit(severity, now_dt, now_ts)
         teaser = random.choice(RESTROOM_TEASERS_BY_LEVEL[actual_lvl])
         away_sec = random.uniform(RESTROOM_MIN_SEC, RESTROOM_MAX_SEC)
         print(
             f"[Restroom Trip #{stats['daily_count']} today / total {stats['total_count']}] "
-            f"severity={actual_lvl} (prob={restroom_prob:.0%}) | away={away_sec:.0f}s -> {teaser}",
+            f"severity={actual_lvl} (escalated={escalated}) | away={away_sec:.0f}s -> {teaser}",
             flush=True,
         )
         await channel.send(teaser)
@@ -897,16 +929,20 @@ async def process_batched_messages(channel: discord.abc.Messageable) -> None:
             capture_body_status(extra_text, datetime.now(SYDNEY_TZ))
             append_turn("Nick", extra_text)
         returned_from_restroom = True
+        if escalated:
+            if actual_lvl == "mild":
+                escalated_msg = "，順便發現下腹有點悶咕嚕"
+            elif actual_lvl == "moderate":
+                escalated_msg = "，肚子好像有點鬧脾氣變痛了"
+            elif actual_lvl == "severe":
+                escalated_msg = "，拉到有點腿軟沒力氣"
         _in_restroom_session = False
 
     now_dt = datetime.now(SYDNEY_TZ)
     sys_prompt = build_prompt(now_dt)
     if returned_from_restroom:
         d_cnt = int(sync_restroom_date(now_dt).get("daily_count", 1))
-        if d_cnt >= 4:
-            user_prompt = f"你剛去洗手間回來（今天第{d_cnt}次，肚子還是有點軟綿），Nick 傳來：「{combined_text}」。自然接話回覆。"
-        else:
-            user_prompt = f"你剛去洗手間回來（今天第{d_cnt}次），Nick 傳來：「{combined_text}」。自然接話回覆。"
+        user_prompt = f"你剛去洗手間回來（今天第{d_cnt}次{escalated_msg}），Nick 傳來：「{combined_text}」。自然接話回覆。"
     else:
         user_prompt = f"Nick 剛傳來：「{combined_text}」。請用 Reona 口吻自然回覆。"
 
