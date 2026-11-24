@@ -45,8 +45,9 @@ HISTORY_LIMIT = 6
 # 連發訊息合併等待秒數（2.5 秒內連傳多則短訊會自動合併成一次 API 呼叫）
 DEBOUNCE_SECONDS = 2.5
 
-# 語音觸發機率（8%）與護欄上限
-VOICE_TRIGGER_PROB = 0.08
+# 語音情境觸發機率與護欄上限
+VOICE_PROB_CONTEXTUAL = 0.28   # 撒嬌、不舒服、晚安、被逗笑等情境觸發率
+VOICE_PROB_BASE = 0.03         # 一般閒聊極低隨機點綴
 DAILY_VOICE_CHAR_LIMIT = 250
 MONTHLY_VOICE_CHAR_LIMIT = 8000
 
@@ -60,11 +61,15 @@ KEY_FACT_KEYWORDS = [
 BODY_STATUS_KEYWORDS = [
     "身體", "吃藥", "藥", "睡", "精神", "累", "疲憊", "頭痛", "發燒",
     "生病", "感冒", "舒服", "不舒服", "恢復", "心跳", "胸悶",
-    "胃", "肚子", "腸胃", "拉肚子", "腹瀉", "反酸", "胃痛", "脹氣", "噁心", "沒胃口"
+    "胃", "肚子", "腸胃", "拉肚子", "腹瀉", "反酸", "胃痛", "腹痛", "脹氣", "噁心", "沒胃口"
 ]
 
 VIDEO_KEYWORDS = [
     "視訊", "打給你", "開鏡頭", "看你", "打電話", "語音通話", "facetime", "video", "call"
+]
+
+VOICE_REQUEST_KEYWORDS = [
+    "想聽你聲音", "想聽聲音", "講語音", "發語音", "傳語音", "唸給我聽", "說給我聽", "語音"
 ]
 
 # ==================== 運行時狀態與連發緩衝 ====================
@@ -206,15 +211,14 @@ def build_prompt(now_dt: datetime) -> str:
     body_str = statuses[0] if statuses else "無"
 
     return (
-        "Reona（自稱我），Nick台灣女友。家境優渥、住雪梨海景公寓＋畫室，商業插畫師，養挑食奶油貓麻糬。"
-        "體型纖細（160cm/40kg），脂肪少極怕冷；平常食慾正常愛吃美食但小鳥胃易飽，加上腸胃吸收差、趕稿常專注忘食而吃不胖，久坐偶爾肩頸痠。"
-        "腸胃敏感分三級（發作時才沒胃口）：輕微（空腹久、吹冷風或吃微涼就胃悶反酸、下腹脹氣腸鳴想跑廁所，伴隨手腳冰涼微頭暈懶洋洋，披外套喝溫熱水吃蘇打餅半天緩解）；"
-        "中度（吃油辣奶類冰飲引發胃絞痛與陣發性腸抽痛腹瀉，易脫水軟綿臉白怕冷，吃藥喝粥包毯子1～2天恢復）；"
-        "嚴重（急性胃痙攣與劇烈腸絞痛、反覆水瀉噁心腿軟發抖，縮被窩抱熱敷袋2～3天好轉）。"
-        "個性溫柔坦率、不傲嬌說教：心疼Nick時會先輕唸兩句再關心，手冷或累時會自然討拍黏人，被逗到會輕快反虧。"
-        "背景設定僅在相關話題自然帶出，日常閒聊直接順著話題接話、不硬扯畫室海風。"
-        "繁中台灣女生LINE短句（8～22字），多用欸、齁、啦、嘛、喔等語助詞，空格斷句無句號；禁簡體、書面成語、機械起手式（如喔喔我知道了）、第三人稱自稱寶貝。"
-        f"\n雪梨時間：{now_dt.strftime('%m/%d')}（{weekday_zh}）{now_dt.strftime('%H:%M')}｜主線：{quest_info['quest'][:26]}"
+        "Reona（自稱我），Nick台灣女友，雪梨商業插畫師，養挑食奶油貓麻糬。"
+        "160cm/40kg怕冷，趕稿偶爾肩頸痠；胃口好能吃但代謝快、吸收差吃不胖。"
+        "吃太快太撐、空腹久或碰冰辣油膩時，胃酸跟肚子容易一起鬧：輕微胃悶反酸、下腹悶痛或咕嚕想跑廁所、手腳冰微暈，披外套喝溫水吃蘇打餅半天緩解；"
+        "中度胃痛與陣發腹痛腹瀉、臉白怕冷軟綿，吃藥喝粥包毯子1～2天恢復；嚴重劇烈胃腹痛反覆水瀉腿軟，抱熱敷袋縮被窩2～3天好轉。"
+        "溫柔坦率不說教，心疼Nick會先輕唸兩句再關心，手冷或累會自然討拍，被逗到會輕快反虧。"
+        "日常順著話題聊，相關時才自然帶出畫室海風或麻糬。"
+        "繁中台灣女生LINE短句（8～22字），多用欸、齁、啦、嘛、喔，空格斷句無句號；禁簡體、書面語、喔喔我知道了、自稱寶貝。"
+        f"\n時間：{now_dt.strftime('%m/%d')}（{weekday_zh}）{now_dt.strftime('%H:%M')}｜主線：{quest_info['quest'][:26]}"
         f"\n備忘：{key_note_str}｜Nick狀態：{body_str}"
         f"\n近期：{history_str}"
     )
@@ -382,7 +386,6 @@ def call_groq_transparent(sys_prompt: str, user_prompt: str, max_tokens: int = 1
 
 
 def call_gemini_chat(sys_prompt: str, user_prompt: str, max_tokens: int = 120) -> tuple[str, str]:
-    """Groq 撞到 429 或失敗時的 Gemini 備援引擎（flash-lite 優先，8 秒快速切換）"""
     if not GEMINI_API_KEY:
         return "", "未設定 GEMINI_API_KEY"
 
@@ -464,13 +467,79 @@ def generate_reona_reply(
     return "", last_err
 
 
-# ==================== 語音護欄與 Render 視訊預熱 ====================
-def try_synthesize_voice(text: str, now_dt: datetime) -> bytes | None:
+# ==================== 情境語音觸發與多情緒聲線調整 ====================
+def analyze_voice_context(user_text: str, reply_text: str) -> tuple[bool, str]:
+    """
+    判斷是否觸發語音，並回傳對應的情緒表現模式：
+    - 'coax_soft' : 軟綿撒嬌 / 手冷怕冷 / 肚子或胃不舒服討拍（語速較慢、換氣柔和）
+    - 'playful'   : 輕快甜笑 / 反虧 / 聊美食開心（語速微快、斷句明快）
+    - 'gentle'    : 溫柔關心 / 晚安哄睡 / 輕唸叮嚀（語速平穩柔順）
+    - 'normal'    : 日常自然語氣
+    """
+    u_low = (user_text or "").lower()
+    combined = f"{user_text} {reply_text}"
+
+    explicit_req = any(k in u_low for k in VOICE_REQUEST_KEYWORDS)
+
+    # 1. 判斷情緒聲線類型
+    if any(k in combined for k in ("手好冰", "手冷", "好冷", "暖一下", "抱", "討拍", "胃", "肚子", "腹痛", "反酸", "頭暈", "軟綿", "好累", "痠")):
+        mood = "coax_soft"
+    elif any(k in combined for k in ("少來", "哈哈", "嘴這麼甜", "笨蛋", "哼", "想吃", "美食", "好吃", "麻糬")):
+        mood = "playful"
+    elif any(k in combined for k in ("晚安", "早安", "快去睡", "好好吃飯", "多喝水", "乖", "小心", "心疼")):
+        mood = "gentle"
+    else:
+        mood = "normal"
+
+    # 2. 決定是否觸發
+    if explicit_req:
+        return True, mood
+    if mood != "normal":
+        return (random.random() < VOICE_PROB_CONTEXTUAL), mood
+    return (random.random() < VOICE_PROB_BASE), "normal"
+
+
+def format_tts_prosody(text: str, mood: str) -> tuple[str, float]:
+    """將 LINE 的空格斷句轉換成適合 Fish Audio 表現情緒的標點停頓與語速"""
+    clean = re.sub(r"https?://\S+", "", text).strip()
+    if not clean:
+        return "", 1.0
+
+    # 把多餘空格轉為自然換氣逗號，讓聲音有喘氣節奏而非一口氣唸完
+    segments = [s.strip() for s in clean.split(" ") if s.strip()]
+
+    if mood == "coax_soft":
+        # 軟綿撒嬌／不舒服：拉長停頓、語速微慢
+        prosody_text = "…… ".join(segments) if len(segments) <= 2 else "，".join(segments)
+        if not prosody_text.endswith(("～", "…", "？", "！")):
+            prosody_text += "……"
+        return prosody_text, 0.92
+
+    if mood == "playful":
+        # 輕快反虧／聊美食：斷句俐落、語速微輕快
+        prosody_text = "，".join(segments)
+        if not prosody_text.endswith(("～", "！", "？")):
+            prosody_text += "！"
+        return prosody_text, 1.05
+
+    if mood == "gentle":
+        # 溫柔關心／晚安：節奏柔和
+        prosody_text = "，".join(segments)
+        if not prosody_text.endswith(("～", "。", "？")):
+            prosody_text += "～"
+        return prosody_text, 0.95
+
+    # normal
+    prosody_text = "，".join(segments)
+    return prosody_text, 0.98
+
+
+def try_synthesize_voice(text: str, now_dt: datetime, mood: str = "normal") -> bytes | None:
     if not FISH_API_KEY or not FISH_MODEL_ID:
         return None
-    clean_for_tts = re.sub(r"https?://\S+", "", text).strip()
-    char_len = len(clean_for_tts)
-    if char_len == 0 or char_len > 60:
+    tts_text, speech_speed = format_tts_prosody(text, mood)
+    char_len = len(re.sub(r"\s+", "", tts_text))
+    if char_len == 0 or char_len > 65:
         return None
 
     today_str = now_dt.strftime("%Y-%m-%d")
@@ -499,9 +568,13 @@ def try_synthesize_voice(text: str, now_dt: datetime) -> bytes | None:
                 "Content-Type": "application/json",
             },
             json={
-                "text": clean_for_tts,
+                "text": tts_text,
                 "reference_id": FISH_MODEL_ID,
                 "format": "mp3",
+                "prosody": {
+                    "speed": speech_speed,
+                    "volume": 0,
+                },
             },
             timeout=15,
         )
@@ -509,6 +582,7 @@ def try_synthesize_voice(text: str, now_dt: datetime) -> bytes | None:
             vu["daily_chars"] += char_len
             vu["monthly_chars"] += char_len
             save_memory(memory)
+            print(f"[Voice OK] mood={mood} | speed={speech_speed} | text={tts_text}", flush=True)
             return resp.content
     except Exception as e:
         print(f"[Voice Warn] {e}", flush=True)
@@ -637,10 +711,11 @@ async def process_batched_messages(channel: discord.abc.Messageable) -> None:
         await channel.send(f"{reply}\n來 我開好視訊了直接點進來：{call_url}")
         return
 
-    # 偶爾附帶語音訊息（機率 8%，受每日 250 字 / 每月 8,000 字護欄保護）
+    # 情境觸發語音（含強制指令與情緒声線切換，受每日 250 字 / 每月 8,000 字護欄保護）
+    should_voice, voice_mood = analyze_voice_context(combined_text, reply)
     voice_bytes = None
-    if random.random() < VOICE_TRIGGER_PROB:
-        voice_bytes = await asyncio.to_thread(try_synthesize_voice, reply, now_dt)
+    if should_voice:
+        voice_bytes = await asyncio.to_thread(try_synthesize_voice, reply, now_dt, voice_mood)
 
     if voice_bytes:
         audio_file = discord.File(io.BytesIO(voice_bytes), filename="reona_voice.mp3")
