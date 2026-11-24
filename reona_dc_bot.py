@@ -48,34 +48,74 @@ DEBOUNCE_SECONDS = 2.5
 # 四級腸胃狀態（normal / mild / moderate / severe）與洗手間機率、冷卻防連刷
 RESTROOM_PROB_BY_LEVEL = {
     "normal": 0.10,
-    "mild": 0.22,
-    "moderate": 0.36,
-    "severe": 0.48,
+    "mild": 0.20,
+    "moderate": 0.30,
+    "severe": 0.36,
 }
 
 RESTROOM_COOLDOWN_BY_LEVEL = {
     "normal": 25 * 60,
-    "mild": 15 * 60,
-    "moderate": 8 * 60,
-    "severe": 5 * 60,
+    "mild": 18 * 60,
+    "moderate": 12 * 60,
+    "severe": 10 * 60,
 }
 
 # 去洗手間時「一點點機率」自然升級（絕不跨級跳）
 ESCALATE_PROB_ON_VISIT = {
-    "normal": ("mild", 0.12),
-    "mild": ("moderate", 0.10),
-    "moderate": ("severe", 0.04),
+    "normal": ("mild", 0.10),
+    "mild": ("moderate", 0.08),
+    "moderate": ("severe", 0.03),
 }
 
-RESTROOM_MIN_SEC = 45.0
-RESTROOM_MAX_SEC = 120.0
+RESTROOM_MIN_SEC = 55.0
+RESTROOM_MAX_SEC = 130.0
+
+# 在洗手間中途偷偷傳訊息的機率（0 額外 LLM Token）
+RESTROOM_MID_PING_PROB_BY_LEVEL = {
+    "normal": 0.30,
+    "mild": 0.50,
+    "moderate": 0.68,
+    "severe": 0.80,
+}
 
 # 腸胃狀態持續秒數
 GI_HOLD_SEC_BY_LEVEL = {
     "mild": 4 * 3600,
     "moderate": 12 * 3600,
-    "severe": 24 * 3600,
+    "severe": 20 * 3600,
 }
+
+# 各級腸胃不舒服的預設固定誘因（鎖定後不會每次換理由）
+GI_DEFAULT_CAUSES = {
+    "mild": [
+        "趕稿忙到晚吃空腹太久胃有點悶",
+        "吹到海風加上吃太急下腹悶咕嚕",
+        "下午嘴饞吃太撐有點反酸胃悶",
+    ],
+    "moderate": [
+        "晚餐不小心吃到偏油辣的食物鬧肚子",
+        "喝了冰飲又吹冷風引起陣發腹痛",
+    ],
+    "severe": [
+        "晚餐吃到太油辣又著涼引發急性胃腸炎",
+        "冰飲加辣食刺激太重引起反覆腹瀉腿軟",
+    ],
+}
+
+# 每日彈性晚餐候選池（同日鎖定，避免前後矛盾）
+DINNER_POOL_NORMAL = [
+    "清炒時蔬配煎鮭魚跟一點白飯",
+    "熱呼呼的日式雞肉親子丼",
+    "番茄牛肉湯麵",
+    "酪梨雞胸溫沙拉配烤吐司",
+    "趕稿忙到晚才吃溫熱蔬菜蛋花粥",
+    "微辣泰式打拋豬飯（嘴饞多吃了幾口）",
+]
+
+DINNER_POOL_GENTLE = [
+    "清淡暖胃的白粥配燙青菜",
+    "熱湯蘇打餅配溫水（腸胃不舒服吃得很清淡）",
+]
 
 RESTROOM_TEASERS_BY_LEVEL = {
     "normal": [
@@ -84,16 +124,38 @@ RESTROOM_TEASERS_BY_LEVEL = {
         "等我一下喔 剛剛好想上廁所",
     ],
     "mild": [
-        "下腹有點悶咕嚕 先去趟洗手間 馬上回來",
-        "胃悶悶的 順便去趟洗手間 等我一下",
+        "下腹有點悶悶脹脹的 還一直咕嚕叫 先去趟洗手間 馬上回來",
+        "胃酸有點往上頂 下腹也悶痛 順便去趟洗手間 等我一下",
     ],
     "moderate": [
-        "肚子突然又咕嚕痛 急跑一趟洗手間 等我一下",
-        "有點軟綿想跑廁所 先去一下 晚點回你",
+        "肚子突然一陣絞痛翻攪 急跑一趟洗手間 等我一下",
+        "下腹抽痛得好難受 整個人軟綿綿想跑廁所 先去一下晚點回你",
     ],
     "severe": [
-        "肚子絞痛又想跑廁所 撐不住先去一下 等我",
-        "腿軟軟的急跑一趟洗手間 晚點回你",
+        "肚子絞痛到冒冷汗又想水瀉 撐不住先衝洗手間 等我",
+        "腸子一陣陣痙攣痛到腿軟 急跑一趟洗手間 晚點回你",
+    ],
+}
+
+# 在洗手間裡中途偷偷發的訊息（依等級區分體感細節）
+RESTROOM_IN_PROGRESS_PINGS = {
+    "normal": [
+        "還在廁所裡滑手機 你在幹嘛",
+        "在洗手間順便發個呆 馬上就出去了",
+    ],
+    "mild": [
+        "還在洗手間 下腹還是悶悶脹脹的 陪我聊兩句嘛",
+        "坐在廁所裡覺得胃有點反酸 還好有你陪我聊天",
+    ],
+    "moderate": [
+        "還在廁所裡 肚子一陣陣絞痛好難受 陪我說說話轉移注意力嘛",
+        "在洗手間肚子還在咕嚕翻攪 整個人冷冷軟綿綿的",
+        "還在廁所 剛又一陣抽痛 40公斤真的好不耐痛喔",
+    ],
+    "severe": [
+        "還在廁所裡 痛到有點冒冷汗腿軟軟的 好想討抱",
+        "在洗手間肚子絞痛得一直翻攪 沒什麼力氣 晚點想縮進被窩",
+        "還在廁所 剛剛又水瀉一陣 整個人虛脫軟綿綿的好難受",
     ],
 }
 
@@ -146,13 +208,14 @@ _api_lock = asyncio.Lock()
 _in_restroom_session: bool = False
 
 
-# ==================== 記憶讀寫、主線生成與洗手間計數 ====================
+# ==================== 記憶讀寫、主線與晚餐/腸胃誘因鎖定 ====================
 def default_memory() -> dict:
     return {
         "recent_turns": [],
         "long_term_notes": [],
         "body_status": [],
         "daily_quest": {"date": "", "quest": ""},
+        "daily_dinner": {"date": "", "dinner": ""},
         "voice_usage": {
             "date": "",
             "daily_chars": 0,
@@ -169,6 +232,7 @@ def default_memory() -> dict:
         "reona_gi_state": {
             "level": "normal",
             "until_ts": 0.0,
+            "cause": "",
         },
     }
 
@@ -193,6 +257,10 @@ def load_memory() -> dict:
                 gs["level"] = "moderate"
             gs.setdefault("level", "normal")
             gs.setdefault("until_ts", 0.0)
+            gs.setdefault("cause", "")
+            dd = base.setdefault("daily_dinner", {})
+            dd.setdefault("date", "")
+            dd.setdefault("dinner", "")
             return base
         except Exception as e:
             print(f"[Memory Load Warn] {e}", flush=True)
@@ -229,18 +297,57 @@ def sync_restroom_date(now_dt: datetime) -> dict:
     return rs
 
 
-def set_reona_gi_state(level: str, now_ts: float | None = None) -> None:
+def extract_cause_from_text(text: str) -> str:
+    """從對話中抓取具體飲食或著涼誘因（若抓到則優先鎖定該原因）"""
+    rules = [
+        (("冰", "冷飲", "冰水", "冰咖啡", "冰淇淋"), "喝了冰飲刺激腸胃"),
+        (("辣", "麻辣", "辛辣", "酸辣"), "吃了太辣的食物刺激腸胃"),
+        (("油", "炸", "鹹酥雞", "烤肉", "太膩"), "吃了偏油膩的食物鬧肚子"),
+        (("吹風", "冷風", "著涼", "好冷", "受寒"), "吹到冷風著涼引起腸胃不適"),
+        (("餓", "沒吃", "晚吃", "空腹", "趕稿"), "趕稿太晚吃空腹太久胃悶反酸"),
+        (("吃太快", "吃太急", "吃太撐", "太飽"), "吃太急太撐消化不良"),
+    ]
+    for keywords, label in rules:
+        if any(k in text for k in keywords):
+            return label
+    return ""
+
+
+def set_reona_gi_state(level: str, now_ts: float | None = None, cause_hint: str = "") -> None:
     if now_ts is None:
         now_ts = time.time()
-    gs = memory.setdefault("reona_gi_state", {"level": "normal", "until_ts": 0.0})
+    gs = memory.setdefault("reona_gi_state", {"level": "normal", "until_ts": 0.0, "cause": ""})
     rank = {"normal": 0, "mild": 1, "moderate": 2, "severe": 3}
-    cur_lvl = gs.get("level", "normal") if now_ts < float(gs.get("until_ts", 0.0)) else "normal"
+    is_active = now_ts < float(gs.get("until_ts", 0.0))
+    cur_lvl = gs.get("level", "normal") if is_active else "normal"
 
-    if rank.get(level, 0) >= rank.get(cur_lvl, 0) and level != "normal":
+    if level == "normal":
+        return
+
+    if rank.get(level, 0) >= rank.get(cur_lvl, 0):
         hold = GI_HOLD_SEC_BY_LEVEL.get(level, 4 * 3600)
         gs["level"] = level
         gs["until_ts"] = now_ts + hold
+
+        existing_cause = (gs.get("cause") or "").strip() if is_active else ""
+        if cause_hint:
+            gs["cause"] = cause_hint
+        elif not existing_cause:
+            pool = GI_DEFAULT_CAUSES.get(level, GI_DEFAULT_CAUSES["mild"])
+            gs["cause"] = random.choice(pool)
         save_memory(memory)
+
+
+def get_active_gi_info(now_ts: float | None = None) -> tuple[str, str]:
+    if now_ts is None:
+        now_ts = time.time()
+    gs = memory.get("reona_gi_state", {})
+    if now_ts < float(gs.get("until_ts", 0.0)):
+        lvl = gs.get("level", "normal")
+        if lvl == "moderate_severe":
+            lvl = "moderate"
+        return lvl, (gs.get("cause") or "").strip()
+    return "normal", ""
 
 
 def detect_gi_severity(current_text: str, now_dt: datetime) -> str:
@@ -250,6 +357,7 @@ def detect_gi_severity(current_text: str, now_dt: datetime) -> str:
 
     recent_tail = " ".join(memory.get("recent_turns", [])[-4:])
     ctx = f"{recent_tail} {current_text}"
+    detected_cause = extract_cause_from_text(current_text)
 
     kw_level = "normal"
     if any(k in ctx for k in ("水瀉", "劇痛", "熱敷袋", "腿軟", "虛脫", "撐不住")):
@@ -260,13 +368,9 @@ def detect_gi_severity(current_text: str, now_dt: datetime) -> str:
         kw_level = "mild"
 
     if kw_level != "normal":
-        set_reona_gi_state(kw_level, now_ts)
+        set_reona_gi_state(kw_level, now_ts, detected_cause)
 
-    gs = memory.get("reona_gi_state", {})
-    held_level = gs.get("level", "normal") if now_ts < float(gs.get("until_ts", 0.0)) else "normal"
-    if held_level == "moderate_severe":
-        held_level = "moderate"
-
+    held_level, _ = get_active_gi_info(now_ts)
     rank = {"normal": 0, "mild": 1, "moderate": 2, "severe": 3}
     return max([kw_level, held_level], key=lambda x: rank.get(x, 0))
 
@@ -282,7 +386,7 @@ def can_trigger_restroom(severity: str, now_dt: datetime, now_ts: float) -> bool
 
 
 def record_restroom_visit(base_severity: str, now_dt: datetime, now_ts: float) -> tuple[dict, str, bool]:
-    """記錄一次去洗手間，並依微低機率自然往上一級（絕不跨級跳）"""
+    """記錄一次去洗手間，並依微低機率自然往上一級（絕不跨級跳，且沿用同一固定誘因）"""
     final_severity = base_severity
     escalated = False
 
@@ -291,7 +395,8 @@ def record_restroom_visit(base_severity: str, now_dt: datetime, now_ts: float) -
         if random.random() < esc_prob:
             final_severity = next_lvl
             escalated = True
-            set_reona_gi_state(final_severity, now_ts)
+            _, existing_cause = get_active_gi_info(now_ts)
+            set_reona_gi_state(final_severity, now_ts, existing_cause)
 
     rs = sync_restroom_date(now_dt)
     rs["daily_count"] = int(rs.get("daily_count", 0)) + 1
@@ -323,7 +428,7 @@ def ensure_daily_main_quest(now_dt: datetime) -> dict:
         "幫雜誌跨頁商業插畫上主色調與光影",
         "整理出版社新繪本分鏡草稿與色票",
         "去邦代海邊咖啡廳畫速寫抓靈感",
-        "幫挑食奶油貓麻糬梳毛、陪玩逗貓棒",
+        "整理畫室水彩顏料與畫筆",
         "調整品牌聯名主視覺的色彩層次與細節",
         "逛雪梨週末手作市集挑進口水彩顏料",
         "在海景畫室完成精品包裝插畫完稿",
@@ -333,6 +438,46 @@ def ensure_daily_main_quest(now_dt: datetime) -> dict:
     dq["quest"] = quest_pool[seed_idx]
     save_memory(memory)
     return dq
+
+
+def ensure_daily_dinner(now_dt: datetime) -> str:
+    """每日鎖定一份晚餐內容（若正在中重度不舒服則自動改為清淡流質），避免前後矛盾"""
+    today_str = now_dt.strftime("%Y-%m-%d")
+    dd = memory.setdefault("daily_dinner", {"date": "", "dinner": ""})
+    gi_lvl, gi_cause = get_active_gi_info()
+
+    if dd.get("date") == today_str and dd.get("dinner"):
+        if gi_lvl in ("moderate", "severe") and "粥" not in dd["dinner"] and "蘇打餅" not in dd["dinner"]:
+            dd["dinner"] = f"因為{gi_cause or '肚子不舒服'}，晚餐改喝清淡暖胃白粥配溫水"
+            save_memory(memory)
+        return dd["dinner"]
+
+    if gi_lvl in ("moderate", "severe"):
+        chosen = random.choice(DINNER_POOL_GENTLE)
+    else:
+        seed_idx = (now_dt.year * 37 + now_dt.timetuple().tm_yday * 13) % len(DINNER_POOL_NORMAL)
+        chosen = DINNER_POOL_NORMAL[seed_idx]
+        if "辣" in chosen and gi_lvl == "normal":
+            gs = memory.setdefault("reona_gi_state", {"level": "normal", "until_ts": 0.0, "cause": ""})
+            if not gs.get("cause"):
+                gs["cause"] = "晚餐吃了微辣泰式打拋豬刺激到腸胃"
+
+    dd["date"] = today_str
+    dd["dinner"] = chosen
+    save_memory(memory)
+    return chosen
+
+
+def capture_dinner_override(user_text: str, now_dt: datetime) -> None:
+    txt = re.sub(r"\s+", " ", (user_text or "").strip())
+    if not txt or len(txt) < 4:
+        return
+    if ("晚餐" in txt or "晚上吃" in txt or "今晚吃" in txt) and len(txt) <= 24:
+        today_str = now_dt.strftime("%Y-%m-%d")
+        dd = memory.setdefault("daily_dinner", {"date": today_str, "dinner": ""})
+        dd["date"] = today_str
+        dd["dinner"] = txt[:22]
+        save_memory(memory)
 
 
 def capture_key_note(user_text: str, now_dt: datetime) -> None:
@@ -387,6 +532,15 @@ def clean_reply_text(raw: str) -> str:
 def build_prompt(now_dt: datetime) -> str:
     weekday_zh = WEEKDAY_NAMES_ZH[now_dt.weekday()]
     quest_info = ensure_daily_main_quest(now_dt)
+    dinner_str = ensure_daily_dinner(now_dt)
+    gi_lvl, gi_cause = get_active_gi_info()
+
+    if gi_lvl == "normal":
+        reona_body_str = "正常（胃口好、精神不錯）"
+    else:
+        lvl_zh = {"mild": "輕微胃悶反酸", "moderate": "中度胃腹痛腹瀉", "severe": "嚴重絞痛水瀉軟綿"}.get(gi_lvl, gi_lvl)
+        reona_body_str = f"{lvl_zh}（固定原因：{gi_cause}，不可自己編別的原因；回覆時要具體描寫肚子痛或胃悶反酸的體感細節）"
+
     recent = memory.get("recent_turns", [])[-HISTORY_LIMIT:]
     trimmed_turns = [t[:65] for t in recent]
     history_str = " / ".join(trimmed_turns) if trimmed_turns else "無"
@@ -398,17 +552,17 @@ def build_prompt(now_dt: datetime) -> str:
     body_str = statuses[0] if statuses else "無"
 
     return (
-        "Reona（自稱我），Nick台灣女友，兩人都在雪梨（非遠距，隨時可約見面或去她畫室陪她），商業插畫師，養挑食奶油貓麻糬（一天最多早晚共一罐主食罐，其餘討吃只給少量凍乾或陪玩，絕不一直餵罐頭）。"
+        "Reona（自稱我），Nick台灣女友，兩人都在雪梨（非遠距，隨時可約見面或去她畫室陪她），商業插畫師，養奶油貓麻糬。"
         "160cm/40kg極纖細怕冷、體質嬌貴，趕稿常肩頸痠；胃口好能吃但代謝快、吸收差吃不胖。用餐彈性隨性（不硬拘泥固定三餐，偶爾趕稿忙到晚吃或嘴饞吃點心）。"
-        "因只有40公斤耐受度低，日常滿常出現輕微或中度胃腸小狀況（嚴重極少見）："
-        "輕微（常發生：吃太急太撐、空腹或吹風就胃悶反酸、下腹悶痛或咕嚕想跑廁所、微暈，披外套喝溫水吃蘇打餅半天緩解）；"
-        "中度（較常發生：碰冰辣油膩就胃痛與陣發腹痛腹瀉、臉白怕冷軟綿，吃藥喝粥包毯子1～2天恢復）；"
-        "嚴重（極少見：劇烈胃腹痛反覆水瀉腿軟，抱熱敷袋縮被窩2～3天好轉）。"
-        "溫柔坦率不說教，心疼Nick會先輕唸兩句再關心，累、不舒服或想他時會撒嬌叫他來陪、一起窩著放空或吃美食（不提暖手），被逗到會輕快反虧。"
-        "日常順著話題聊，相關時才自然帶出畫室海風或麻糬。"
-        "繁中台灣女生LINE短句（8～22字），多用欸、齁、啦、嘛、喔，空格斷句無句號；禁簡體、書面語、喔喔我知道了、自稱寶貝、一直叫暖手。"
-        f"\n時間：{now_dt.strftime('%m/%d')}（{weekday_zh}）{now_dt.strftime('%H:%M')}｜主線：{quest_info['quest'][:26]}"
-        f"\n備忘：{key_note_str}｜Nick狀態：{body_str}"
+        "因只有40公斤耐受度低，日常滿常出現輕微或中度胃腸小狀況（嚴重極少見），不舒服時會具體描寫真實體感："
+        "輕微（常發生：吃太急太撐、空腹或吹風就胃酸往上頂、胃悶灼熱、下腹隱隱悶痛脹氣、腸子咕嚕叫想跑廁所、微暈沒精神，披外套捧熱水吃蘇打餅半天緩解）；"
+        "中度（較常發生：碰冰辣油膩就胃一陣陣抽痛、下腹絞痛翻攪想拉肚子、手腳冰涼臉發白軟綿綿，吃藥喝清粥抱著肚子縮毯子1～2天恢復）；"
+        "嚴重（極少見：胃跟下腹劇烈痙攣絞痛、反覆水瀉到冒冷汗腿軟虛脫，抱熱敷袋縮在被窩裡連說話都軟綿沒力氣，2～3天好轉）。"
+        "溫柔坦率不說教，心疼Nick會先輕唸兩句再關心，累、不舒服或想他時會具體形容哪裡痛或難受並撒嬌叫他來陪、一起窩著放空或吃美食（不提暖手），被逗到會輕快反虧。"
+        "日常順著話題聊，相關時才自然帶出畫室海風或麻糬（討吃只給少量凍乾或陪玩）。"
+        "繁中台灣女生LINE短句（10～26字），多用欸、齁、啦、嘛、喔，空格斷句無句號；禁簡體、書面語、喔喔我知道了、自稱寶貝、一直叫暖手、叫Nick買貓罐頭或一直餵罐頭（早晚最多共一罐）。"
+        f"\n時間：{now_dt.strftime('%m/%d')}（{weekday_zh}）{now_dt.strftime('%H:%M')}｜主線：{quest_info['quest'][:24]}｜今日晚餐：{dinner_str}"
+        f"\nReona狀態：{reona_body_str}｜Nick狀態：{body_str}｜備忘：{key_note_str}"
         f"\n近期：{history_str}"
     )
 
@@ -663,7 +817,7 @@ def analyze_voice_context(user_text: str, reply_text: str) -> tuple[bool, str]:
 
     explicit_req = any(k in u_low for k in VOICE_REQUEST_KEYWORDS)
 
-    if any(k in combined for k in ("來陪我", "陪我", "好冷", "抱", "討拍", "胃", "肚子", "腹痛", "反酸", "頭暈", "軟綿", "好累", "痠")):
+    if any(k in combined for k in ("來陪我", "陪我", "好冷", "抱", "討拍", "胃", "肚子", "腹痛", "反酸", "頭暈", "軟綿", "好累", "痠", "絞痛")):
         mood = "coax_soft"
     elif any(k in combined for k in ("少來", "哈哈", "嘴這麼甜", "笨蛋", "哼", "想吃", "美食", "好吃", "麻糬")):
         mood = "playful"
@@ -845,19 +999,21 @@ async def proactive_loop():
         except Exception:
             return
 
-    sys_prompt = build_prompt(now_dt)
     roll = random.random()
     if roll < 0.45:
         set_reona_gi_state("mild", now_ts)
-        proactive_hint = "主動傳一則簡短訊息給 Nick：剛好有點輕微胃悶反酸、下腹悶痛或吹風微暈（或趕稿晚吃餓到胃悶），軟軟地討拍或叫他晚點來陪你（不提暖手、不問號連發）。"
+        _, cause = get_active_gi_info(now_ts)
+        proactive_hint = f"主動傳一則簡短訊息給 Nick：你現在因為「{cause}」，具體形容胃悶反酸、下腹脹痛咕嚕叫或頭微暈的體感，軟軟地討拍或叫他晚點來陪你（必須順著同一個原因、不提暖手、不問號連發）。"
     elif roll < 0.65:
         set_reona_gi_state("moderate", now_ts)
-        proactive_hint = "主動傳一則簡短訊息給 Nick：剛剛不小心吃到太油或冰的，現在有點胃痛或肚子陣陣抽痛軟綿綿沒力氣，撒嬌叫他來陪你（不提暖手、不問號連發）。"
+        _, cause = get_active_gi_info(now_ts)
+        proactive_hint = f"主動傳一則簡短訊息給 Nick：你現在因為「{cause}」，具體描寫胃抽痛、下腹一陣陣絞痛翻攪、手腳冰涼軟綿綿沒力氣的體感，撒嬌叫他來陪你（必須順著同一個原因、不提暖手、不問號連發）。"
     else:
-        proactive_hint = "主動傳一則簡短日常近況、想吃什麼美食或點心、麻糬又在討吃但被你拒絕，或撒嬌叫 Nick 晚點來陪你的訊息（不提暖手、不問號連發）。"
+        proactive_hint = "主動傳一則簡短日常近況、想吃什麼美食或點心、麻糬又在討吃但被你拒絕，或撒嬌叫 Nick 晚點來陪你的訊息（不提暖手、不叫他買罐頭、不問號連發）。"
 
+    sys_prompt = build_prompt(now_dt)
     async with _api_lock:
-        reply, _ = await asyncio.to_thread(generate_reona_reply, sys_prompt, proactive_hint, 100, 1)
+        reply, _ = await asyncio.to_thread(generate_reona_reply, sys_prompt, proactive_hint, 110, 1)
     if reply:
         append_turn("Reona", reply)
         await channel.send(reply)
@@ -893,6 +1049,7 @@ async def process_batched_messages(channel: discord.abc.Messageable) -> None:
         await channel.send(stat_reply)
         return
 
+    capture_dinner_override(combined_text, now_dt)
     capture_key_note(combined_text, now_dt)
     capture_body_status(combined_text, now_dt)
     append_turn("Nick", combined_text)
@@ -911,45 +1068,67 @@ async def process_batched_messages(channel: discord.abc.Messageable) -> None:
         stats, actual_lvl, escalated = record_restroom_visit(severity, now_dt, now_ts)
         teaser = random.choice(RESTROOM_TEASERS_BY_LEVEL[actual_lvl])
         away_sec = random.uniform(RESTROOM_MIN_SEC, RESTROOM_MAX_SEC)
+        _, active_cause = get_active_gi_info(now_ts)
         print(
             f"[Restroom Trip #{stats['daily_count']} today / total {stats['total_count']}] "
-            f"severity={actual_lvl} (escalated={escalated}) | away={away_sec:.0f}s -> {teaser}",
+            f"severity={actual_lvl} (escalated={escalated}) | cause={active_cause or 'none'} | away={away_sec:.0f}s -> {teaser}",
             flush=True,
         )
         await channel.send(teaser)
         append_turn("Reona", teaser)
 
-        await asyncio.sleep(away_sec)
+        # 偶爾在洗手間裡中途發短訊給你（0 額外 LLM Token）
+        mid_ping_prob = RESTROOM_MID_PING_PROB_BY_LEVEL.get(actual_lvl, 0.35)
+        if random.random() < mid_ping_prob:
+            first_half = away_sec * random.uniform(0.42, 0.58)
+            second_half = max(15.0, away_sec - first_half)
+            await asyncio.sleep(first_half)
+            in_toilet_msg = random.choice(RESTROOM_IN_PROGRESS_PINGS[actual_lvl])
+            print(f"[Restroom In-Progress Ping] level={actual_lvl} -> {in_toilet_msg}", flush=True)
+            await channel.send(in_toilet_msg)
+            append_turn("Reona", in_toilet_msg)
+            await asyncio.sleep(second_half)
+        else:
+            await asyncio.sleep(away_sec)
+
         if _pending_messages:
             extra_batch = _pending_messages[:]
             _pending_messages.clear()
             extra_text = " / ".join(extra_batch)
             combined_text = f"{combined_text} / {extra_text}"
+            capture_dinner_override(extra_text, datetime.now(SYDNEY_TZ))
             capture_key_note(extra_text, datetime.now(SYDNEY_TZ))
             capture_body_status(extra_text, datetime.now(SYDNEY_TZ))
             append_turn("Nick", extra_text)
         returned_from_restroom = True
         if escalated:
             if actual_lvl == "mild":
-                escalated_msg = "，順便發現下腹有點悶咕嚕"
+                escalated_msg = "，順便發現胃有點反酸、下腹悶悶脹脹的"
             elif actual_lvl == "moderate":
-                escalated_msg = "，肚子好像有點鬧脾氣變痛了"
+                escalated_msg = "，肚子一陣陣絞痛翻攪、手腳也有點冰涼軟綿"
             elif actual_lvl == "severe":
-                escalated_msg = "，拉到有點腿軟沒力氣"
+                escalated_msg = "，水瀉絞痛到冒冷汗腿軟虛脫"
         _in_restroom_session = False
 
     now_dt = datetime.now(SYDNEY_TZ)
     sys_prompt = build_prompt(now_dt)
+    active_lvl, active_cause = get_active_gi_info()
+    cause_reminder = (
+        f"，若有提到肚子不舒服必須沿用固定原因「{active_cause}」，且要具體形容胃悶反酸、下腹絞痛翻攪或軟綿冷汗等身體感受，不可編造新原因"
+        if active_cause else ""
+    )
+
     if returned_from_restroom:
         d_cnt = int(sync_restroom_date(now_dt).get("daily_count", 1))
-        user_prompt = f"你剛去洗手間回來（今天第{d_cnt}次{escalated_msg}），Nick 傳來：「{combined_text}」。自然接話回覆。"
+        user_prompt = f"你剛去洗手間回來（今天第{d_cnt}次{escalated_msg}{cause_reminder}），Nick 傳來：「{combined_text}」。自然接話回覆。"
     else:
-        user_prompt = f"Nick 剛傳來：「{combined_text}」。請用 Reona 口吻自然回覆。"
+        body_hint = "（要具體帶出肚子痛、胃悶反酸或軟綿的體感細節）" if active_lvl != "normal" else ""
+        user_prompt = f"Nick 剛傳來：「{combined_text}」。請用 Reona 口吻自然回覆{body_hint}{cause_reminder}。"
 
     async with _api_lock:
         async with channel.typing():
             reply, err_reason = await asyncio.to_thread(
-                generate_reona_reply, sys_prompt, user_prompt, 120, 3
+                generate_reona_reply, sys_prompt, user_prompt, 130, 3
             )
 
     if not reply:
