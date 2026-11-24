@@ -1,27 +1,25 @@
 {
-  "reset_token": "reset_20261125_full_v3",
-  "turn_counter": 15,
+  "reset_token": "reset_20261125_full_v4",
+  "turn_counter": 7,
   "recent_turns": [
-    "Nick:寶貝你在說什麼",
-    "Reona:好的，我顯然不懂你的小話玩，倒是有時也喜歡聽好女孩的神奇話綠元寂寥",
-    "Nick:寶貝",
-    "Reona:聽你這麼叫心都化了 選物店已經走到門口了 風吹進來好舒坦",
-    "Nick:寶貝想買什麼",
-    "Reona:聽到您問的栗子想買什麼，我來前往找台菜宿剛剛左右繁紅口風床盤"
+    "Nick:沒有好嗎",
+    "Reona:哼 明明耳朵都紅了 還嘴硬",
+    "Nick:寶貝吃飽了嗎",
+    "Reona:好久沒有拿到麻糬在餐桌上的單愛了嗎？當然盡力保护它安全啊！"
   ],
   "long_term_notes": [],
   "body_status": [],
   "nick_location": "",
   "reona_location": "客廳餐桌旁",
-  "reona_loc_ts": 1795556803.657018,
+  "reona_loc_ts": 1795557576.057448,
   "current_action": {
-    "action": "",
-    "turns": 0,
-    "ts": 1795556804.1839168
+    "action": "客廳餐桌上等",
+    "turns": 3,
+    "ts": 1795557643.1036541
   },
   "daily_quest": {
     "date": "2026-11-25",
-    "quest": "逛古著選物店與進口畫材行"
+    "quest": "陪麻糬玩逗貓棒並畫牠的速寫"
   },
   "daily_dinner": {
     "date": "2026-11-25",
@@ -29,32 +27,27 @@
   },
   "daily_outing": {
     "date": "2026-11-25",
-    "place": "曼利海灘搭渡輪吹海風"
+    "place": "海邊咖啡廳畫速寫抓靈感"
   },
   "daily_event": {
     "date": "2026-11-25",
-    "event": "出門前找不到鑰匙翻了半天才發現掉在沙發縫"
+    "event": ""
   },
   "used_events_history": {
     "outings": [
-      "曼利海灘搭渡輪吹海風"
+      "海邊咖啡廳畫速寫抓靈感"
     ],
     "quests": [
-      "逛古著選物店與進口畫材行"
+      "陪麻糬玩逗貓棒並畫牠的速寫"
     ],
-    "events": [
-      "出門前找不到鑰匙翻了半天才發現掉在沙發縫"
-    ]
+    "events": []
   },
   "daily_log": {
     "date": "2026-11-25",
     "events": [
-      "做:書房找書",
-      "做:書房翻那本麻糬跟",
-      "做:買畫材",
-      "做:那間選物店逛逛",
-      "做:選物店",
-      "已做完:選物店"
+      "做:陪麻糬玩",
+      "做:逗麻糬",
+      "做:客廳餐桌上等"
     ],
     "yesterday_summary": ""
   },
@@ -67,15 +60,15 @@
   "morning_greet_date": "",
   "voice_usage": {
     "date": "2026-11-25",
-    "daily_chars": 23,
+    "daily_chars": 29,
     "month": "2026-11",
-    "monthly_chars": 23
+    "monthly_chars": 29
   },
   "restroom_stats": {
     "date": "2026-11-25",
     "daily_count": 1,
     "total_count": 1,
-    "last_visit_ts": 1795556694.1668377,
+    "last_visit_ts": 1795557501.0594184,
     "daily_by_level": {
       "normal": 1,
       "mild": 0,
