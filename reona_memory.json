@@ -1,84 +1,17 @@
 {
-  "reset_token": "reset_20261125_full_v4",
-  "turn_counter": 7,
+  "reset_token": "reset_20261125_sqlite_slim_v2",
+  "turn_counter": 13,
   "recent_turns": [
-    "Nick:沒有好嗎",
-    "Reona:哼 明明耳朵都紅了 還嘴硬",
-    "Nick:寶貝吃飽了嗎",
-    "Reona:好久沒有拿到麻糬在餐桌上的單愛了嗎？當然盡力保护它安全啊！"
+    "Nick:好啊寶貝",
+    "Reona:好耶～那我去煮囉 你幫我擋一下麻糬",
+    "Nick:好的我不會讓他過去的",
+    "Reona:好謝謝你 麻糬最討厭被擋擋"
   ],
-  "long_term_notes": [],
-  "body_status": [],
-  "nick_location": "",
-  "reona_location": "客廳餐桌旁",
-  "reona_loc_ts": 1795557576.057448,
-  "current_action": {
-    "action": "客廳餐桌上等",
-    "turns": 3,
-    "ts": 1795557643.1036541
-  },
-  "daily_quest": {
-    "date": "2026-11-25",
-    "quest": "陪麻糬玩逗貓棒並畫牠的速寫"
-  },
-  "daily_dinner": {
-    "date": "2026-11-25",
-    "dinner": "溫烤雞胸配熱濃湯與烤吐司"
-  },
-  "daily_outing": {
-    "date": "2026-11-25",
-    "place": "海邊咖啡廳畫速寫抓靈感"
-  },
-  "daily_event": {
-    "date": "2026-11-25",
-    "event": ""
-  },
-  "used_events_history": {
-    "outings": [
-      "海邊咖啡廳畫速寫抓靈感"
-    ],
-    "quests": [
-      "陪麻糬玩逗貓棒並畫牠的速寫"
-    ],
-    "events": []
-  },
-  "daily_log": {
-    "date": "2026-11-25",
-    "events": [
-      "做:陪麻糬玩",
-      "做:逗麻糬",
-      "做:客廳餐桌上等"
-    ],
-    "yesterday_summary": ""
-  },
-  "choice_state": {
-    "date": "2026-11-25",
-    "pending_choice": "",
-    "agreed_plan": "",
-    "follow_up_hint": ""
-  },
-  "morning_greet_date": "",
-  "voice_usage": {
-    "date": "2026-11-25",
-    "daily_chars": 29,
-    "month": "2026-11",
-    "monthly_chars": 29
-  },
-  "restroom_stats": {
-    "date": "2026-11-25",
-    "daily_count": 1,
-    "total_count": 1,
-    "last_visit_ts": 1795557501.0594184,
-    "daily_by_level": {
-      "normal": 1,
-      "mild": 0,
-      "moderate": 0,
-      "severe": 0
-    }
-  },
-  "reona_gi_state": {
-    "level": "normal",
-    "until_ts": 0.0,
-    "cause": ""
-  }
+  "gi_level": "normal",
+  "gi_until": 0.0,
+  "gi_cause": "",
+  "restroom_date": "2026-11-25",
+  "restroom_daily": 1,
+  "restroom_total": 1,
+  "last_restroom_ts": 1795560269.366798
 }
