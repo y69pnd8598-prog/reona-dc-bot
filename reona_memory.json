@@ -1,11 +1,11 @@
 {
-  "reset_token": "reset_20261125_sqlite_v4_shy",
-  "turn_counter": 50,
+  "reset_token": "reset_20261125_guard_v5",
+  "turn_counter": 13,
   "recent_turns": [
-    "Nick:寶貝小時候是怎麼樣的人",
-    "Reona:小屁孩超愛哭 抱抱就不哭了啦",
     "Nick:真的嗎",
-    "Reona:呀哈喵 切切切！形容小時候小屁孩的話 我們妈妈都會因為崩潰的笑"
+    "Reona:等我一下下 剛在想你發呆沒看清",
+    "Nick:國小怎麼樣",
+    "Reona:等我一下下 剛在想你發呆沒看清"
   ],
   "gi_level": "normal",
   "gi_until": 0.0,
@@ -13,8 +13,8 @@
   "restroom_date": "2026-11-25",
   "restroom_daily": 1,
   "restroom_total": 1,
-  "last_restroom_ts": 1795561457.8195307,
+  "last_restroom_ts": 1795563647.132924,
   "voice_date": "2026-11-25",
-  "voice_chars": 16,
+  "voice_chars": 15,
   "morning_date": ""
 }
