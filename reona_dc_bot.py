@@ -78,10 +78,10 @@ def default_mem() -> dict:
     }
 
 
-def save_mem(mem: dict) -> None:
+def save_mem(mem_data: dict) -> None:
     try:
         with open(MEMORY_FILE, "w", encoding="utf-8") as f:
-            json.dump(mem, f, ensure_ascii=False, indent=2)
+            json.dump(mem_data, f, ensure_ascii=False, indent=2)
     except Exception as e:
         print(f"[Mem Save Err] {e}", flush=True)
 
@@ -89,7 +89,8 @@ def save_mem(mem: dict) -> None:
 def load_mem() -> dict:
     if os.path.exists(MEMORY_FILE):
         try:
-            data = json.load(open(MEMORY_FILE, encoding="utf-8"))
+            with open(MEMORY_FILE, encoding="utf-8") as f:
+                data = json.load(f)
             if isinstance(data, dict) and data.get("reset_token") == MEMORY_RESET_TOKEN:
                 base = default_mem()
                 base.update(data)
@@ -218,7 +219,11 @@ def discover_models() -> None:
             )
             if r.status_code == 200:
                 blocked = ("whisper", "guard", "tts", "playai", "gpt-oss-20b", "8b")
-                avail = [m["id"] for m in r.json().get("data", []) if m.get("id") and not any(b in m["id"].lower() for b in blocked)]
+                avail = [
+                    m["id"]
+                    for m in r.json().get("data", [])
+                    if m.get("id") and not any(b in m["id"].lower() for b in blocked)
+                ]
                 pref = ["openai/gpt-oss-120b", "llama-3.3-70b-versatile", "qwen/qwen3.8-27b"]
                 ordered = [m for m in pref if m in avail] + [m for m in avail if m not in pref]
                 if ordered:
@@ -392,7 +397,7 @@ async def hydrate_channel_history(channel: discord.abc.Messageable) -> None:
                 continue
             role = "Reona" if msg.author.id == client.user.id else "Nick"
             clean_txt = re.sub(r"\s+", " ", txt)[:60]
-fetched.append(f"{role}:{clean_txt}")
+            fetched.append(f"{role}:{clean_txt}")
         if fetched:
             fetched.reverse()
             mem["recent_turns"] = fetched[-HISTORY_LIMIT:]
@@ -496,7 +501,9 @@ async def handle_batched_messages(channel: discord.abc.Messageable) -> None:
 
     async with _api_lock:
         async with channel.typing():
-            reply = await asyncio.to_thread(call_llm_with_retry, build_prompt(now_dt, combined, allow_q), user_prompt, not allow_q, 2)
+            reply = await asyncio.to_thread(
+                call_llm_with_retry, build_prompt(now_dt, combined, allow_q), user_prompt, not allow_q, 2
+            )
 
     append_turn("Reona", reply)
 
