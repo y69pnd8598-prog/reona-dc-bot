@@ -1,18 +1,18 @@
 {
   "recent_turns": [
-    "Nick:寶貝我帶你去看醫生",
-    "Reona:欸別急 先給我穿外套 腿好軟 扶我一下嘛 晚點再說 現在只想躺平",
-    "Nick:那寶貝拉幾次了",
-    "Reona:我今天去洗手間 6 次了 累計一共 21 次"
+    "Nick:好的寶貝",
+    "Reona:好喔 那你忙 我先躺著 餓得胃裡空空的嘛",
+    "Nick:我煮好了端過去給你吃等我喔",
+    "Reona:好喔 那我乖乖等 肚子又咕嚕叫了齁"
   ],
   "long_term_notes": [
-    "11/24 寶貝今天不用上班嗎",
-    "11/25 寶貝我帶你去看醫生"
+    "11/25 寶貝我帶你去看醫生",
+    "11/25 寶貝真的不用看醫生嗎"
   ],
   "body_status": [
-    "11/25 我一直聽到寶貝肚子在叫"
+    "11/25 寶貝睡著了嗎"
   ],
-  "nick_location": "",
+  "nick_location": "11/25 07:22 寶貝待在房間我端過去",
   "daily_quest": {
     "date": "2026-11-25",
     "quest": "調整品牌聯名主視覺細節"
@@ -23,7 +23,7 @@
   },
   "daily_outing": {
     "date": "2026-11-25",
-    "place": "寶貝今天去哪裡玩"
+    "place": "今天去七次了"
   },
   "voice_usage": {
     "date": "2026-11-25",
@@ -33,19 +33,19 @@
   },
   "restroom_stats": {
     "date": "2026-11-25",
-    "daily_count": 6,
-    "total_count": 21,
+    "daily_count": 9,
+    "total_count": 24,
     "daily_by_level": {
       "normal": 0,
       "mild": 0,
       "moderate": 0,
-      "severe": 6
+      "severe": 9
     },
-    "last_visit_ts": 1795550681.1728423
+    "last_visit_ts": 1795552742.1110203
   },
   "reona_gi_state": {
     "level": "severe",
-    "until_ts": 1795559674.1749835,
+    "until_ts": 1795584667.6125076,
     "cause": "吃了偏油膩的食物鬧肚子"
   },
   "menstrual_cycle": {
