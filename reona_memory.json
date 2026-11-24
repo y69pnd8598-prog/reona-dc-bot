@@ -1,62 +1,81 @@
 {
-  "reset_token": "reset_20261125_full_v2",
+  "reset_token": "reset_20261125_full_v3",
+  "turn_counter": 15,
   "recent_turns": [
-    "Nick:好的",
-    "Reona:好 那我去翻烘培書 你繼續盯著麻糬 Kitty要梳毛還是玩",
-    "Nick:好",
-    "Reona:Kitty聽起來很乖 我先去翻書 你盯緊點別讓它亂跑"
+    "Nick:寶貝你在說什麼",
+    "Reona:好的，我顯然不懂你的小話玩，倒是有時也喜歡聽好女孩的神奇話綠元寂寥",
+    "Nick:寶貝",
+    "Reona:聽你這麼叫心都化了 選物店已經走到門口了 風吹進來好舒坦",
+    "Nick:寶貝想買什麼",
+    "Reona:聽到您問的栗子想買什麼，我來前往找台菜宿剛剛左右繁紅口風床盤"
   ],
   "long_term_notes": [],
   "body_status": [],
   "nick_location": "",
-  "reona_location": "廚房倒溫水",
-  "reona_loc_ts": 1795554561.804225,
+  "reona_location": "客廳餐桌旁",
+  "reona_loc_ts": 1795556803.657018,
+  "current_action": {
+    "action": "",
+    "turns": 0,
+    "ts": 1795556804.1839168
+  },
   "daily_quest": {
     "date": "2026-11-25",
-    "quest": "在家試做低糖燕麥小餅乾"
+    "quest": "逛古著選物店與進口畫材行"
   },
   "daily_dinner": {
     "date": "2026-11-25",
-    "dinner": "酪梨雞胸溫沙拉配烤吐司"
+    "dinner": "溫烤雞胸配熱濃湯與烤吐司"
   },
   "daily_outing": {
     "date": "2026-11-25",
-    "place": "雪梨市區底片相機行與選物店"
+    "place": "曼利海灘搭渡輪吹海風"
   },
   "daily_event": {
     "date": "2026-11-25",
-    "event": ""
+    "event": "出門前找不到鑰匙翻了半天才發現掉在沙發縫"
+  },
+  "used_events_history": {
+    "outings": [
+      "曼利海灘搭渡輪吹海風"
+    ],
+    "quests": [
+      "逛古著選物店與進口畫材行"
+    ],
+    "events": [
+      "出門前找不到鑰匙翻了半天才發現掉在沙發縫"
+    ]
   },
   "daily_log": {
     "date": "2026-11-25",
     "events": [
-      "約定:我去倒水",
-      "約定:臥去煮麵了",
-      "約定:都不要",
-      "約定:晚一點再吃",
-      "請Nick幫:看著麻糬別让它偷吃",
-      "約定:好的"
+      "做:書房找書",
+      "做:書房翻那本麻糬跟",
+      "做:買畫材",
+      "做:那間選物店逛逛",
+      "做:選物店",
+      "已做完:選物店"
     ],
     "yesterday_summary": ""
   },
   "choice_state": {
     "date": "2026-11-25",
     "pending_choice": "",
-    "agreed_plan": "約定:好的",
-    "follow_up_hint": "已按Nick選擇(約定:好的)推進後續"
+    "agreed_plan": "",
+    "follow_up_hint": ""
   },
   "morning_greet_date": "",
   "voice_usage": {
     "date": "2026-11-25",
-    "daily_chars": 103,
+    "daily_chars": 23,
     "month": "2026-11",
-    "monthly_chars": 103
+    "monthly_chars": 23
   },
   "restroom_stats": {
     "date": "2026-11-25",
     "daily_count": 1,
     "total_count": 1,
-    "last_visit_ts": 1795554390.5259948,
+    "last_visit_ts": 1795556694.1668377,
     "daily_by_level": {
       "normal": 1,
       "mild": 0,
