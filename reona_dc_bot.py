@@ -46,11 +46,15 @@ HISTORY_LIMIT = 6
 DEBOUNCE_SECONDS = 2.5
 
 # 依腸胃嚴重程度連動洗手間機率與短訊（0 額外 LLM Token）
-RESTROOM_PROB_NORMAL = 0.09
-RESTROOM_PROB_MILD = 0.22
-RESTROOM_PROB_SEVERE = 0.38
+RESTROOM_PROB_NORMAL = 0.10
+RESTROOM_PROB_MILD = 0.24
+RESTROOM_PROB_SEVERE = 0.40
 RESTROOM_MIN_SEC = 45.0
 RESTROOM_MAX_SEC = 120.0
+
+# 腸胃狀態持續秒數（觸發後不會因聊別的話題瞬間歸零）
+GI_MILD_HOLD_SEC = 4 * 3600
+GI_SEVERE_HOLD_SEC = 12 * 3600
 
 RESTROOM_TEASERS_BY_LEVEL = {
     "normal": [
@@ -69,7 +73,8 @@ RESTROOM_TEASERS_BY_LEVEL = {
 }
 
 RESTROOM_QUERY_KEYWORDS = (
-    "去幾次廁所", "幾次洗手間", "洗手間次數", "廁所次數", "跑幾次廁所", "去過幾次廁所"
+    "去幾次廁所", "幾次洗手間", "洗手間次數", "廁所次數",
+    "跑幾次廁所", "去過幾次廁所", "幾次了", "去了幾次"
 )
 
 # 主動傳訊隨機間隔（45～90 分鐘不規則觸發，避免像整點報時）
@@ -135,6 +140,10 @@ def default_memory() -> dict:
             "total_count": 0,
             "daily_by_level": {"normal": 0, "mild": 0, "moderate_severe": 0},
         },
+        "reona_gi_state": {
+            "level": "normal",
+            "until_ts": 0.0,
+        },
     }
 
 
@@ -150,6 +159,9 @@ def load_memory() -> dict:
             rs.setdefault("daily_count", 0)
             rs.setdefault("total_count", 0)
             rs.setdefault("daily_by_level", {"normal": 0, "mild": 0, "moderate_severe": 0})
+            gs = base.setdefault("reona_gi_state", {})
+            gs.setdefault("level", "normal")
+            gs.setdefault("until_ts", 0.0)
             return base
         except Exception as e:
             print(f"[Memory Load Warn] {e}", flush=True)
@@ -185,16 +197,53 @@ def sync_restroom_date(now_dt: datetime) -> dict:
     return rs
 
 
-def detect_gi_severity(current_text: str) -> str:
-    """從目前訊息與近期對話判斷腸胃狀態（normal / mild / moderate_severe）"""
-    recent_tail = " ".join(memory.get("recent_turns", [])[-3:])
+def set_reona_gi_state(level: str, now_ts: float | None = None) -> None:
+    if now_ts is None:
+        now_ts = time.time()
+    gs = memory.setdefault("reona_gi_state", {"level": "normal", "until_ts": 0.0})
+    rank = {"normal": 0, "mild": 1, "moderate_severe": 2}
+    cur_lvl = gs.get("level", "normal") if now_ts < float(gs.get("until_ts", 0.0)) else "normal"
+
+    if rank.get(level, 0) >= rank.get(cur_lvl, 0) and level != "normal":
+        hold = GI_SEVERE_HOLD_SEC if level == "moderate_severe" else GI_MILD_HOLD_SEC
+        gs["level"] = level
+        gs["until_ts"] = now_ts + hold
+        save_memory(memory)
+
+
+def detect_gi_severity(current_text: str, now_dt: datetime) -> str:
+    """綜合關鍵字、持續時效與當日去廁所累計次數判斷嚴重度（normal / mild / moderate_severe）"""
+    now_ts = time.time()
+    rs = sync_restroom_date(now_dt)
+    daily_cnt = int(rs.get("daily_count", 0))
+
+    recent_tail = " ".join(memory.get("recent_turns", [])[-4:])
     ctx = f"{recent_tail} {current_text}"
 
+    kw_level = "normal"
     if any(k in ctx for k in ("拉肚子", "腹瀉", "水瀉", "劇痛", "吃藥", "喝粥", "熱敷袋", "腿軟", "陣發")):
-        return "moderate_severe"
-    if any(k in ctx for k in ("胃痛", "腹痛", "胃悶", "反酸", "下腹", "咕嚕", "脹氣", "噁心", "微暈", "喝溫水", "蘇打餅", "不舒服")):
-        return "mild"
-    return "normal"
+        kw_level = "moderate_severe"
+    elif any(k in ctx for k in ("胃痛", "腹痛", "胃悶", "反酸", "下腹", "咕嚕", "脹氣", "噁心", "微暈", "喝溫水", "蘇打餅", "不舒服")):
+        kw_level = "mild"
+
+    if kw_level != "normal":
+        set_reona_gi_state(kw_level, now_ts)
+
+    gs = memory.get("reona_gi_state", {})
+    held_level = gs.get("level", "normal") if now_ts < float(gs.get("until_ts", 0.0)) else "normal"
+
+    # 次數累積自動升級：當天滿 2 次至少 mild，滿 4 次自動升級 moderate_severe
+    count_level = "normal"
+    if daily_cnt >= 4:
+        count_level = "moderate_severe"
+    elif daily_cnt >= 2:
+        count_level = "mild"
+
+    rank = {"normal": 0, "mild": 1, "moderate_severe": 2}
+    best = max([kw_level, held_level, count_level], key=lambda x: rank.get(x, 0))
+    if best != "normal" and held_level == "normal":
+        set_reona_gi_state(best, now_ts)
+    return best
 
 
 def get_restroom_chance(severity: str) -> float:
@@ -211,20 +260,24 @@ def record_restroom_visit(severity: str, now_dt: datetime) -> dict:
     rs["total_count"] = int(rs.get("total_count", 0)) + 1
     by_lvl = rs.setdefault("daily_by_level", {"normal": 0, "mild": 0, "moderate_severe": 0})
     by_lvl[severity] = int(by_lvl.get(severity, 0)) + 1
+
+    # 累計達門檻時同步鎖定身體狀態
+    if rs["daily_count"] >= 4:
+        set_reona_gi_state("moderate_severe")
+    elif rs["daily_count"] >= 2:
+        set_reona_gi_state("mild")
+
     save_memory(memory)
     return rs
 
 
 def format_restroom_summary(now_dt: datetime) -> str:
     rs = sync_restroom_date(now_dt)
-    by_lvl = rs.get("daily_by_level", {})
-    n_cnt = int(by_lvl.get("normal", 0))
-    m_cnt = int(by_lvl.get("mild", 0))
-    s_cnt = int(by_lvl.get("moderate_severe", 0))
-    return (
-        f"我今天去洗手間 {rs['daily_count']} 次（一般 {n_cnt}、輕微 {m_cnt}、中重度 {s_cnt}） "
-        f"累計一共 {rs['total_count']} 次"
-    )
+    d_cnt = int(rs.get("daily_count", 0))
+    t_cnt = int(rs.get("total_count", 0))
+    if d_cnt <= 0:
+        return f"我今天還沒去洗手間喔 累計一共 {t_cnt} 次"
+    return f"我今天去洗手間 {d_cnt} 次了 累計一共 {t_cnt} 次"
 
 
 def ensure_daily_main_quest(now_dt: datetime) -> dict:
@@ -762,8 +815,10 @@ async def proactive_loop():
     sys_prompt = build_prompt(now_dt)
     roll = random.random()
     if roll < 0.45:
+        set_reona_gi_state("mild", now_ts)
         proactive_hint = "主動傳一則簡短訊息給 Nick：剛好有點輕微胃悶反酸、下腹悶痛或吹風微暈，軟軟地討拍或叫他晚點來陪你（不提暖手、不問號連發）。"
     elif roll < 0.65:
+        set_reona_gi_state("moderate_severe", now_ts)
         proactive_hint = "主動傳一則簡短訊息給 Nick：剛剛不小心吃到太油或冰的，現在有點胃痛或肚子陣陣抽痛軟綿綿沒力氣，撒嬌叫他來陪你（不提暖手、不問號連發）。"
     else:
         proactive_hint = "主動傳一則簡短日常近況、想吃什麼美食、麻糬又在討吃但被你拒絕，或撒嬌叫 Nick 晚點來陪你的訊息（不提暖手、不問號連發）。"
@@ -792,8 +847,12 @@ async def process_batched_messages(channel: discord.abc.Messageable) -> None:
     now_dt = datetime.now(SYDNEY_TZ)
     last_user_msg_ts = time.time()
 
-    # 若 Nick 只是查洗手間次數，直接本地回覆（0 LLM Token）
-    if len(combined_text) <= 24 and any(k in combined_text for k in RESTROOM_QUERY_KEYWORDS):
+    # 若 Nick 查詢洗手間次數，直接本地回覆（0 LLM Token）
+    is_restroom_query = (
+        any(k in combined_text for k in RESTROOM_QUERY_KEYWORDS)
+        or (("洗手間" in combined_text or "廁所" in combined_text) and ("幾次" in combined_text or "次數" in combined_text))
+    )
+    if is_restroom_query:
         stat_reply = format_restroom_summary(now_dt)
         append_turn("Nick", combined_text)
         append_turn("Reona", stat_reply)
@@ -808,19 +867,21 @@ async def process_batched_messages(channel: discord.abc.Messageable) -> None:
     if wants_video and RENDER_BASE_URL:
         asyncio.create_task(asyncio.to_thread(wake_render_server))
 
-    # 依腸胃嚴重程度動態決定去洗手間機率、短訊與計數（0 額外 LLM Token）
-    severity = detect_gi_severity(combined_text)
+    # 依腸胃嚴重程度（含持續時效與次數累積）決定去洗手間機率、短訊與計數
+    severity = detect_gi_severity(combined_text, now_dt)
     restroom_prob = get_restroom_chance(severity)
     returned_from_restroom = False
 
     if not _in_restroom_session and not wants_video and (random.random() < restroom_prob):
         _in_restroom_session = True
         stats = record_restroom_visit(severity, now_dt)
-        teaser = random.choice(RESTROOM_TEASERS_BY_LEVEL[severity])
+        # 重新取得可能因次數達標而升級後的最新等級來選短訊
+        actual_lvl = detect_gi_severity(combined_text, now_dt)
+        teaser = random.choice(RESTROOM_TEASERS_BY_LEVEL[actual_lvl])
         away_sec = random.uniform(RESTROOM_MIN_SEC, RESTROOM_MAX_SEC)
         print(
             f"[Restroom Trip #{stats['daily_count']} today / total {stats['total_count']}] "
-            f"severity={severity} (prob={restroom_prob:.0%}) | away={away_sec:.0f}s -> {teaser}",
+            f"severity={actual_lvl} (prob={restroom_prob:.0%}) | away={away_sec:.0f}s -> {teaser}",
             flush=True,
         )
         await channel.send(teaser)
@@ -841,7 +902,11 @@ async def process_batched_messages(channel: discord.abc.Messageable) -> None:
     now_dt = datetime.now(SYDNEY_TZ)
     sys_prompt = build_prompt(now_dt)
     if returned_from_restroom:
-        user_prompt = f"你剛去洗手間回來，Nick 傳來：「{combined_text}」。自然接話回覆。"
+        d_cnt = int(sync_restroom_date(now_dt).get("daily_count", 1))
+        if d_cnt >= 4:
+            user_prompt = f"你剛去洗手間回來（今天第{d_cnt}次，肚子還是有點軟綿），Nick 傳來：「{combined_text}」。自然接話回覆。"
+        else:
+            user_prompt = f"你剛去洗手間回來（今天第{d_cnt}次），Nick 傳來：「{combined_text}」。自然接話回覆。"
     else:
         user_prompt = f"Nick 剛傳來：「{combined_text}」。請用 Reona 口吻自然回覆。"
 
