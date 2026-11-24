@@ -16,8 +16,8 @@ from discord.ext import tasks
 SYDNEY_TZ = ZoneInfo("Australia/Sydney")
 MEMORY_FILE = "reona_memory.json"
 
-# 一次性洗狀態開關：每次改動此字串，下次啟動會自動將舊狀態歸零一次（後續自動接力不會重複洗掉）
-MEMORY_RESET_TOKEN = "reset_20261125_full_v3"
+# 一次性洗狀態開關：每次改動此字串，下次啟動會自動將舊狀態歸零一次
+MEMORY_RESET_TOKEN = "reset_20261125_full_v4"
 
 DISCORD_TOKEN = (
     os.getenv("DISCORD_BOT_TOKEN")
@@ -42,8 +42,8 @@ FISH_API_KEY = (os.getenv("FISH_API_KEY") or "").strip()
 FISH_MODEL_ID = (os.getenv("FISH_MODEL_ID") or "").strip()
 RENDER_BASE_URL = (os.getenv("RENDER_BASE_URL") or "").strip().rstrip("/")
 
-# 保留最近 3 輪對話（6 句），足以精準防止前後兩三句重複鬼打牆，同時維持低 Token
-HISTORY_LIMIT = 6
+# 保留最近 2 輪對話（4 句），減輕連續短句接龍時的注意力負擔
+HISTORY_LIMIT = 4
 
 # 連發訊息合併等待秒數（2.5 秒內連傳多則短訊會自動合併成一次 API 呼叫）
 DEBOUNCE_SECONDS = 2.5
@@ -81,15 +81,7 @@ GI_HOLD_SEC_BY_LEVEL = {
     "severe": 9 * 3600,
 }
 
-# 狀態與日常高頻詞池（自動偵測最近 3 句用過的詞，防止鬼打牆重複）
-REPEATED_WORDS_POOL = (
-    "軟綿綿", "軟綿", "絞痛", "酸水", "反酸", "爬不起來", "沒力氣",
-    "咕嚕", "被窩", "冷汗", "毛巾", "針扎", "翻騰", "抽痛", "悶悶",
-    "畫畫", "早安", "早餐", "肉桂捲", "海邊", "咖啡", "底片機",
-    "揉眼睛", "伸懶腰", "肚子", "胃", "翻書", "烘焙書", "洗燕麥", "切酪梨"
-)
-
-# 各級腸胃不舒服的預設固定誘因（貼合從小功能性敏感腸胃與嘴饞怕冷）
+# 各級腸胃不舒服的預設固定誘因
 GI_DEFAULT_CAUSES = {
     "mild": [
         "趕稿忙到晚吃空腹太久敏感的胃有點悶",
@@ -121,7 +113,7 @@ DINNER_POOL_GENTLE = [
     "熱湯蘇打餅配保溫瓶溫水",
 ]
 
-# 每日外出地點候選池（近 14 天不重複，同日鎖死不亂跳）
+# 每日外出地點候選池（近 10 天不重複，同日鎖死不亂跳）
 OUTING_POOL = [
     "邦代海邊步道吹海風街拍",
     "岩石區週末市集挖寶",
@@ -137,7 +129,7 @@ OUTING_POOL = [
     "巴蘭加魯港邊公園散步發呆",
 ]
 
-# 每日多元興趣與主軸候選池（近 14 天不重複，同日鎖定）
+# 每日多元興趣與主軸候選池（近 8 天不重複，同日鎖定）
 INTEREST_QUEST_POOL = [
     "商業插畫上主色調與光影",
     "整理底片相機街拍照片與色調",
@@ -151,7 +143,7 @@ INTEREST_QUEST_POOL = [
     "研究新的插畫筆刷與光影配色",
 ]
 
-# 每日生活小突發事件池（近 14 天不重複，約 28% 機率觸發）
+# 每日生活小突發事件池（近 10 天不重複，約 28% 機率觸發）
 DAILY_SUDDEN_EVENTS = [
     "出門突然下起雪梨陣雨沒帶傘躲進騎樓",
     "想吃的那家甜點店剛好公休撲了個空",
@@ -267,7 +259,7 @@ GI_RELIEF_KEYWORDS = (
 # ==================== 運行時狀態與連發緩衝 ====================
 _current_key_idx = 0
 _model_cooldown_until: dict[str, float] = {}
-ACTIVE_MODELS: list[str] = ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "llama-3.3-70b-versatile"]
+ACTIVE_MODELS: list[str] = ["openai/gpt-oss-120b", "llama-3.3-70b-versatile", "qwen/qwen3.8-27b"]
 last_user_msg_ts: float = 0.0
 next_proactive_ts: float = 0.0
 last_voice_ts: float = 0.0
@@ -409,7 +401,7 @@ def sync_daily_containers(now_dt: datetime) -> None:
 
 
 def add_daily_event_log(entry: str, now_dt: datetime) -> None:
-    """將今日發生的關鍵事記進今日時間軸（不重複、最多 6 條精簡節點）"""
+    """將今日發生的關鍵事記進今日時間軸（不重複、最多 5 條精簡節點）"""
     clean = re.sub(r"\s+", "", (entry or "").strip())[:16]
     if not clean:
         return
@@ -417,7 +409,7 @@ def add_daily_event_log(entry: str, now_dt: datetime) -> None:
     events = memory["daily_log"].setdefault("events", [])
     if not any(clean in e or e in clean for e in events):
         events.append(clean)
-        memory["daily_log"]["events"] = events[-6:]
+        memory["daily_log"]["events"] = events[-5:]
         save_memory(memory)
 
 
@@ -491,7 +483,7 @@ def mark_task_completed_if_matched(user_text: str, now_dt: datetime) -> None:
         else:
             new_events.append(ev)
     if updated:
-        memory["daily_log"]["events"] = new_events[-6:]
+        memory["daily_log"]["events"] = new_events[-5:]
         save_memory(memory)
 
 
@@ -729,14 +721,6 @@ def detect_gi_severity(current_text: str, now_dt: datetime) -> str:
     return max([kw_level, held_level], key=lambda x: rank.get(x, 0))
 
 
-def extract_recent_overused_words() -> list[str]:
-    """掃描最近 3 句 Reona 的發言，找出重複出現的詞彙以強制換說法"""
-    reona_turns = [t for t in memory.get("recent_turns", []) if t.startswith("Reona:")][-3:]
-    joined = " ".join(reona_turns)
-    found = [w for w in REPEATED_WORDS_POOL if w in joined]
-    return found[:6]
-
-
 def can_trigger_restroom(severity: str, now_dt: datetime, now_ts: float) -> bool:
     rs = sync_restroom_date(now_dt)
     last_ts = float(rs.get("last_visit_ts", 0.0))
@@ -769,7 +753,7 @@ def format_restroom_summary(now_dt: datetime) -> str:
     return f"我今天去洗手間 {d_cnt} 次了 累計一共 {t_cnt} 次"
 
 
-def pick_non_repeating_item(pool: list[str], history_key: str, keep_last: int = 14) -> str:
+def pick_non_repeating_item(pool: list[str], history_key: str, keep_last: int = 10) -> str:
     """從候選池中排除近期已用過的項目，確保跨日絕對不重複"""
     hist_box = memory.setdefault("used_events_history", {"outings": [], "quests": [], "events": []})
     used = hist_box.setdefault(history_key, [])
@@ -810,7 +794,7 @@ def ensure_daily_outing(now_dt: datetime) -> str:
 
 
 def ensure_daily_event(now_dt: datetime) -> str:
-    """每日生活小突發事件（近 14 天不重複，同日鎖定，約 28% 機率有突發狀況）"""
+    """每日生活小突發事件（近 10 天不重複，同日鎖定，約 28% 機率有突發狀況）"""
     today_str = now_dt.strftime("%Y-%m-%d")
     de = memory.setdefault("daily_event", {"date": "", "event": ""})
     if de.get("date") == today_str:
@@ -927,32 +911,57 @@ def append_turn(role_prefix: str, text: str) -> None:
     save_memory(memory)
 
 
-# ==================== 文字清理（含只叫麻糬禁 Kitty 與硬控去問句） ====================
+# ==================== 文字清理與亂碼守門員 ====================
+def is_gibberish_reply(txt: str) -> bool:
+    """偵測模型語法崩壞、生造怪詞或無意義重複字元，防止亂碼發進頻道"""
+    if not txt or len(txt) < 2:
+        return True
+    # 出現奇怪英文亂碼單字（排除正常常見詞與網址）
+    if re.search(r"[a-zA-Z]{6,}", txt):
+        return True
+    # 出現同一個中文字連續重複 4 次以上
+    if re.search(r"([\u4e00-\u9fff])\1{3,}", txt):
+        return True
+    # 出現明顯生造語病或文言亂湊詞
+    bad_patterns = (
+        r"無擔於", r"綠元", r"空火鍋", r"小話玩", r"由我麻糬",
+        r"同好似乎", r"神奇話", r"趕去選洗手間",
+    )
+    if any(re.search(p, txt) for p in bad_patterns):
+        return True
+    # 句子過長且沒有自然空格停頓（代表模型暴走吐字）
+    if len(txt) > 55 and " " not in txt:
+        return True
+    return False
+
+
 def clean_reply_text(raw: str, strip_trailing_question: bool = False) -> str:
     if not raw:
         return ""
     txt = re.sub(r"<think>[\s\S]*?</think>", "", raw, flags=re.IGNORECASE).strip()
     txt = re.sub(r"^(Reona|我)\s*[:：]\s*", "", txt).strip()
     txt = txt.replace("「", "").replace("」", "").replace('"', "").strip()
-    txt = re.sub(r"寶貝(想|要|剛|在|正在|也|去|吃|畫|睡|忙|手)", r"我\1", txt)
 
-    # 強制鎖定單一貓名：只叫「麻糬」，嚴禁分裂叫 Kitty 或小貓咪
+    # 單一貓名鎖定：只叫麻糬，禁叫 Kitty
     txt = re.sub(r"\bkitty\b", "麻糬", txt, flags=re.IGNORECASE)
-    txt = txt.replace("小貓咪", "麻糬").replace("貓咪", "麻糬")
     txt = re.sub(r"麻糬\s*麻糬", "麻糬", txt)
 
-    txt = txt.replace("。", " ")
+    txt = txt.replace("。", " ").replace("，", " ")
     txt = re.sub(r"\s+", " ", txt).strip()
 
-    # 若本輪為硬控非問句輪次，濾除尾端多餘的問句或逼選分句
     if strip_trailing_question and len(txt) >= 8:
         parts = [p.strip() for p in re.split(r"[？?\s]+", txt) if p.strip()]
         if len(parts) >= 2 and any(q in parts[-1] for q in ("嗎", "呢", "還是", "好不好", "要不要", "什麼", "沒")):
             txt = " ".join(parts[:-1]).strip()
 
+    if is_gibberish_reply(txt):
+        print(f"[Gibberish Blocked] 攔截異常回覆 -> {txt}", flush=True)
+        return ""
+
     return txt
 
 
+# ==================== 瘦身版高穩定 Prompt ====================
 def build_prompt(now_dt: datetime, allow_question: bool = False) -> str:
     sync_daily_containers(now_dt)
     weekday_zh = WEEKDAY_NAMES_ZH[now_dt.weekday()]
@@ -967,73 +976,54 @@ def build_prompt(now_dt: datetime, allow_question: bool = False) -> str:
     cur_act = get_active_current_action()
 
     recent = memory.get("recent_turns", [])[-HISTORY_LIMIT:]
-    history_str = "/".join(t[:36] for t in recent) if recent else "無"
+    history_str = " / ".join(t[:36] for t in recent) if recent else "無"
 
-    extra_lines = []
+    context_bits = []
 
     if sleep_phase == "sleeping":
-        extra_lines.append("作息:深夜已躺床準備睡覺(剛被吵醒迷糊慵懶語氣)")
+        context_bits.append("深夜睡覺剛被吵醒迷糊語氣")
     elif sleep_phase == "sleepy":
-        extra_lines.append("作息:快睡覺有點犯睏揉眼睛")
+        context_bits.append("快睡覺有點犯睏")
     elif sleep_phase == "waking":
-        extra_lines.append("作息:剛起床醒來準備吃熱早餐餵麻糬")
+        context_bits.append("剛起床準備吃熱早餐餵麻糬")
 
     if cur_act:
-        extra_lines.append(f"正在做:{cur_act}(順著推進,勿重複說要去)")
+        context_bits.append(f"正在:{cur_act}(順著推進)")
 
-    # 帶入今日已發生的事（全日記憶）與昨日印象
     dl = memory.get("daily_log", {})
-    today_events = dl.get("events", [])
+    today_events = dl.get("events", [])[-3:]
     if today_events:
-        extra_lines.append(f"今天已發生(勿重演):{'→'.join(today_events)}")
-    y_sum = (dl.get("yesterday_summary") or "").strip()
-    if y_sum:
-        extra_lines.append(f"昨天印象:{y_sum}")
+        context_bits.append(f"今天已做:{'、'.join(today_events)}")
 
-    # 帶入選擇與約定連鎖狀態
     cs = memory.get("choice_state", {})
     if cs.get("agreed_plan"):
-        extra_lines.append(f"已定選擇:{cs['agreed_plan']}({cs.get('follow_up_hint', '')})")
-    elif cs.get("pending_choice"):
-        extra_lines.append(f"已問過待定:{cs['pending_choice']}(禁重複問)")
+        context_bits.append(f"已約好:{cs['agreed_plan']}")
 
     if event_str:
-        extra_lines.append(f"今日突發:{event_str}")
-
-    overused = extract_recent_overused_words()
-    if overused:
-        extra_lines.append(f"禁重複剛說過的詞:{'/'.join(overused)}")
+        context_bits.append(f"今日小插曲:{event_str}")
 
     if gi_lvl != "normal":
         lvl_zh = {"mild": "輕微胃悶", "moderate": "中度胃腹痛", "severe": "嚴重絞痛水瀉"}.get(gi_lvl, gi_lvl)
-        extra_lines.append(f"狀態:{lvl_zh}(因:{gi_cause},順著話題自然互動)")
+        context_bits.append(f"身體:{lvl_zh}(因:{gi_cause})")
 
     nick_loc = (memory.get("nick_location") or "").strip()
-    statuses = memory.get("body_status", [])[-1:]
-    nick_parts = [p for p in (nick_loc, statuses[0] if statuses else "") if p]
-    if nick_parts:
-        extra_lines.append(f"Nick:{' '.join(nick_parts)}")
+    if nick_loc:
+        context_bits.append(f"Nick:{nick_loc}")
 
     notes = memory.get("long_term_notes", [])[-1:]
     if notes:
-        extra_lines.append(f"記:{notes[0]}")
+        context_bits.append(f"備忘:{notes[0]}")
 
-    question_rule = (
-        "本句可自然問一句或邀約。"
-        if allow_question
-        else "本句嚴禁問號與二選一問句,只用陳述句撒嬌或分享日常。"
-    )
-
-    extra_block = ("\n" + "｜".join(extra_lines)) if extra_lines else ""
+    question_rule = "可自然問一句或邀約。" if allow_question else "用陳述句自然接話撒嬌，不要問問題或逼選。"
+    extra_line = ("\n狀態：" + "｜".join(context_bits)) if context_bits else ""
 
     return (
-        "Reona(自稱我),台北優渥獨生女,美術班到插畫系畢業後飛雪梨做自由插畫師,Nick同居女友,只養一隻貓叫麻糬(禁取別名或Kitty)。"
-        "在校慢熱只黏親近的人;160cm/40kg怕冷挑嘴,國中小常因冷午餐與冷氣腹痛跑廁所,就醫檢查為天生功能性敏感腸胃需常備藥與保溫瓶溫水調養,愛吃熱食,熱愛質感生活與探店。"
-        f"自然台灣女生口語(勿每句硬塞欸/嘛),{question_rule}記得交代過的事與Nick選擇,每次換新角度與詞彙接話、絕不重複剛講過的梗與動作,位置與今日去處前後一致;麻糬只給凍乾/逗貓。"
-        "繁中LINE短句(8~22字),空格斷句無句號;禁簡體、喔喔我知道了、自稱寶貝、叫暖手、叫買/狂餵罐頭(早晚共一罐)。"
-        f"\n{now_dt.strftime('%m/%d')}{weekday_zh}{now_dt.strftime('%H:%M')}｜{weather_feel}｜我在:{reona_loc}｜今日外出(固定不換):{outing_str[:14]}｜興趣事:{quest_info['quest'][:14]}｜晚:{dinner_str[:12]}"
-        f"{extra_block}"
-        f"\n聊:{history_str}"
+        "你是Reona(自稱我)，台北優渥家庭長大、美術系畢業後來雪梨工作的自由插畫師，Nick的同居女友，只養一隻貓叫麻糬(不叫Kitty)。"
+        "性格溫柔黏人愛撒嬌、注重質感；160cm/40kg怕冷挑嘴，從小腸胃敏感忌冷食油辣、隨身帶溫水與常備藥。"
+        f"用自然通順的台灣女生日常口語回覆(10~22字)，空格斷句無句號，繁體中文。{question_rule}不重複剛講過的動作與話題。"
+        f"\n時間：{now_dt.strftime('%m/%d')}{weekday_zh}{now_dt.strftime('%H:%M')}（{weather_feel}）｜位置：{reona_loc}｜今日外出：{outing_str[:12]}｜興趣：{quest_info['quest'][:12]}｜晚餐：{dinner_str[:12]}"
+        f"{extra_line}"
+        f"\n近期對話：{history_str}"
     )
 
 
@@ -1044,9 +1034,9 @@ def discover_groq_models() -> list[str]:
         return ACTIVE_MODELS
 
     preferred = [
-        "qwen/qwen3.8-27b",
         "openai/gpt-oss-120b",
         "llama-3.3-70b-versatile",
+        "qwen/qwen3.8-27b",
     ]
     blocked_keywords = ("whisper", "guard", "tts", "playai", "gpt-oss-20b", "8b")
 
@@ -1153,7 +1143,7 @@ def call_groq_transparent(
                             {"role": "system", "content": sys_prompt},
                             {"role": "user", "content": user_prompt},
                         ],
-                        "temperature": 0.78,
+                        "temperature": 0.68,
                         "max_tokens": max_tokens,
                     },
                     timeout=9,
@@ -1189,7 +1179,7 @@ def call_groq_transparent(
                     print(f"[Groq OK] Key#{idx+1} | {model_id} -> {cleaned}", flush=True)
                     return cleaned, ""
 
-                last_err_reason = f"Groq 回傳空白 ({model_id})"
+                last_err_reason = f"Groq 回傳空白或異常語句 ({model_id})"
             except Exception as err:
                 last_err_reason = f"Groq 連線異常: {err}"
                 print(f"[Groq Exception] Key#{idx+1} | {model_id}: {err}", flush=True)
@@ -1220,7 +1210,7 @@ def call_gemini_chat(
                     "system_instruction": {"parts": [{"text": sys_prompt}]},
                     "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
                     "generationConfig": {
-                        "temperature": 0.78,
+                        "temperature": 0.68,
                         "maxOutputTokens": max_tokens,
                     },
                 },
@@ -1242,7 +1232,7 @@ def call_gemini_chat(
             if cleaned:
                 print(f"[Gemini OK] {model_id} -> {cleaned}", flush=True)
                 return cleaned, ""
-            last_err = f"Gemini 回傳空白 ({model_id})"
+            last_err = f"Gemini 回傳空白或異常語句 ({model_id})"
         except Exception as err:
             last_err = f"Gemini 連線異常: {err}"
             print(f"[Gemini Exception] {model_id}: {err}", flush=True)
@@ -1439,9 +1429,9 @@ async def hydrate_memory_from_channel(channel: discord.abc.Messageable) -> None:
         return
     try:
         fetched = []
-        async for msg in channel.history(limit=15):
+        async for msg in channel.history(limit=10):
             txt = (msg.content or "").strip()
-            if not txt or txt.startswith("（系統狀態："):
+            if not txt or txt.startswith("（系統狀態：") or is_gibberish_reply(txt):
                 continue
             role = "Reona" if msg.author.id == client.user.id else "Nick"
             clean_txt = re.sub(r"\s+", " ", txt)[:60]
@@ -1510,11 +1500,11 @@ async def proactive_loop():
         add_daily_event_log("早上起床吃熱早餐餵麻糬", now_dt)
         nick_loc = memory.get("nick_location") or ""
         if "留宿" in nick_loc or "Reona家" in nick_loc:
-            proactive_hint = "主動早安：剛睡醒走出房間在餐桌旁準備餵麻糬，看Nick還在睡或剛醒，自然道早安（用陳述句，不逼問）。"
+            proactive_hint = "主動跟Nick道早安，說你剛醒在餐桌旁準備餵麻糬。"
         else:
-            proactive_hint = "主動早安：剛起床醒來準備吃熱早餐餵麻糬，自然傳早安分享早上狀態（用陳述句，不重複詞彙）。"
+            proactive_hint = "主動傳早安給Nick，自然分享你剛起床準備吃熱早餐餵麻糬。"
     elif cur_act:
-        proactive_hint = f"主動短訊：延續剛才正在做的「{cur_act}」，自然分享進展或撒嬌兩句（用陳述句，不跳針換話題）。"
+        proactive_hint = f"延續剛才正在做的「{cur_act}」，跟Nick自然分享進展或撒嬌兩句。"
     else:
         sync_daily_containers(now_dt)
         event_str = ensure_daily_event(now_dt)
@@ -1523,20 +1513,20 @@ async def proactive_loop():
         if roll < 0.20:
             set_reona_gi_state("mild", now_ts, now_dt=now_dt)
             _, cause = get_active_gi_info(now_ts)
-            proactive_hint = f"主動短訊：因「{cause}」輕微胃悶或下腹脹，準備吃常備藥或喝保溫瓶溫水，自然撒嬌討拍。"
+            proactive_hint = f"因為「{cause}」有點胃悶，跟Nick撒嬌說你正準備喝溫水吃常備藥。"
         elif roll < 0.26:
             set_reona_gi_state("moderate", now_ts, now_dt=now_dt)
             _, cause = get_active_gi_info(now_ts)
-            proactive_hint = f"主動短訊：因「{cause}」胃或下腹抽痛不舒服，自然叫Nick陪（不提暖手、不重複詞彙）。"
+            proactive_hint = f"因為「{cause}」肚子抽痛不舒服，想叫Nick陪你聊兩句。"
         elif agreed and roll < 0.50:
-            proactive_hint = f"主動短訊：延續稍早跟Nick約好的「{agreed}」，自然分享眼前進展（用陳述句）。"
+            proactive_hint = f"延續跟Nick約好的「{agreed}」，自然分享現在的情況。"
         elif event_str and roll < 0.70:
-            proactive_hint = f"主動短訊：跟Nick分享今天遇到的突發小狀況「{event_str}」，輕鬆聊兩句。"
+            proactive_hint = f"跟Nick分享今天遇到的小插曲「{event_str}」。"
         elif roll < 0.85:
-            proactive_hint = "主動短訊：自然分享眼前正在做的興趣活動、外出見聞或麻糬日常（用陳述句）。"
+            proactive_hint = "自然跟Nick分享你現在正在畫畫、看麻糬或出門散步的日常。"
         else:
             allow_q = True
-            proactive_hint = "主動短訊：偶爾想找Nick一起決定或邀約，自然丟一個生活小問題給他。"
+            proactive_hint = "偶爾想找Nick一起決定事情，自然問他一個生活小問題。"
 
     sys_prompt = build_prompt(now_dt, allow_question=allow_q)
     async with _api_lock:
@@ -1637,7 +1627,7 @@ async def process_batched_messages(channel: discord.abc.Messageable) -> None:
 
     now_dt = datetime.now(SYDNEY_TZ)
 
-    # 對話輪次計數器硬控：每 4 輪才允許問 1 次，其餘 3 輪嚴禁問號與逼選
+    # 對話輪次計數器硬控：每 4 輪才允許問 1 次，其餘 3 輪不問問題
     turn_num = int(memory.get("turn_counter", 0)) + 1
     memory["turn_counter"] = turn_num
     allow_question = (turn_num % 4 == 0)
@@ -1646,14 +1636,11 @@ async def process_batched_messages(channel: discord.abc.Messageable) -> None:
     cur_loc = get_reona_location(now_dt, severity)
     cur_act = get_active_current_action()
 
-    tone_hint = "可自然問一句或邀約" if allow_question else "只用陳述句撒嬌或分享日常（嚴禁問句與二選一）"
-    act_hint = f"，延續「{cur_act}」推進下一步" if cur_act else ""
-
+    act_hint = f"（正接著做「{cur_act}」）" if cur_act else ""
     if returned_from_restroom:
-        d_cnt = int(sync_restroom_date(now_dt).get("daily_count", 1))
-        user_prompt = f"剛從洗手間回到{cur_loc}（今天第{d_cnt}次），Nick：「{combined_text}」。順著話題換新詞接話{act_hint}，{tone_hint}。"
+        user_prompt = f"你剛從洗手間回到{cur_loc}{act_hint}，Nick說：「{combined_text}」。自然接話回覆他。"
     else:
-        user_prompt = f"你在{cur_loc}，Nick：「{combined_text}」。順著話題與動作換新詞自然回覆{act_hint}，{tone_hint}。"
+        user_prompt = f"你在{cur_loc}{act_hint}，Nick說：「{combined_text}」。自然接話回覆他。"
 
     async with _api_lock:
         async with channel.typing():
