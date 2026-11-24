@@ -85,6 +85,12 @@ GI_HOLD_SEC_BY_LEVEL = {
     "severe": 9 * 3600,
 }
 
+# 狀態高頻詞池（用於自動偵測最近 2 句用過的詞，防止鬼打牆重複）
+REPEATED_STATE_WORDS = (
+    "軟綿綿", "軟綿", "絞痛", "酸水", "反酸", "爬不起來", "沒力氣",
+    "咕嚕", "被窩", "冷汗", "毛巾", "針扎", "翻騰", "抽痛", "悶悶"
+)
+
 # 各級腸胃不舒服的預設固定誘因（鎖定後不會每次換理由）
 GI_DEFAULT_CAUSES = {
     "mild": [
@@ -135,16 +141,16 @@ RESTROOM_TEASERS_BY_LEVEL = {
         "等我一下喔 剛剛好想上廁所",
     ],
     "mild": [
-        "下腹有點悶悶脹脹的 還一直咕嚕叫 先去趟洗手間 馬上回來",
-        "胃酸有點往上頂 下腹也悶痛 順便去趟洗手間 等我一下",
+        "下腹有點悶脹還一直咕嚕叫 先去趟洗手間 馬上回來",
+        "胃酸有點往上頂 順便去趟洗手間 等我一下",
     ],
     "moderate": [
-        "肚子突然一陣絞痛翻攪 急跑一趟洗手間 等我一下",
-        "下腹抽痛得好難受 整個人軟綿綿想跑廁所 先去一下晚點回你",
+        "肚子突然一陣抽痛翻攪 急跑一趟洗手間 等我一下",
+        "下腹鬧脾氣想跑廁所 先去一下晚點回你",
     ],
     "severe": [
         "肚子絞痛到冒冷汗又想水瀉 撐不住先衝洗手間 等我",
-        "腸子一陣陣痙攣痛到腿軟 急跑一趟洗手間 晚點回你",
+        "腸子一陣痙攣痛到腿軟 急跑一趟洗手間 晚點回你",
     ],
 }
 
@@ -154,12 +160,12 @@ RESTROOM_IN_PROGRESS_PINGS = {
         "在洗手間順便發個呆 馬上就出去了",
     ],
     "mild": [
-        "還在洗手間 下腹還是悶悶脹脹的 陪我聊兩句嘛",
+        "還在洗手間 下腹還是悶脹 陪我聊兩句嘛",
         "坐在廁所裡覺得胃有點反酸 還好有你陪我聊天",
     ],
     "moderate": [
-        "還在廁所裡 肚子一陣陣絞痛好難受 陪我說說話轉移注意力嘛",
-        "在洗手間肚子還在咕嚕翻攪 整個人冷冷軟綿綿的",
+        "還在廁所裡 肚子一陣陣抽痛好難受 陪我說說話轉移注意力嘛",
+        "在洗手間肚子還在咕嚕翻攪 手腳也有點涼涼的",
         "還在廁所 剛又一陣抽痛 40公斤真的好不耐痛喔",
     ],
     "severe": [
@@ -178,9 +184,11 @@ RESTROOM_QUERY_KEYWORDS = (
 PROACTIVE_MIN_GAP_SEC = 45 * 60
 PROACTIVE_MAX_GAP_SEC = 90 * 60
 
-# 語音情境觸發機率與護欄上限
-VOICE_PROB_CONTEXTUAL = 0.45   # 撒嬌、不舒服、晚安、被逗笑等情境觸發率
-VOICE_PROB_BASE = 0.08         # 一般閒聊隨機點綴
+# 語音情境觸發機率、防連刷冷卻與護欄上限
+VOICE_PROB_CONTEXTUAL = 0.28   # 撒嬌、晚安、被逗笑等情境觸發率
+VOICE_PROB_SICK = 0.18         # 不舒服時克制觸發，避免連續語音
+VOICE_PROB_BASE = 0.06         # 一般閒聊隨機點綴
+VOICE_COOLDOWN_SEC = 10 * 60   # 自動語音冷卻 10 分鐘（明確要求語音除外）
 DAILY_VOICE_CHAR_LIMIT = 250
 MONTHLY_VOICE_CHAR_LIMIT = 8000
 
@@ -219,6 +227,7 @@ _key_cooldown_until: dict[str, float] = {}
 ACTIVE_MODELS: list[str] = ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "llama-3.3-70b-versatile"]
 last_user_msg_ts: float = 0.0
 next_proactive_ts: float = 0.0
+last_voice_ts: float = 0.0
 
 _pending_messages: list[str] = []
 _debounce_task: asyncio.Task | None = None
@@ -370,19 +379,18 @@ def get_active_gi_info(now_ts: float | None = None) -> tuple[str, str]:
 
 
 def detect_gi_severity(current_text: str, now_dt: datetime) -> str:
+    """僅依 Nick 當前輸入判斷是否觸發新狀態，避免 Reona 自己回覆的字詞無限延長倒數"""
     now_ts = time.time()
     sync_restroom_date(now_dt)
 
-    recent_tail = " ".join(memory.get("recent_turns", [])[-4:])
-    ctx = f"{recent_tail} {current_text}"
     detected_cause = extract_cause_from_text(current_text)
 
     kw_level = "normal"
-    if any(k in ctx for k in ("水瀉", "劇痛", "熱敷袋", "腿軟", "虛脫", "撐不住")):
+    if any(k in current_text for k in ("水瀉", "劇痛", "熱敷袋", "腿軟", "虛脫")):
         kw_level = "severe"
-    elif any(k in ctx for k in ("拉肚子", "腹瀉", "吃藥", "喝粥", "陣發", "胃痛", "腹痛")):
+    elif any(k in current_text for k in ("拉肚子", "腹瀉", "胃痛", "腹痛", "吃止瀉", "吃胃藥")):
         kw_level = "moderate"
-    elif any(k in ctx for k in ("胃悶", "反酸", "下腹", "咕嚕", "脹氣", "噁心", "微暈", "喝溫水", "蘇打餅", "不舒服")):
+    elif any(k in current_text for k in ("胃悶", "反酸", "脹氣", "噁心", "腸胃不舒服")):
         kw_level = "mild"
 
     if kw_level != "normal":
@@ -391,6 +399,14 @@ def detect_gi_severity(current_text: str, now_dt: datetime) -> str:
     held_level, _ = get_active_gi_info(now_ts)
     rank = {"normal": 0, "mild": 1, "moderate": 2, "severe": 3}
     return max([kw_level, held_level], key=lambda x: rank.get(x, 0))
+
+
+def extract_recent_overused_words() -> list[str]:
+    """掃描最近 2 句 Reona 回覆，揪出已用過的狀態詞，避免連續跳針重複"""
+    reona_turns = [t for t in memory.get("recent_turns", []) if t.startswith("Reona:")][-2:]
+    joined = " ".join(reona_turns)
+    found = [w for w in REPEATED_STATE_WORDS if w in joined]
+    return found[:4]
 
 
 def can_trigger_restroom(severity: str, now_dt: datetime, now_ts: float) -> bool:
@@ -546,7 +562,7 @@ def append_turn(role_prefix: str, text: str) -> None:
     save_memory(memory)
 
 
-# ==================== 文字清理與極致精簡版 Prompt ====================
+# ==================== 文字清理與防重複精簡版 Prompt ====================
 def clean_reply_text(raw: str) -> str:
     if not raw:
         return ""
@@ -569,11 +585,12 @@ def build_prompt(now_dt: datetime) -> str:
     recent = memory.get("recent_turns", [])[-HISTORY_LIMIT:]
     history_str = "/".join(t[:34] for t in recent) if recent else "無"
 
-    # 僅在有狀態時才帶入 Prompt，正常時自動省略以大幅節省 Token
     extra_lines = []
     if gi_lvl != "normal":
-        lvl_zh = {"mild": "輕微胃悶反酸", "moderate": "中度胃腹痛腹瀉", "severe": "嚴重絞痛水瀉軟綿"}.get(gi_lvl, gi_lvl)
-        extra_lines.append(f"不適:{lvl_zh}(因:{gi_cause},寫具體痛感不換理由)")
+        lvl_zh = {"mild": "輕微胃悶", "moderate": "中度胃腹痛", "severe": "嚴重絞痛水瀉"}.get(gi_lvl, gi_lvl)
+        overused = extract_recent_overused_words()
+        avoid_str = f",避用剛說過的詞:{'/'.join(overused)}" if overused else ""
+        extra_lines.append(f"背景:{lvl_zh}(因:{gi_cause},順著話題與Nick動作自然互動,不每句重複喊痛{avoid_str})")
 
     nick_loc = (memory.get("nick_location") or "").strip()
     statuses = memory.get("body_status", [])[-1:]
@@ -589,9 +606,8 @@ def build_prompt(now_dt: datetime) -> str:
 
     return (
         "Reona(自稱我),雪梨插畫師,Nick同居女友,養貓麻糬。"
-        "160cm/40kg怕冷易餓吃不胖,用餐彈性;愛玩但同日不換點,偶提趕稿畫室。"
-        "40kg耐受低,易胃悶反酸、下腹咕嚕絞痛軟綿,痛時寫具體感受。"
-        "溫柔不說教,心疼先輕唸再關心,撒嬌不提暖手;麻糬只給凍乾/逗貓。"
+        "160cm/40kg怕冷易餓吃不胖,用餐彈性;愛玩但同日不換點,偶提趕稿畫室;40kg腸胃較弱。"
+        "溫柔坦率不說教,順著Nick話題與動作接話(如揉肚力道變化有不同反應,不每句鬼打牆重複痛感),心疼先輕唸再關心,撒嬌不提暖手;麻糬只給凍乾/逗貓。"
         "繁中LINE短句(8~20字),多用欸齁啦嘛喔,空格斷句無句號;禁簡體、喔喔我知道了、自稱寶貝、叫暖手、叫買/狂餵罐頭(早晚共一罐)。"
         f"\n{now_dt.strftime('%m/%d')}{weekday_zh}{now_dt.strftime('%H:%M')}｜畫:{quest_info['quest'][:12]}｜去:{outing_str[:12]}｜晚:{dinner_str[:12]}"
         f"{extra_block}"
@@ -712,7 +728,7 @@ def call_groq_transparent(sys_prompt: str, user_prompt: str, max_tokens: int = 9
                             {"role": "system", "content": sys_prompt},
                             {"role": "user", "content": user_prompt},
                         ],
-                        "temperature": 0.68,
+                        "temperature": 0.72,
                         "max_tokens": max_tokens,
                     },
                     timeout=9,
@@ -776,7 +792,7 @@ def call_gemini_chat(sys_prompt: str, user_prompt: str, max_tokens: int = 90) ->
                     "system_instruction": {"parts": [{"text": sys_prompt}]},
                     "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
                     "generationConfig": {
-                        "temperature": 0.68,
+                        "temperature": 0.72,
                         "maxOutputTokens": max_tokens,
                     },
                 },
@@ -842,25 +858,40 @@ def generate_reona_reply(
     return "", last_err
 
 
-# ==================== 情境語音觸發與多情緒聲線調整 ====================
-def analyze_voice_context(user_text: str, reply_text: str) -> tuple[bool, str]:
+# ==================== 情境語音觸發（含防連刷冷卻）與多情緒聲線 ====================
+def analyze_voice_context(user_text: str, reply_text: str, now_ts: float) -> tuple[bool, str]:
     u_low = (user_text or "").lower()
     combined = f"{user_text} {reply_text}"
 
     explicit_req = any(k in u_low for k in VOICE_REQUEST_KEYWORDS)
 
-    if any(k in combined for k in ("來陪我", "陪我", "好冷", "抱", "討拍", "胃", "肚子", "腹痛", "反酸", "頭暈", "軟綿", "好累", "痠", "絞痛")):
+    if any(k in combined for k in ("胃", "肚子", "腹痛", "反酸", "頭暈", "軟綿", "好累", "痠", "絞痛", "抽痛")):
         mood = "coax_soft"
+        category = "sick"
+    elif any(k in combined for k in ("來陪我", "陪我", "好冷", "抱", "討拍")):
+        mood = "coax_soft"
+        category = "context"
     elif any(k in combined for k in ("少來", "哈哈", "嘴這麼甜", "笨蛋", "哼", "想吃", "美食", "好吃", "麻糬")):
         mood = "playful"
+        category = "context"
     elif any(k in combined for k in ("晚安", "早安", "快去睡", "好好吃飯", "多喝水", "乖", "小心", "心疼")):
         mood = "gentle"
+        category = "context"
     else:
         mood = "normal"
+        category = "base"
 
+    # 若明確要求聽語音，無視冷卻直接發送
     if explicit_req:
         return True, mood
-    if mood != "normal":
+
+    # 自動觸發需遵守 10 分鐘冷卻，防止短時間連發語音
+    if (now_ts - last_voice_ts) < VOICE_COOLDOWN_SEC:
+        return False, mood
+
+    if category == "sick":
+        return (random.random() < VOICE_PROB_SICK), mood
+    if category == "context":
         return (random.random() < VOICE_PROB_CONTEXTUAL), mood
     return (random.random() < VOICE_PROB_BASE), "normal"
 
@@ -895,6 +926,7 @@ def format_tts_prosody(text: str, mood: str) -> tuple[str, float]:
 
 
 def try_synthesize_voice(text: str, now_dt: datetime, mood: str = "normal") -> bytes | None:
+    global last_voice_ts
     if not FISH_API_KEY or not FISH_MODEL_ID:
         return None
     tts_text, speech_speed = format_tts_prosody(text, mood)
@@ -944,6 +976,7 @@ def try_synthesize_voice(text: str, now_dt: datetime, mood: str = "normal") -> b
         if resp.status_code == 200 and resp.content:
             vu["daily_chars"] += char_len
             vu["monthly_chars"] += char_len
+            last_voice_ts = time.time()
             save_memory(memory)
             print(
                 f"[Voice OK] mood={mood} | speed={speech_speed} | "
@@ -1036,11 +1069,11 @@ async def proactive_loop():
     if roll < 0.25:
         set_reona_gi_state("mild", now_ts)
         _, cause = get_active_gi_info(now_ts)
-        proactive_hint = f"主動短訊：因「{cause}」輕微胃悶反酸或下腹脹痛咕嚕，寫具體感受並撒嬌討拍（不提暖手）。"
+        proactive_hint = f"主動短訊：因「{cause}」輕微胃悶或下腹脹，自然撒嬌討拍（不提暖手）。"
     elif roll < 0.35:
         set_reona_gi_state("moderate", now_ts)
         _, cause = get_active_gi_info(now_ts)
-        proactive_hint = f"主動短訊：因「{cause}」胃抽痛或下腹絞痛軟綿，寫具體感受並叫Nick陪（不提暖手）。"
+        proactive_hint = f"主動短訊：因「{cause}」胃或下腹抽痛不舒服，自然叫Nick陪（不提暖手）。"
     else:
         proactive_hint = "主動短訊：聊畫室趕稿、出去玩或美食日常（順便關心Nick在哪，不提暖手、不叫買罐頭）。"
 
@@ -1134,22 +1167,19 @@ async def process_batched_messages(channel: discord.abc.Messageable) -> None:
             if actual_lvl == "mild":
                 escalated_msg = "，胃有點反酸、下腹悶脹"
             elif actual_lvl == "moderate":
-                escalated_msg = "，肚子一陣陣絞痛、手腳冰涼軟綿"
+                escalated_msg = "，肚子一陣陣抽痛、手腳冰涼"
             elif actual_lvl == "severe":
                 escalated_msg = "，水瀉絞痛冒冷汗腿軟"
         _in_restroom_session = False
 
     now_dt = datetime.now(SYDNEY_TZ)
     sys_prompt = build_prompt(now_dt)
-    active_lvl, active_cause = get_active_gi_info()
-    cause_reminder = f"（不適需寫具體痛感並沿用「{active_cause}」）" if active_cause else ""
 
     if returned_from_restroom:
         d_cnt = int(sync_restroom_date(now_dt).get("daily_count", 1))
-        user_prompt = f"剛去洗手間回來（今天第{d_cnt}次{escalated_msg}），Nick：「{combined_text}」。自然接話{cause_reminder}。"
+        user_prompt = f"剛去洗手間回來（今天第{d_cnt}次{escalated_msg}），Nick：「{combined_text}」。順著話題自然接話。"
     else:
-        body_hint = "（寫出具體不適感受）" if active_lvl != "normal" else ""
-        user_prompt = f"Nick：「{combined_text}」。自然回覆{body_hint}{cause_reminder}。"
+        user_prompt = f"Nick：「{combined_text}」。順著話題與動作自然回覆。"
 
     async with _api_lock:
         async with channel.typing():
@@ -1168,7 +1198,7 @@ async def process_batched_messages(channel: discord.abc.Messageable) -> None:
         await channel.send(f"{reply}\n來 我開好視訊了直接點進來：{call_url}")
         return
 
-    should_voice, voice_mood = analyze_voice_context(combined_text, reply)
+    should_voice, voice_mood = analyze_voice_context(combined_text, reply, time.time())
     voice_bytes = None
     if should_voice:
         voice_bytes = await asyncio.to_thread(try_synthesize_voice, reply, now_dt, voice_mood)
