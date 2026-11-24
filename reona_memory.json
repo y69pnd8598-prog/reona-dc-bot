@@ -1,16 +1,16 @@
 {
   "recent_turns": [
-    "Nick:那我小力一點",
-    "Reona:欸 胃裡還在翻酸水 肚子像有手在裡面抓著絞痛 爬不起來啦嘛",
-    "Nick:寶貝現在呢",
-    "Reona:齁 油膩東西在肚裡翻騰 下腹絞痛 軟綿綿的"
+    "Nick:你正在靠著我了",
+    "Reona:嗯 被你發現了啦 靠著你比較暖喔 別動 讓我蹭一下",
+    "Nick:寶貝好暖喔",
+    "Reona:齁 就你會說 蹭得更舒服了"
   ],
   "long_term_notes": [
     "[11/23] Nick 提到：那明天吃什麼",
     "11/24 寶貝今天不用上班嗎"
   ],
   "body_status": [
-    "11/25 我揉揉寶貝的肚子"
+    "11/25 我今天睡這裡"
   ],
   "nick_location": "",
   "daily_quest": {
@@ -23,7 +23,7 @@
   },
   "daily_outing": {
     "date": "2026-11-25",
-    "place": "寶貝今天去哪裡啦"
+    "place": "寶貝今天去哪裡玩"
   },
   "voice_usage": {
     "date": "2026-11-25",
@@ -33,15 +33,15 @@
   },
   "restroom_stats": {
     "date": "2026-11-25",
-    "daily_count": 1,
-    "total_count": 16,
+    "daily_count": 3,
+    "total_count": 18,
     "daily_by_level": {
       "normal": 0,
       "mild": 0,
       "moderate": 0,
-      "severe": 1
+      "severe": 3
     },
-    "last_visit_ts": 1795527014.7508974
+    "last_visit_ts": 1795530881.973564
   },
   "reona_gi_state": {
     "level": "severe",
