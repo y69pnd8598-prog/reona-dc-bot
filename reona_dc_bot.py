@@ -22,7 +22,7 @@ from reona_bg_db import (
 
 SYDNEY_TZ = ZoneInfo("Australia/Sydney")
 MEMORY_FILE = "reona_memory.json"
-MEMORY_RESET_TOKEN = "reset_20261125_guard_v5"
+MEMORY_RESET_TOKEN = "reset_20261125_v6"
 
 DISCORD_TOKEN = (os.getenv("DISCORD_BOT_TOKEN") or os.getenv("DISCORD_TOKEN") or "").strip()
 TARGET_CHANNEL_ID = int((os.getenv("TARGET_CHANNEL_ID") or os.getenv("DISCORD_CHANNEL_ID") or "0").strip() or "0")
@@ -166,11 +166,11 @@ def append_turn(role: str, text: str) -> None:
 
 
 def is_bad_reply(txt: str) -> bool:
-    if not txt or len(txt) < 2 or len(txt) > 55:
+    if not txt or len(txt) < 2 or len(txt) > 65:
         return True
-    if re.search(r"[a-zA-Z]{6,}|([\u4e00-\u9fff])\1{3,}", txt):
+    if re.search(r"[a-zA-Z]{8,}|([\u4e00-\u9fff])\1{3,}", txt):
         return True
-    bad_words = r"單愛|盡力保護它安全|正在客廳餐桌上\s*等|無擔於|綠元|趕去選洗手間|哈喵|寶貝|爬行|瑟瑟|無法$"
+    bad_words = r"單愛|盡力保護它安全|正在客廳餐桌上\s*等|無擔於|綠元|趕去選洗手間|哈喵|爬行|瑟瑟"
     return bool(re.search(bad_words, txt))
 
 
@@ -180,11 +180,14 @@ def clean_reply(raw: str, strip_q: bool) -> str:
     txt = re.sub(r"<think>[\s\S]*?</think>", "", raw, flags=re.IGNORECASE).strip()
     txt = re.sub(r"^(Reona|我)\s*[:：]\s*", "", txt)
     txt = re.sub(r"\bkitty\b", "麻糬", txt, flags=re.IGNORECASE)
+    txt = txt.replace("寶貝", "Nick")
     for ch in ("「", "」", '"', "。", "，", "『", "』"):
         txt = txt.replace(ch, " ")
     if strip_q:
-        txt = re.sub(r"[^ ！？?]*[？?].*$", "", txt)
-        txt = re.sub(r"\s+\S*(嗎|呢|還是|好不好|要不要|什麼|沒)$", "", txt)
+        cut = re.sub(r"[^ ！？?]*[？?].*$", "", txt)
+        cut = re.sub(r"\s+\S*(嗎|呢|還是|好不好|要不要|什麼|沒)$", "", cut)
+        if len(cut.strip()) >= 4:
+            txt = cut
     txt = re.sub(r"\s+", " ", txt).strip()
     if is_bad_reply(txt):
         print(f"[Blocked Bad Reply] {txt}", flush=True)
@@ -492,7 +495,7 @@ async def handle_batched_messages(channel: discord.abc.Messageable) -> None:
 
     now_dt = datetime.now(SYDNEY_TZ)
     mem["turn_counter"] = int(mem.get("turn_counter", 0)) + 1
-    allow_q = (mem["turn_counter"] % 4 == 0)
+    allow_q = (mem["turn_counter"] % 2 == 0)
     save_mem(mem)
 
     user_prompt = (
@@ -527,7 +530,7 @@ async def on_ready():
             await hydrate_channel_history(ch)
     if not proactive_loop.is_running():
         proactive_loop.start()
-    print(f"[Reona Guarded Ready] {client.user} | SQLite=ON | Proactive=30-40m", flush=True)
+    print(f"[Reona Ready v6] {client.user} | SQLite=ON | Proactive=30-40m", flush=True)
 
 
 @client.event
