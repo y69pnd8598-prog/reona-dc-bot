@@ -1,142 +1,67 @@
 {
+  "reset_token": "reset_20261125_full_v2",
   "recent_turns": [
-    "Nick:好的寶貝",
-    "Reona:好喔 那你忙 我先躺著 餓得胃裡空空的嘛",
-    "Nick:我煮好了端過去給你吃等我喔",
-    "Reona:好喔 那我乖乖等 肚子又咕嚕叫了齁"
+    "Nick:那我來抱抱寶貝",
+    "Reona:衝進被窩抱緊 腳趾頭還冰的 順順腳底還是揉腳趾",
+    "Nick:抱著寶貝",
+    "Reona:嗯～被你抱著好暖 腳底慢慢有感覺了 剛醒來好黏人 要不要順順腳底 還是繼續揉腳趾 你選"
   ],
-  "long_term_notes": [
-    "11/25 寶貝我帶你去看醫生",
-    "11/25 寶貝真的不用看醫生嗎"
-  ],
-  "body_status": [
-    "11/25 寶貝睡著了嗎"
-  ],
-  "nick_location": "11/25 07:22 寶貝待在房間我端過去",
+  "long_term_notes": [],
+  "body_status": [],
+  "nick_location": "",
+  "reona_location": "房間床上被窩裡",
+  "reona_loc_ts": 1795553917.6728709,
   "daily_quest": {
     "date": "2026-11-25",
-    "quest": "調整品牌聯名主視覺細節"
+    "quest": "在家試做低糖燕麥小餅乾"
   },
   "daily_dinner": {
     "date": "2026-11-25",
-    "dinner": "清淡暖胃白粥配燙青菜"
+    "dinner": "酪梨雞胸溫沙拉配烤吐司"
   },
   "daily_outing": {
     "date": "2026-11-25",
-    "place": "今天去七次了"
+    "place": "雪梨市區底片相機行與選物店"
   },
+  "daily_event": {
+    "date": "2026-11-25",
+    "event": ""
+  },
+  "daily_log": {
+    "date": "2026-11-25",
+    "events": [
+      "請Nick幫:揉揉腳趾頭"
+    ],
+    "yesterday_summary": ""
+  },
+  "choice_state": {
+    "date": "2026-11-25",
+    "pending_choice": "順順腳底vs揉腳趾",
+    "agreed_plan": "",
+    "follow_up_hint": ""
+  },
+  "morning_greet_date": "",
   "voice_usage": {
     "date": "2026-11-25",
-    "daily_chars": 249,
+    "daily_chars": 40,
     "month": "2026-11",
-    "monthly_chars": 573
+    "monthly_chars": 40
   },
   "restroom_stats": {
     "date": "2026-11-25",
-    "daily_count": 9,
-    "total_count": 24,
+    "daily_count": 0,
+    "total_count": 0,
+    "last_visit_ts": 0.0,
     "daily_by_level": {
       "normal": 0,
       "mild": 0,
       "moderate": 0,
-      "severe": 9
-    },
-    "last_visit_ts": 1795552742.1110203
+      "severe": 0
+    }
   },
   "reona_gi_state": {
-    "level": "severe",
-    "until_ts": 1795584667.6125076,
-    "cause": "吃了偏油膩的食物鬧肚子"
-  },
-  "menstrual_cycle": {
-    "cycle_start_date": "2026-10-31",
-    "cycle_length": 30
-  },
-  "daily_main_quest": {
-    "date_key": "2026-11-23",
-    "quest": "跟海外策展團隊確認限量版畫輸出規格，忙完去逛市集挑幾件生活小物",
-    "progress": "晚上：工作告一段落或已吃過晚餐，在公寓休息",
-    "short_label": "畫商業插畫"
-  },
-  "last_proactive_ts": 1795358748.237457,
-  "last_user_msg_ts": 1795421930.227546,
-  "recent_proactive_msgs": [],
-  "tts_quota": {
-    "day_key": "2026-11-23",
-    "day_chars": 56,
-    "month_key": "2026-11",
-    "month_chars": 56
-  },
-  "current_emotion": "happy",
-  "emotion_until_ts": 1795420731.0967,
-  "sick_until_ts": 1795400680.141721,
-  "sick_type": "meds",
-  "sick_reason": "stomach",
-  "need_recovery_report": true,
-  "mild_sick_until_ts": 1795340549.517882,
-  "mild_reason": "",
-  "need_mild_recovery_report": false,
-  "current_activity": {
-    "text": "在房間滑手機發呆",
-    "next_update_at": 0.0,
-    "stage_index": 0
-  },
-  "last_image_sent_ts": 0.0,
-  "recent_sent_images": [],
-  "last_interaction_ts": 1795395280.141721,
-  "last_incident_ts": 0.0,
-  "last_morning_date": "2026-11-22",
-  "last_goodnight_date": "2026-11-23",
-  "last_period_notified_date": "",
-  "sick_cooldown_until_ts": 1795481680.141721,
-  "mild_sick_cd_until_ts": 1795360349.517882,
-  "user_profile": {
-    "nickname": "你",
-    "likes": [
-      "吃什麼"
-    ],
-    "dislikes": [],
-    "notes": [],
-    "shared_memories": []
-  },
-  "recent_replies": [],
-  "weather_state": {
-    "date": "2026-11-22",
-    "label": "日常天氣",
-    "desc": "正常過日子，不用一直扯手冰或暖手"
-  },
-  "project_state": {
-    "stage_idx": 0,
-    "last_advance_date": "2026-11-22"
-  },
-  "body_state": {
-    "weight_kg": 40,
-    "stomach_fullness": 70,
-    "energy": 75,
-    "mood": "隨性日常",
-    "mood_guide": "像一般隨性台灣女生一樣自然聊天，偶爾吐槽或開玩笑，不要一直喊痛或喊冷。",
-    "severity": "normal",
-    "current_symptom": "",
-    "daily_activity": "在房間滑手機、畫圖或跟麻糬耍廢",
-    "last_symptom_ts": 0.0,
-    "last_mood_ts": 0.0,
-    "pending_aftermath": null,
-    "pending_brb_followup": null,
-    "level": "none",
-    "symptom": "",
-    "cause": "",
-    "recover_at": 0.0,
-    "afterglow_until": 0.0,
-    "cared_by_user": false
-  },
-  "affection": 62,
-  "target_channel_id": 1571035253974237219,
-  "last_interaction_date": "2026-11-22",
-  "last_night_vibe": "",
-  "pending_aftermath": null,
-  "recent_topics": [],
-  "sweet_notes": [],
-  "grudge_notes": [],
-  "recent_photo_ids": [],
-  "next_proactive_at": 0.0
+    "level": "normal",
+    "until_ts": 0.0,
+    "cause": ""
+  }
 }
