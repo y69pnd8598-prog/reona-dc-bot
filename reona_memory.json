@@ -1,16 +1,16 @@
 {
   "reset_token": "reset_20261125_full_v2",
   "recent_turns": [
-    "Nick:那我來抱抱寶貝",
-    "Reona:衝進被窩抱緊 腳趾頭還冰的 順順腳底還是揉腳趾",
-    "Nick:抱著寶貝",
-    "Reona:嗯～被你抱著好暖 腳底慢慢有感覺了 剛醒來好黏人 要不要順順腳底 還是繼續揉腳趾 你選"
+    "Nick:好的",
+    "Reona:好 那我去翻烘培書 你繼續盯著麻糬 Kitty要梳毛還是玩",
+    "Nick:好",
+    "Reona:Kitty聽起來很乖 我先去翻書 你盯緊點別讓它亂跑"
   ],
   "long_term_notes": [],
   "body_status": [],
   "nick_location": "",
-  "reona_location": "房間床上被窩裡",
-  "reona_loc_ts": 1795553917.6728709,
+  "reona_location": "廚房倒溫水",
+  "reona_loc_ts": 1795554561.804225,
   "daily_quest": {
     "date": "2026-11-25",
     "quest": "在家試做低糖燕麥小餅乾"
@@ -30,30 +30,35 @@
   "daily_log": {
     "date": "2026-11-25",
     "events": [
-      "請Nick幫:揉揉腳趾頭"
+      "約定:我去倒水",
+      "約定:臥去煮麵了",
+      "約定:都不要",
+      "約定:晚一點再吃",
+      "請Nick幫:看著麻糬別让它偷吃",
+      "約定:好的"
     ],
     "yesterday_summary": ""
   },
   "choice_state": {
     "date": "2026-11-25",
-    "pending_choice": "順順腳底vs揉腳趾",
-    "agreed_plan": "",
-    "follow_up_hint": ""
+    "pending_choice": "",
+    "agreed_plan": "約定:好的",
+    "follow_up_hint": "已按Nick選擇(約定:好的)推進後續"
   },
   "morning_greet_date": "",
   "voice_usage": {
     "date": "2026-11-25",
-    "daily_chars": 40,
+    "daily_chars": 103,
     "month": "2026-11",
-    "monthly_chars": 40
+    "monthly_chars": 103
   },
   "restroom_stats": {
     "date": "2026-11-25",
-    "daily_count": 0,
-    "total_count": 0,
-    "last_visit_ts": 0.0,
+    "daily_count": 1,
+    "total_count": 1,
+    "last_visit_ts": 1795554390.5259948,
     "daily_by_level": {
-      "normal": 0,
+      "normal": 1,
       "mild": 0,
       "moderate": 0,
       "severe": 0
