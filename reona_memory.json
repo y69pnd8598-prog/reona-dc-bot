@@ -1,18 +1,18 @@
 {
   "recent_turns": [
-    "Nick:回來了嗎",
-    "Reona:回來了啦 快起來喝溫水 別一直躺著 肚子會不會更悶",
-    "Nick:喝完了",
-    "Reona:呼 乖 有在聽話嘛 肚子有沒有比較舒服了",
-    "Nick:我要去上個廁所",
-    "Reona:快去嘛 別憋著 上完記得穿厚點"
+    "Reona:才一次啦 別擔心 麻糬剛在討吃 我先梳毛",
+    "Nick:只有一次嗎",
+    "Reona:嗯 真的就一次啦 快過來陪我梳毛嘛",
+    "Nick:好的寶貝",
+    "Reona:先去一下洗手間 馬上回來",
+    "Reona:回來啦 麻糬還在那邊看我看我要怎麼梳毛"
   ],
   "long_term_notes": [
     "[11/23] Nick 提到：那明天吃什麼",
     "11/24 寶貝今天不用上班嗎"
   ],
   "body_status": [
-    "11/24 你還有聽到我肚子在叫嗎"
+    "11/24 寶貝肚子痛嗎"
   ],
   "daily_quest": {
     "date": "2026-11-24",
@@ -23,6 +23,16 @@
     "daily_chars": 248,
     "month": "2026-11",
     "monthly_chars": 324
+  },
+  "restroom_stats": {
+    "date": "2026-11-24",
+    "daily_count": 5,
+    "total_count": 5,
+    "daily_by_level": {
+      "normal": 5,
+      "mild": 0,
+      "moderate_severe": 0
+    }
   },
   "menstrual_cycle": {
     "cycle_start_date": "2026-10-31",
