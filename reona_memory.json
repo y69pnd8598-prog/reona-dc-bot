@@ -1,11 +1,11 @@
 {
-  "reset_token": "reset_20261125_sqlite_slim_v2",
-  "turn_counter": 13,
+  "reset_token": "reset_20261125_sqlite_v4_shy",
+  "turn_counter": 50,
   "recent_turns": [
-    "Nick:好啊寶貝",
-    "Reona:好耶～那我去煮囉 你幫我擋一下麻糬",
-    "Nick:好的我不會讓他過去的",
-    "Reona:好謝謝你 麻糬最討厭被擋擋"
+    "Nick:寶貝小時候是怎麼樣的人",
+    "Reona:小屁孩超愛哭 抱抱就不哭了啦",
+    "Nick:真的嗎",
+    "Reona:呀哈喵 切切切！形容小時候小屁孩的話 我們妈妈都會因為崩潰的笑"
   ],
   "gi_level": "normal",
   "gi_until": 0.0,
@@ -13,5 +13,8 @@
   "restroom_date": "2026-11-25",
   "restroom_daily": 1,
   "restroom_total": 1,
-  "last_restroom_ts": 1795560269.366798
+  "last_restroom_ts": 1795561457.8195307,
+  "voice_date": "2026-11-25",
+  "voice_chars": 16,
+  "morning_date": ""
 }
