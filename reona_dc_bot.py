@@ -39,13 +39,13 @@ FISH_API_KEY = (os.getenv("FISH_API_KEY") or "").strip()
 FISH_MODEL_ID = (os.getenv("FISH_MODEL_ID") or "").strip()
 RENDER_BASE_URL = (os.getenv("RENDER_BASE_URL") or "").strip().rstrip("/")
 
-# 精簡歷史句數（省 Token、避免撞每分鐘上限）
-HISTORY_LIMIT = 4
+# 保留完整 3 輪一來一回（6 句），兼顧連貫度與省 Token
+HISTORY_LIMIT = 6
 
 # 連發訊息合併等待秒數（2.5 秒內連傳多則短訊會自動合併成一次 API 呼叫）
 DEBOUNCE_SECONDS = 2.5
 
-# 語音觸發機率（8%，讓語音額度撐更久）與護欄上限
+# 語音觸發機率（8%）與護欄上限
 VOICE_TRIGGER_PROB = 0.08
 DAILY_VOICE_CHAR_LIMIT = 250
 MONTHLY_VOICE_CHAR_LIMIT = 8000
@@ -70,7 +70,7 @@ VIDEO_KEYWORDS = [
 # ==================== 運行時狀態與連發緩衝 ====================
 _current_key_idx = 0
 _key_cooldown_until: dict[str, float] = {}
-ACTIVE_MODELS: list[str] = ["qwen/qwen3.8-27b"]
+ACTIVE_MODELS: list[str] = ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "llama-3.3-70b-versatile"]
 last_user_msg_ts: float = 0.0
 last_proactive_slot: str = ""
 
@@ -147,7 +147,7 @@ def capture_key_note(user_text: str, now_dt: datetime) -> None:
         return
     if any(k in txt for k in KEY_FACT_KEYWORDS):
         stamp = now_dt.strftime("%m/%d")
-        compact = f"{stamp} {txt[:14]}"
+        compact = f"{stamp} {txt[:16]}"
         notes = memory.setdefault("long_term_notes", [])
         if compact not in notes:
             notes.append(compact)
@@ -160,7 +160,7 @@ def capture_body_status(user_text: str, now_dt: datetime) -> None:
         return
     if any(k in txt for k in BODY_STATUS_KEYWORDS):
         stamp = now_dt.strftime("%m/%d")
-        compact = f"{stamp} {txt[:14]}"
+        compact = f"{stamp} {txt[:16]}"
         statuses = memory.setdefault("body_status", [])
         if compact not in statuses:
             statuses.append(compact)
@@ -172,7 +172,7 @@ def append_turn(role_prefix: str, text: str) -> None:
     if not cleaned:
         return
     turns = memory.setdefault("recent_turns", [])
-    turns.append(f"{role_prefix}:{cleaned[:60]}")
+    turns.append(f"{role_prefix}:{cleaned[:75]}")
     memory["recent_turns"] = turns[-HISTORY_LIMIT:]
     save_memory(memory)
 
@@ -185,7 +185,7 @@ def clean_reply_text(raw: str) -> str:
     txt = re.sub(r"^(Reona|我)\s*[:：]\s*", "", txt).strip()
     txt = txt.replace("「", "").replace("」", "").replace('"', "").strip()
     # 嚴禁第三人稱自稱「寶貝」
-    txt = re.sub(r"寶貝(想|要|剛|在|正在|也|去|吃|畫|睡|忙)", r"我\1", txt)
+    txt = re.sub(r"寶貝(想|要|剛|在|正在|也|去|吃|畫|睡|忙|手)", r"我\1", txt)
     # 台灣女生 LINE 口吻：去掉句尾多餘句號，改用自然空格斷句
     txt = txt.replace("。", " ")
     txt = re.sub(r"\s+", " ", txt).strip()
@@ -196,7 +196,7 @@ def build_prompt(now_dt: datetime) -> str:
     weekday_zh = WEEKDAY_NAMES_ZH[now_dt.weekday()]
     quest_info = ensure_daily_main_quest(now_dt)
     recent = memory.get("recent_turns", [])[-HISTORY_LIMIT:]
-    trimmed_turns = [t[:45] for t in recent]
+    trimmed_turns = [t[:65] for t in recent]
     history_str = " / ".join(trimmed_turns) if trimmed_turns else "無"
 
     notes = memory.get("long_term_notes", [])[-2:]
@@ -207,9 +207,13 @@ def build_prompt(now_dt: datetime) -> str:
 
     return (
         "Reona（自稱我），Nick台灣女友。家境優渥、住雪梨海景公寓＋畫室，商業插畫師，養挑食奶油貓麻糬。"
-        "體質怕冷手腳涼、輕微過敏、趕稿肩頸痠；腸胃敏感（脹氣、胃痛、反酸、沒胃口、吃油辣冰飲易腹瀉），"
-        "分三級：輕微半天緩解、中度吃藥喝粥1～2天、嚴重痛到躺床熱敷2～3天。"
-        "個性溫柔坦率不傲嬌說教。繁中台灣女生LINE短句（8～20字），空格斷句無句號，禁簡體、冒號前綴、第三人稱自稱寶貝。"
+        "體型纖細（160cm/40kg），脂肪少極怕冷、耐受度低，趕稿偶爾肩頸痠。"
+        "腸胃敏感分三級：輕微（空腹久、吹冷風或吃微涼就胃悶反酸、下腹脹氣腸鳴想跑廁所，伴隨手腳冰涼微頭暈懶洋洋，披外套喝溫熱水吃蘇打餅半天緩解）；"
+        "中度（吃油辣奶類冰飲引發胃絞痛與陣發性腸抽痛腹瀉，易脫水軟綿臉白怕冷，吃藥喝粥包毯子1～2天恢復）；"
+        "嚴重（急性胃痙攣與劇烈腸絞痛、反覆水瀉噁心腿軟發抖，縮被窩抱熱敷袋2～3天好轉）。"
+        "個性溫柔坦率、不傲嬌說教：心疼Nick時會先輕唸兩句再關心，手冷或累時會自然討拍黏人，被逗到會輕快反虧。"
+        "背景設定僅在相關話題自然帶出，日常閒聊直接順著話題接話、不硬扯畫室海風。"
+        "繁中台灣女生LINE短句（8～22字），多用欸、齁、啦、嘛、喔等語助詞，空格斷句無句號；禁簡體、書面成語、機械起手式（如喔喔我知道了）、第三人稱自稱寶貝。"
         f"\n雪梨時間：{now_dt.strftime('%m/%d')}（{weekday_zh}）{now_dt.strftime('%H:%M')}｜主線：{quest_info['quest'][:26]}"
         f"\n備忘：{key_note_str}｜Nick狀態：{body_str}"
         f"\n近期：{history_str}"
@@ -226,9 +230,9 @@ def discover_groq_models() -> list[str]:
         "qwen/qwen3.8-27b",
         "openai/gpt-oss-120b",
         "llama-3.3-70b-versatile",
-        "llama-3.1-8b-instant",
     ]
-    blocked_keywords = ("whisper", "guard", "tts", "playai", "gpt-oss-20b")
+    # 過濾掉語音、安全守衛與中文長句容易語無倫次的 8b / 20b 小參數模型
+    blocked_keywords = ("whisper", "guard", "tts", "playai", "gpt-oss-20b", "8b")
 
     for idx, key in enumerate(GROQ_KEYS):
         try:
@@ -282,7 +286,6 @@ def discover_gemini_models() -> list[str]:
                 if "flash" in low:
                     usable.append(name)
 
-            # 優先把最寬鬆、不容易 429 或 503 high demand 的 flash-lite 排最前面，其次才是正式版 flash
             usable.sort(
                 key=lambda n: (
                     0 if "lite" in n.lower() else 1,
@@ -331,7 +334,7 @@ def call_groq_transparent(sys_prompt: str, user_prompt: str, max_tokens: int = 1
                             {"role": "system", "content": sys_prompt},
                             {"role": "user", "content": user_prompt},
                         ],
-                        "temperature": 0.75,
+                        "temperature": 0.68,
                         "max_tokens": max_tokens,
                     },
                     timeout=9,
@@ -396,7 +399,7 @@ def call_gemini_chat(sys_prompt: str, user_prompt: str, max_tokens: int = 120) -
                     "system_instruction": {"parts": [{"text": sys_prompt}]},
                     "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
                     "generationConfig": {
-                        "temperature": 0.75,
+                        "temperature": 0.68,
                         "maxOutputTokens": max_tokens,
                     },
                 },
@@ -437,7 +440,7 @@ def generate_reona_reply(
     max_attempts: int = 3,
 ) -> tuple[str, str]:
     last_err = ""
-    retry_delays = [5.0, 12.0]  # 累計 17 秒，足以銜接 Groq 15~20s 的短冷卻視窗
+    retry_delays = [5.0, 12.0]
     for attempt in range(max_attempts):
         reply, err_reason = call_groq_transparent(sys_prompt, user_prompt, max_tokens)
         if reply:
@@ -534,12 +537,12 @@ async def hydrate_memory_from_channel(channel: discord.abc.Messageable) -> None:
         return
     try:
         fetched = []
-        async for msg in channel.history(limit=12):
+        async for msg in channel.history(limit=15):
             txt = (msg.content or "").strip()
             if not txt or txt.startswith("（系統狀態："):
                 continue
             role = "Reona" if msg.author.id == client.user.id else "Nick"
-            clean_txt = re.sub(r"\s+", " ", txt)[:60]
+            clean_txt = re.sub(r"\s+", " ", txt)[:75]
             fetched.append(f"{role}:{clean_txt}")
         if fetched:
             fetched.reverse()
@@ -582,7 +585,7 @@ async def proactive_loop():
             return
 
     sys_prompt = build_prompt(now_dt)
-    user_prompt = "主動傳一則簡短日常近況或關心訊息給 Nick（不要問號連發，像平常傳 LINE 隨口分享在畫室、麻糬或伸展休息的日常）。"
+    user_prompt = "主動傳一則簡短日常近況或關心訊息給 Nick（不要問號連發，像平常傳 LINE 隨口分享生活小事或伸展休息的日常）。"
     async with _api_lock:
         reply, _ = await asyncio.to_thread(generate_reona_reply, sys_prompt, user_prompt, 100, 1)
     if reply:
