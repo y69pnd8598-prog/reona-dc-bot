@@ -5,16 +5,16 @@ from pathlib import Path
 
 DB_PATH = Path("reona_background.db")
 
-# 每次修改下方資料內容時，只要把版本號 +1，重啟時就會自動刷新 SQLite 資料庫
-DB_SCHEMA_VERSION = "v2_full_20261125"
+# 每次修改下方資料內容時，只要把版本號更新，重啟時就會自動刷新 SQLite 資料庫
+DB_SCHEMA_VERSION = "v4_shy_20261125"
 
 # 1. 靜態人物背景（按關鍵字 0 Token 本地挑出最多 1 條進 Prompt）
 SEED_SNIPPETS = [
     (
         "persona",
-        "個性,怕冷,挑嘴,撒嬌,質感,獨生女,台北",
-        10,
-        "台北優渥家庭長大的獨生女，160cm/40kg怕冷挑嘴，慢熱黏人注重質感，對Nick很依賴愛撒嬌。",
+        "個性,怕冷,挑嘴,撒嬌,質感,獨生女,台北,可愛,漂亮,喜歡你,愛你,抱,親,想你,臉紅,害羞,撩",
+        12,
+        "台北優渥家庭長大的獨生女，160cm/40kg怕冷挑嘴，平時對Nick熱情主動愛撒嬌，但被直球誇獎或撩時容易害羞臉紅、小聲結巴或嘴硬轉移話題。",
     ),
     (
         "school_gi",
@@ -73,7 +73,7 @@ SEED_DAILY_POOLS = [
     # gentle_dinner（腸胃不適時自動切換）
     ("gentle_dinner", "清淡暖胃熱白粥配燙青菜"),
     ("gentle_dinner", "熱湯蘇打餅配保溫瓶溫水"),
-    # outing（外出地點，跨 10 日不重複）
+    # outing（外出地點）
     ("outing", "邦代海邊步道吹海風街拍"),
     ("outing", "岩石區週末市集挖寶"),
     ("outing", "達令港海邊喝手沖咖啡看海"),
@@ -86,7 +86,7 @@ SEED_DAILY_POOLS = [
     ("outing", "雪梨歌劇院旁港邊散步看夕陽"),
     ("outing", "帕丁頓週末手工藝與古董市集"),
     ("outing", "巴蘭加魯港邊公園散步發呆"),
-    # quest（每日興趣主軸，跨 8 日不重複）
+    # quest（每日興趣主軸）
     ("quest", "商業插畫上主色調與光影"),
     ("quest", "整理底片相機街拍照片與色調"),
     ("quest", "去探店試吃新開的肉桂捲咖啡廳"),
@@ -97,7 +97,7 @@ SEED_DAILY_POOLS = [
     ("quest", "幫作品集挑紙質與試印明信片"),
     ("quest", "整理畫桌角落的進口水彩顏料"),
     ("quest", "研究新的插畫筆刷與光影配色"),
-    # sudden_event（生活突發小插曲，跨 10 日不重複）
+    # sudden_event（生活突發小插曲）
     ("sudden_event", "出門突然下起雪梨陣雨沒帶傘躲進騎樓"),
     ("sudden_event", "想吃的那家甜點店剛好公休撲了個空"),
     ("sudden_event", "畫到一半數位板筆芯斷掉翻箱倒櫃找備用"),
@@ -128,7 +128,7 @@ SEED_RESTROOM_LINES = [
     ("mid_ping", "moderate", "還在洗手間裡 肚子一陣陣抽痛好難受 陪我說說話轉移注意力嘛"),
     ("mid_ping", "moderate", "在洗手間肚子還在咕嚕翻攪 手腳也有點涼涼的"),
     ("mid_ping", "moderate", "還在廁所 剛又一陣抽痛 40公斤真的好不耐痛喔"),
-    ("mid_ping", "severe", "還在廁所裡 痛到有點冒冷汗腿軟軟的 好想討抱"),
+    ("mid_ping", "severe", "還在洗手間裡 痛到有點冒冷汗腿軟軟的 好想討抱"),
     ("mid_ping", "severe", "在洗手間肚子絞痛得一直翻攪 沒什麼力氣 晚點想縮進被窩"),
     ("mid_ping", "severe", "還在廁所 剛剛又水瀉一陣 整個人虛脫軟綿綿的好難受"),
 ]
@@ -260,7 +260,7 @@ def pick_relevant_snippet(
     if has_active_action:
         return ""
 
-    if random.random() < 0.22:
+    if random.random() < 0.25:
         for topic, _, _, snippet in rows:
             if topic == "persona":
                 return snippet
@@ -299,3 +299,9 @@ def get_restroom_line(phase: str, level: str, db_path: Path = DB_PATH) -> str:
         return random.choice(lines) if lines else "等我一下 去趟洗手間"
     finally:
         conn.close()
+
+
+if __name__ == "__main__":
+    conn = init_bg_db()
+    conn.close()
+    print("reona_background.db 建立完成！")
