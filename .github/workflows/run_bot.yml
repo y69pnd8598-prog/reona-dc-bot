@@ -1,23 +1,19 @@
-name: Run Reona DC Bot Relay
+name: Run Reona Discord Bot
 
 on:
   workflow_dispatch:
   schedule:
-    # 每天雪梨早上 07:30（UTC 20:30 / 21:30）自動喚醒第一棒
-    - cron: '30 20 * * *'
+    # 每 5 小時 45 分鐘自動接力重啟（避開 GitHub Actions 單次 6 小時上限）
+    - cron: '15 */5 * * *'
 
+# 必須加上寫入權限，才能把 reona_memory.json 存回 Repo
 permissions:
   contents: write
-  actions: write
-
-concurrency:
-  group: reona-dc-bot-singleton
-  cancel-in-progress: false
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 340
+    timeout-minutes: 345
 
     steps:
       - name: Checkout repository
@@ -25,65 +21,38 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Set up Python 3.11
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
-          else
-            pip install discord.py requests tzdata
-          fi
+          pip install --upgrade pip
+          pip install discord.py requests
 
       - name: Run Reona Bot
         env:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
           TARGET_CHANNEL_ID: ${{ secrets.TARGET_CHANNEL_ID }}
-          DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           FISH_API_KEY: ${{ secrets.FISH_API_KEY }}
           FISH_MODEL_ID: ${{ secrets.FISH_MODEL_ID }}
           RENDER_BASE_URL: ${{ secrets.RENDER_BASE_URL }}
         run: |
-          timeout -s INT 330m python reona_dc_bot.py || true
+          python reona_dc_bot.py
 
-      - name: Commit updated memory
+      - name: Save memory back to repository
         if: always()
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          if [ -f reona_memory.json ]; then
+          if [ -f "reona_memory.json" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
             git add reona_memory.json
-            git diff --staged --quiet || git commit -m "chore: sync reona memory [skip ci]"
-            git pull --rebase origin "${{ github.ref_name }}" || true
-            git push origin HEAD:"${{ github.ref_name }}" || true
-          fi
-
-      - name: Clean up old workflow runs (> 3 days)
-        if: always()
-        uses: Mattraks/delete-workflow-runs@v2
-        with:
-          token: ${{ github.token }}
-          repository: ${{ github.repository }}
-          retain_days: 3
-          keep_minimum_runs: 10
-
-      - name: Trigger next relay run (skip during Sydney sleep hours)
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          SYDNEY_HOUR=$(TZ='Australia/Sydney' date +%H)
-          echo "Current Sydney Hour: $SYDNEY_HOUR"
-          if [ "$SYDNEY_HOUR" -ge 1 ] && [ "$SYDNEY_HOUR" -lt 7 ]; then
-            echo "Sydney sleep hours (01:00 - 06:59), skipping relay until morning schedule."
-          else
-            echo "Triggering next relay run..."
-            gh workflow run "${{ github.workflow }}" --ref "${{ github.ref_name }}"
+            if ! git diff --cached --quiet; then
+              git commit -m "chore: update reona_memory.json [skip ci]"
+              git pull --rebase origin main || true
+              git push
+            fi
           fi
