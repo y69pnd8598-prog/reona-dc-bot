@@ -1,16 +1,16 @@
 {
   "recent_turns": [
-    "Nick:你正在靠著我了",
-    "Reona:嗯 被你發現了啦 靠著你比較暖喔 別動 讓我蹭一下",
-    "Nick:寶貝好暖喔",
-    "Reona:齁 就你會說 蹭得更舒服了"
+    "Nick:寶貝我帶你去看醫生",
+    "Reona:欸別急 先給我穿外套 腿好軟 扶我一下嘛 晚點再說 現在只想躺平",
+    "Nick:那寶貝拉幾次了",
+    "Reona:我今天去洗手間 6 次了 累計一共 21 次"
   ],
   "long_term_notes": [
-    "[11/23] Nick 提到：那明天吃什麼",
-    "11/24 寶貝今天不用上班嗎"
+    "11/24 寶貝今天不用上班嗎",
+    "11/25 寶貝我帶你去看醫生"
   ],
   "body_status": [
-    "11/25 我今天睡這裡"
+    "11/25 我一直聽到寶貝肚子在叫"
   ],
   "nick_location": "",
   "daily_quest": {
@@ -27,21 +27,21 @@
   },
   "voice_usage": {
     "date": "2026-11-25",
-    "daily_chars": 233,
+    "daily_chars": 249,
     "month": "2026-11",
-    "monthly_chars": 557
+    "monthly_chars": 573
   },
   "restroom_stats": {
     "date": "2026-11-25",
-    "daily_count": 3,
-    "total_count": 18,
+    "daily_count": 6,
+    "total_count": 21,
     "daily_by_level": {
       "normal": 0,
       "mild": 0,
       "moderate": 0,
-      "severe": 3
+      "severe": 6
     },
-    "last_visit_ts": 1795530881.973564
+    "last_visit_ts": 1795550681.1728423
   },
   "reona_gi_state": {
     "level": "severe",
