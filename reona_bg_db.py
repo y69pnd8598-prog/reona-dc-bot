@@ -22,7 +22,7 @@ DEFAULT_PHASES: Dict[str, Dict[str, str]] = {
     "afternoon": {
         "location": "雪梨住處畫桌前（冷氣房）",
         "positions": "Reona 盯著螢幕修構圖；麻糬趴在畫桌角落睡覺",
-        "event": "下午專心畫圖，室內冷氣偏涼",
+        "event": "下午修草稿比例，室內冷氣偏涼",
         "items": "數位板、色票本、溫開水",
     },
     "evening": {
@@ -539,4 +539,546 @@ class ReonaBGDB:
         if m in (3, 4, 5):
             return "雪梨秋季（早晚微涼乾爽）"
         if m in (6, 7, 8):
-            return "
+            return "雪梨冬季（早晚偏冷乾燥）"
+        return "雪梨春季（氣候溫和偶爾有風）"
+
+    @staticmethod
+    def _weighted_choice(rows: List[sqlite3.Row]) -> Optional[sqlite3.Row]:
+        if not rows:
+            return None
+        weights = [max(1, int(r["weight"])) for r in rows]
+        return random.choices(rows, weights=weights, k=1)[0]
+
+    @staticmethod
+    def _tokenize_for_similarity(text: str) -> Counter:
+        cleaned = re.sub(r"\s+", "", (text or "").lower())
+        if not cleaned:
+            return Counter()
+        tokens: List[str] = []
+        tokens.extend(re.findall(r"[a-z0-9_]+", cleaned))
+        for ch in cleaned:
+            if "\u4e00" <= ch <= "\u9fff":
+                tokens.append(ch)
+        for i in range(len(cleaned) - 1):
+            pair = cleaned[i : i + 2]
+            if not re.fullmatch(r"[\W_]+", pair):
+                tokens.append(pair)
+        return Counter(tokens)
+
+    @classmethod
+    def _cosine_similarity(cls, query_text: str, doc_text: str) -> float:
+        q_vec = cls._tokenize_for_similarity(query_text)
+        d_vec = cls._tokenize_for_similarity(doc_text)
+        if not q_vec or not d_vec:
+            return 0.0
+        common = set(q_vec.keys()) & set(d_vec.keys())
+        dot = sum(q_vec[k] * d_vec[k] for k in common)
+        if dot <= 0:
+            return 0.0
+        q_norm = math.sqrt(sum(v * v for v in q_vec.values()))
+        d_norm = math.sqrt(sum(v * v for v in d_vec.values()))
+        if q_norm == 0 or d_norm == 0:
+            return 0.0
+        return dot / (q_norm * d_norm)
+
+    def _ensure_today_mainline(self, conn: sqlite3.Connection, dt: datetime.datetime) -> Dict[str, Any]:
+        today_str = dt.strftime("%Y-%m-%d")
+        row = dict(conn.execute("SELECT * FROM runtime_state WHERE id = 1").fetchone())
+
+        if row.get("mainline_date") != today_str or not row.get("mainline_key"):
+            is_wknd = 1 if dt.weekday() >= 5 else 0
+            candidates = conn.execute(
+                "SELECT * FROM daily_mainlines WHERE is_weekend = ?",
+                (is_wknd,),
+            ).fetchall()
+            chosen = self._weighted_choice(candidates)
+            if chosen:
+                chosen_dict = dict(chosen)
+                conn.execute(
+                    """
+                    UPDATE runtime_state
+                    SET mainline_date = ?, mainline_key = ?, mainline_title = ?,
+                        gi_cause = ?, gi_triggered_today = 0,
+                        mood = 'normal', mood_until = 0, recovery_until = 0,
+                        gi_status = 'normal', gi_until = 0,
+                        illness_status = 'normal', illness_until = 0,
+                        restroom_until = 0, pending_request_until = 0,
+                        mentioned_slots = '', done_actions_today = '',
+                        updated_at = ?
+                    WHERE id = 1
+                    """,
+                    (
+                        today_str,
+                        chosen_dict.get("mainline_key", ""),
+                        chosen_dict.get("title", "日常步調"),
+                        chosen_dict.get("gi_cause_hint", ""),
+                        dt.timestamp(),
+                    ),
+                )
+                row = dict(conn.execute("SELECT * FROM runtime_state WHERE id = 1").fetchone())
+
+        ml = conn.execute(
+            "SELECT * FROM daily_mainlines WHERE mainline_key = ?",
+            (row.get("mainline_key", ""),),
+        ).fetchone()
+        return {"state": row, "mainline": dict(ml) if ml else None}
+
+    def set_state(
+        self,
+        mood: Optional[str] = None,
+        mood_duration_sec: int = 2400,
+        recovery_sec: int = 0,
+        gi_status: Optional[str] = None,
+        gi_duration_sec: int = 2400,
+        illness_status: Optional[str] = None,
+        illness_duration_sec: int = 7200,
+        restroom_sec: int = 0,
+        gi_cause: Optional[str] = None,
+        pending_request_sec: int = 0,
+    ) -> None:
+        now = datetime.datetime.now(SYDNEY_TZ).timestamp()
+        with self._connect() as conn:
+            row = dict(conn.execute("SELECT * FROM runtime_state WHERE id = 1").fetchone())
+            new_mood = mood if mood is not None else row.get("mood", "normal")
+            new_mood_until = (now + mood_duration_sec) if mood is not None else float(row.get("mood_until") or 0)
+            new_recovery = (now + recovery_sec) if recovery_sec > 0 else float(row.get("recovery_until") or 0)
+
+            new_gi = gi_status if gi_status is not None else row.get("gi_status", "normal")
+            new_gi_until = (now + gi_duration_sec) if gi_status is not None else float(row.get("gi_until") or 0)
+            new_gi_triggered = 1 if gi_status == "upset" else int(row.get("gi_triggered_today") or 0)
+            new_cause = gi_cause if gi_cause is not None else row.get("gi_cause", "")
+
+            new_illness = illness_status if illness_status is not None else row.get("illness_status", "normal")
+            new_illness_until = (
+                (now + illness_duration_sec)
+                if illness_status is not None
+                else float(row.get("illness_until") or 0)
+            )
+
+            new_restroom_until = (now + restroom_sec) if restroom_sec > 0 else float(row.get("restroom_until") or 0)
+            new_pending = (
+                (now + pending_request_sec)
+                if pending_request_sec > 0
+                else float(row.get("pending_request_until") or 0)
+            )
+
+            conn.execute(
+                """
+                UPDATE runtime_state
+                SET mood = ?, mood_until = ?, recovery_until = ?,
+                    gi_status = ?, gi_until = ?, gi_triggered_today = ?, gi_cause = ?,
+                    illness_status = ?, illness_until = ?,
+                    restroom_until = ?, pending_request_until = ?, updated_at = ?
+                WHERE id = 1
+                """,
+                (
+                    new_mood,
+                    new_mood_until,
+                    new_recovery,
+                    new_gi,
+                    new_gi_until,
+                    new_gi_triggered,
+                    new_cause,
+                    new_illness,
+                    new_illness_until,
+                    new_restroom_until,
+                    new_pending,
+                    now,
+                ),
+            )
+
+    def clear_pending_request(self) -> None:
+        with self._connect() as conn:
+            conn.execute("UPDATE runtime_state SET pending_request_until = 0 WHERE id = 1")
+
+    def mark_slot_mentioned(self, slot: str) -> None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT mentioned_slots FROM runtime_state WHERE id = 1").fetchone()
+            raw_slots = row["mentioned_slots"] if row and row["mentioned_slots"] else ""
+            slots = [s for s in raw_slots.split(",") if s]
+            if slot not in slots:
+                slots.append(slot)
+                conn.execute(
+                    "UPDATE runtime_state SET mentioned_slots = ? WHERE id = 1",
+                    (",".join(slots),),
+                )
+
+    def mark_action_done(self, action_key: str) -> None:
+        """記錄今天已經做過的一般行為（去廁所與喝水不列入，允許重複）。"""
+        key = (action_key or "").strip()
+        if not key or key in ("restroom", "drink_water"):
+            return
+        with self._connect() as conn:
+            row = conn.execute("SELECT done_actions_today FROM runtime_state WHERE id = 1").fetchone()
+            raw_actions = row["done_actions_today"] if row and row["done_actions_today"] else ""
+            actions = [a for a in raw_actions.split(",") if a]
+            if key not in actions:
+                actions.append(key)
+                conn.execute(
+                    "UPDATE runtime_state SET done_actions_today = ? WHERE id = 1",
+                    (",".join(actions),),
+                )
+
+    def get_done_actions(self, now_dt: Optional[datetime.datetime] = None) -> Set[str]:
+        dt = now_dt or datetime.datetime.now(SYDNEY_TZ)
+        with self._connect() as conn:
+            self._ensure_today_mainline(conn, dt)
+            row = conn.execute("SELECT done_actions_today FROM runtime_state WHERE id = 1").fetchone()
+            raw_actions = row["done_actions_today"] if row and row["done_actions_today"] else ""
+            return {a for a in raw_actions.split(",") if a}
+
+    def touch_timestamps(self, nick: bool = False, reona: bool = False, proactive: bool = False) -> None:
+        now = datetime.datetime.now(SYDNEY_TZ).timestamp()
+        with self._connect() as conn:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(runtime_state)").fetchall()}
+            if nick and "last_nick_ts" in cols:
+                conn.execute("UPDATE runtime_state SET last_nick_ts = ? WHERE id = 1", (now,))
+            if reona and "last_reona_ts" in cols:
+                conn.execute("UPDATE runtime_state SET last_reona_ts = ? WHERE id = 1", (now,))
+            if proactive and "last_proactive_ts" in cols:
+                conn.execute("UPDATE runtime_state SET last_proactive_ts = ? WHERE id = 1", (now,))
+
+    def evaluate_causal_events(self, user_text: str = "", now_dt: Optional[datetime.datetime] = None) -> Optional[str]:
+        dt = now_dt or datetime.datetime.now(SYDNEY_TZ)
+        now = dt.timestamp()
+        slot = self._time_slot(dt)
+
+        with self._connect() as conn:
+            bundle = self._ensure_today_mainline(conn, dt)
+            state = bundle["state"]
+            ml = bundle["mainline"]
+            if not ml:
+                return None
+
+            txt = (user_text or "").strip()
+            pending_until = float(state.get("pending_request_until") or 0)
+
+            if txt and now < pending_until:
+                decline_kw = ("不要", "沒空", "不行", "改天", "沒辦法", "先忙", "算了", "晚點再說", "沒時間")
+                if any(k in txt for k in decline_kw):
+                    self.clear_pending_request()
+                    self.set_state(mood="normal", mood_duration_sec=3600, recovery_sec=5400)
+                    return "request_declined"
+
+            in_recovery = now < float(state.get("recovery_until") or 0)
+            gi_status = state.get("gi_status") or "normal"
+            mood_until = float(state.get("mood_until") or 0)
+            gi_triggered_today = int(state.get("gi_triggered_today") or 0)
+            restroom_until = float(state.get("restroom_until") or 0)
+
+            if txt and not in_recovery:
+                if any(k in txt for k in ("厲害", "好棒", "喜歡", "好看", "麻糬", "好吃", "辛苦了", "抱抱")):
+                    if gi_status == "normal" and now >= mood_until:
+                        self.set_state(mood="happy", mood_duration_sec=2700)
+                elif any(k in txt for k in ("喝冰", "冰咖啡", "吃辣", "熬夜", "別睡")):
+                    if gi_triggered_today == 0 and random.random() < 0.45:
+                        self.set_state(
+                            gi_status="upset",
+                            gi_duration_sec=3000,
+                            recovery_sec=5400,
+                            restroom_sec=random.randint(180, 320),
+                        )
+
+            gi_risk = float(ml.get("gi_risk") or 0.25)
+            if slot in ("afternoon", "evening") and gi_triggered_today == 0 and gi_status == "normal":
+                step_prob = gi_risk * 0.18
+                if random.random() < step_prob:
+                    self.set_state(
+                        gi_status="upset",
+                        gi_duration_sec=random.randint(2400, 4200),
+                        recovery_sec=5400,
+                        restroom_sec=random.randint(180, 360),
+                        gi_cause=ml.get("gi_cause_hint") or "",
+                    )
+
+            if gi_status == "upset" and now > restroom_until + 900:
+                if random.random() < 0.25:
+                    self.set_state(restroom_sec=random.randint(150, 300))
+
+        return None
+
+    def compute_snapshot(self, now_dt: Optional[datetime.datetime] = None) -> Dict[str, Any]:
+        dt = now_dt or datetime.datetime.now(SYDNEY_TZ)
+        now = dt.timestamp()
+        slot = self._time_slot(dt)
+        is_weekend = dt.weekday() >= 5
+        is_late_or_night = (dt.hour == 20 and dt.minute >= 30) or dt.hour >= 21 or dt.hour < 8
+
+        with self._connect() as conn:
+            bundle = self._ensure_today_mainline(conn, dt)
+            row = bundle["state"]
+            ml = bundle["mainline"]
+
+            phases = dict(DEFAULT_PHASES)
+            default_mood = "normal"
+
+            if ml:
+                raw_phases = ml.get("phases_json") or "{}"
+                try:
+                    parsed = json.loads(raw_phases)
+                    if isinstance(parsed, dict):
+                        for k, v in parsed.items():
+                            if isinstance(v, dict):
+                                phases[k] = {**DEFAULT_PHASES.get(k, DEFAULT_PHASES["afternoon"]), **v}
+                except Exception:
+                    pass
+                if ml.get("evening_mood") and slot in ("evening", "night"):
+                    default_mood = ml["evening_mood"]
+
+            p = phases.get(slot, phases["afternoon"])
+
+            in_recovery = now < float(row.get("recovery_until") or 0)
+            stored_mood = row.get("mood") or "normal"
+            mood_until = float(row.get("mood_until") or 0)
+            mood = stored_mood if now < mood_until else default_mood
+            if in_recovery and mood == "happy":
+                mood = "normal"
+
+            stored_gi = row.get("gi_status") or "normal"
+            gi_until = float(row.get("gi_until") or 0)
+            gi = stored_gi if now < gi_until else "normal"
+
+            stored_illness = row.get("illness_status") or "normal"
+            illness_until = float(row.get("illness_until") or 0)
+            illness = stored_illness if now < illness_until else "normal"
+
+            in_restroom = now < float(row.get("restroom_until") or 0)
+            is_unwell = (gi != "normal") or (illness != "normal") or (mood == "sick")
+
+            location = p["location"]
+            positions = p["positions"]
+            current_event = p["event"]
+            items = p["items"]
+
+            if is_late_or_night:
+                location = "房間床邊" if slot == "night" else "客廳沙發"
+                positions = (
+                    "Reona 靠在床頭；麻糬縮在床尾"
+                    if slot == "night"
+                    else "Reona 坐在沙發上；麻糬趴在旁邊"
+                )
+                current_event = "晚上待在家裡休息放空"
+                items = "溫開水、手機、薄毯"
+
+            if in_restroom:
+                location = "洗手間"
+                positions = "Reona 在廁所；麻糬在門外"
+                items = "手機、衛生紙"
+            elif is_unwell:
+                location = "客廳沙發"
+                positions = "Reona 蜷在沙發上；麻糬趴在旁邊"
+                items = "熱水袋、溫開水"
+
+            raw_slots = row.get("mentioned_slots") or ""
+            mentioned_slots = [s for s in raw_slots.split(",") if s]
+            already_mentioned = slot in mentioned_slots
+
+            raw_done = row.get("done_actions_today") or ""
+            done_actions = [a for a in raw_done.split(",") if a]
+
+            if mood != stored_mood or gi != stored_gi or illness != stored_illness:
+                conn.execute(
+                    "UPDATE runtime_state SET mood = ?, gi_status = ?, illness_status = ?, updated_at = ? WHERE id = 1",
+                    (mood, gi, illness, now),
+                )
+
+        if in_restroom:
+            mode = "restroom"
+            min_msgs, max_msgs = 1, 1
+            max_chars = 18
+            delay_range = (1.5, 3.5)
+        elif illness in ("heavy_cold", "flu"):
+            mode = "heavy_cold"
+            min_msgs, max_msgs = 1, 2
+            max_chars = 28
+            delay_range = (2.0, 4.0)
+        elif illness == "cold":
+            mode = "cold"
+            min_msgs, max_msgs = 1, 2
+            max_chars = 26
+            delay_range = (1.8, 3.8)
+        elif illness == "period":
+            mode = "period"
+            min_msgs, max_msgs = 1, 2
+            max_chars = 28
+            delay_range = (1.8, 3.8)
+        elif gi != "normal" or mood == "sick":
+            mode = "sick"
+            min_msgs, max_msgs = 1, 2
+            max_chars = 26
+            delay_range = (1.8, 3.8)
+        elif mood == "tired":
+            mode = "tired"
+            min_msgs, max_msgs = 1, 2
+            max_chars = 25
+            delay_range = (1.8, 3.5)
+        elif mood == "happy":
+            mode = "happy"
+            min_msgs, max_msgs = 1, 3
+            max_chars = 28
+            delay_range = (1.5, 3.0)
+        else:
+            mode = "normal"
+            min_msgs, max_msgs = 1, 2
+            max_chars = 25
+            delay_range = (1.5, 3.5)
+
+        return {
+            "sydney_time": dt.strftime("%Y-%m-%d %H:%M"),
+            "season": self._season_hint(dt),
+            "time_slot": slot,
+            "is_weekend": is_weekend,
+            "mainline_title": row.get("mainline_title") or "日常步調",
+            "location": location,
+            "positions": positions,
+            "current_event": current_event,
+            "items": items,
+            "already_mentioned_slot": already_mentioned,
+            "done_actions_today": done_actions,
+            "mood": mood,
+            "in_recovery": in_recovery,
+            "gi_status": gi,
+            "illness_status": illness,
+            "gi_cause": (row.get("gi_cause") or "") if gi != "normal" else "",
+            "in_restroom": in_restroom,
+            "mode": mode,
+            "min_msgs": min_msgs,
+            "max_msgs": max_msgs,
+            "max_chars": max_chars,
+            "delay_range": delay_range,
+            "last_nick_ts": float(row.get("last_nick_ts") or 0),
+            "last_reona_ts": float(row.get("last_reona_ts") or 0),
+            "last_proactive_ts": float(row.get("last_proactive_ts") or 0),
+        }
+
+    def pick_canned_line(self, category: str, sub_state: str = "any") -> Optional[str]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM canned_lines
+                WHERE category = ? AND (sub_state = ? OR sub_state = 'any')
+                """,
+                (category, sub_state),
+            ).fetchall()
+            if not rows:
+                rows = conn.execute(
+                    "SELECT * FROM canned_lines WHERE category = ?",
+                    (category,),
+                ).fetchall()
+        chosen = self._weighted_choice(rows)
+        return chosen["text"] if chosen else None
+
+    def retrieve_rag_clue(
+        self,
+        snapshot: Dict[str, Any],
+        user_text: str = "",
+        threshold: Optional[float] = None,
+    ) -> Dict[str, Optional[str]]:
+        mood = snapshot["mood"]
+        slot = snapshot["time_slot"]
+        weekend_flag = 1 if snapshot["is_weekend"] else 0
+        is_unwell = (
+            snapshot.get("gi_status", "normal") != "normal"
+            or snapshot.get("illness_status", "normal") != "normal"
+            or mood in ("sick", "period", "cold", "heavy_cold")
+        )
+        score_cut = self.SIMILARITY_THRESHOLD if threshold is None else threshold
+
+        allowed_polarities = ("neutral", "good")
+        if mood in ("tired", "sick", "period", "cold", "heavy_cold") or snapshot.get("gi_status", "normal") != "normal":
+            allowed_polarities = ("neutral", "good", "bad")
+
+        placeholders = ",".join("?" for _ in allowed_polarities)
+
+        with self._connect() as conn:
+            snippet_rows = conn.execute(
+                f"""
+                SELECT * FROM life_snippets
+                WHERE polarity IN ({placeholders})
+                  AND (mood_fit = ? OR mood_fit = 'any')
+                  AND (time_slot = ? OR time_slot = 'any')
+                  AND (is_weekend = ? OR is_weekend = -1)
+                """,
+                (*allowed_polarities, mood, slot, weekend_flag),
+            ).fetchall()
+
+            candidates = [dict(r) for r in snippet_rows]
+            if is_unwell:
+                filtered = [c for c in candidates if c.get("topic") != "drawing_habit"]
+                if filtered:
+                    candidates = filtered
+
+            chosen_snippet: Optional[str] = None
+            q = (user_text or "").strip()
+            if q and candidates:
+                scored: List[Tuple[float, Dict[str, Any]]] = []
+                for c in candidates:
+                    doc = f"{c.get('topic', '')} {c.get('content', '')}"
+                    sim = self._cosine_similarity(q, doc)
+                    if sim >= score_cut:
+                        scored.append((sim, c))
+                if scored:
+                    scored.sort(key=lambda item: (item[0], int(item[1].get("weight") or 10)), reverse=True)
+                    top_pool = [item[1] for item in scored[:2]]
+                    picked = random.choice(top_pool)
+                    chosen_snippet = picked["content"]
+
+            mem_row = conn.execute(
+                "SELECT * FROM daily_memories ORDER BY importance DESC, id DESC LIMIT 1"
+            ).fetchone()
+
+            arc_row = None
+            if not is_unwell:
+                arc_row = conn.execute(
+                    "SELECT * FROM story_arcs WHERE is_active = 1 ORDER BY id ASC LIMIT 1"
+                ).fetchone()
+
+        arc_clue = None
+        if arc_row:
+            steps = json.loads(arc_row["steps_json"])
+            idx = min(max(0, int(arc_row["current_step"])), len(steps) - 1)
+            if steps:
+                arc_clue = f"{arc_row['title']}：{steps[idx]}"
+
+        return {
+            "life_snippet": chosen_snippet,
+            "daily_memory": mem_row["content"] if mem_row else None,
+            "story_arc": arc_clue,
+        }
+
+    def add_daily_memory(self, content: str, category: str = "life", importance: int = 6, keep_max: int = 12) -> None:
+        now_dt = datetime.datetime.now(SYDNEY_TZ)
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO daily_memories (mem_date, category, content, importance, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (now_dt.strftime("%Y-%m-%d"), category, content.strip(), importance, now_dt.timestamp()),
+            )
+            conn.execute(
+                """
+                DELETE FROM daily_memories
+                WHERE id NOT IN (
+                    SELECT id FROM daily_memories
+                    ORDER BY importance DESC, id DESC
+                    LIMIT ?
+                )
+                """,
+                (keep_max,),
+            )
+
+    def upsert_nick_note(self, topic: str, content: str) -> None:
+        now = datetime.datetime.now(SYDNEY_TZ).timestamp()
+        with self._connect() as conn:
+            existing = conn.execute("SELECT id FROM nick_notes WHERE topic = ?", (topic,)).fetchone()
+            if existing:
+                conn.execute(
+                    "UPDATE nick_notes SET content = ?, updated_at = ? WHERE id = ?",
+                    (content.strip(), now, existing["id"]),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO nick_notes (topic, content, updated_at) VALUES (?, ?, ?)",
+                    (topic.strip(), content.strip(), now),
+                )
