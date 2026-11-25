@@ -137,6 +137,10 @@ class ReonaBot(discord.Client):
         self.http_session: Optional[aiohttp.ClientSession] = None
         self._session_started = False
 
+    def _touch(self, nick: bool = False, reona: bool = False, proactive: bool = False) -> None:
+        if hasattr(self.db, "touch_timestamps"):
+            self.db.touch_timestamps(nick=nick, reona=reona, proactive=proactive)
+
     async def setup_hook(self) -> None:
         self.http_session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20))
 
@@ -203,7 +207,7 @@ class ReonaBot(discord.Client):
                 typing_sec = min(2.8, max(0.7, len(line) * 0.16))
                 await asyncio.sleep(typing_sec)
             await channel.send(line)
-        self.db.touch_timestamps(reona=True)
+        self._touch(reona=True)
 
     async def maybe_send_proactive(self, channel: discord.abc.Messageable) -> bool:
         """圍繞今日主軸的背景主動發訊（嚴格控管深夜勿擾與冷卻）。"""
@@ -215,7 +219,11 @@ class ReonaBot(discord.Client):
         snap = self.db.compute_snapshot(now_dt)
         now_ts = now_dt.timestamp()
 
-        last_activity = max(snap["last_nick_ts"], snap["last_reona_ts"], snap["last_proactive_ts"])
+        last_activity = max(
+            float(snap.get("last_nick_ts") or 0),
+            float(snap.get("last_reona_ts") or 0),
+            float(snap.get("last_proactive_ts") or 0),
+        )
         if last_activity > 0 and (now_ts - last_activity) < 10800:
             return False
 
@@ -236,7 +244,7 @@ class ReonaBot(discord.Client):
             lines = [fallback]
 
         await self._send_burst(channel, lines, snap["delay_range"])
-        self.db.touch_timestamps(proactive=True)
+        self._touch(proactive=True)
         self.db.mark_slot_mentioned(snap["time_slot"])
 
         if any(k in "".join(lines) for k in ("陪我", "有空", "要嗎", "要不要", "在忙嗎", "聊聊")):
@@ -252,10 +260,10 @@ class ReonaBot(discord.Client):
                     return
                 age = (datetime.datetime.now(datetime.timezone.utc) - msg.created_at).total_seconds()
                 if 0 <= age <= 300:
-                    print(f"Catching up missed message from Nick ({int(age)}s ago)...")
+                    print(f"Catching up missed message from Nick ({int(age)}s ago)...", flush=True)
                     await self._handle_incoming_message(msg)
         except Exception as e:
-            print(f"Catch-up check skipped: {e}")
+            print(f"Catch-up check skipped: {e}", flush=True)
 
     async def _github_session_loop(self) -> None:
         """GitHub Actions 28 分鐘班次主迴圈：補接漏訊 → 檢查主動發訊 → 線上監聽 → 到點收工存檔。"""
@@ -268,13 +276,13 @@ class ReonaBot(discord.Client):
             await self.maybe_send_proactive(channel)
 
         if PROACTIVE_ONLY or RUN_SECONDS <= 0:
-            print("Proactive-only pass complete, closing bot...")
+            print("Proactive-only pass complete, closing bot...", flush=True)
             await self.close()
             return
 
-        print(f"Listening live for {RUN_SECONDS}s before shift handoff...")
+        print(f"Listening live for {RUN_SECONDS}s before shift handoff...", flush=True)
         await asyncio.sleep(RUN_SECONDS)
-        print("Shift finished, closing bot to persist DB...")
+        print("Shift finished, closing bot to persist DB...", flush=True)
         await self.close()
 
     async def on_ready(self) -> None:
@@ -285,7 +293,7 @@ class ReonaBot(discord.Client):
 
     async def _handle_incoming_message(self, message: discord.Message) -> None:
         now_dt = datetime.datetime.now(SYDNEY_TZ)
-        self.db.touch_timestamps(nick=True)
+        self._touch(nick=True)
 
         user_text = (message.content or "").strip()
         is_voice = bool(message.flags.voice) or any(
