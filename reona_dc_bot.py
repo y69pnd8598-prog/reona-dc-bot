@@ -35,6 +35,21 @@ TW_REPLACEMENTS = {
     "靈感爆棚": "很有靈感",
 }
 
+PROMPT_LEAK_KEYWORDS = (
+    "有問必答",
+    "剛說：",
+    "Nick 剛說",
+    "Nick剛說",
+    "背景狀態",
+    "說話禁令",
+    "常識鐵律",
+    "記憶切片",
+    "記憶底色",
+    "一般事件",
+    "直接輸出繁體中文",
+    "最近對話",
+)
+
 ENGLISH_COT_PREFIXES = (
     "we need to",
     "the user",
@@ -107,40 +122,22 @@ def _looks_like_english_cot(text: str) -> bool:
     return False
 
 
-def _rescue_cjk_from_reasoning(reasoning: str) -> str:
-    if not reasoning:
-        return ""
-    quoted = re.findall(r"[\"「『]([^\"」』\n]{1,35})[\"」』]", reasoning)
-    for cand in reversed(quoted):
-        if re.search(r"[\u4e00-\u9fff]", cand) and not _looks_like_english_cot(cand):
-            return cand.strip()
-    for line in reversed([ln.strip() for ln in reasoning.splitlines() if ln.strip()]):
-        cjk_chunks = re.findall(r"[\u4e00-\u9fff，,！!？\?～~…⋯]{2,30}", line)
-        if cjk_chunks:
-            return cjk_chunks[-1].strip()
-    return ""
+def _has_prompt_leak(text: str) -> bool:
+    return any(kw in text for kw in PROMPT_LEAK_KEYWORDS)
 
 
 def _extract_groq_text(msg: Dict) -> str:
     content = msg.get("content")
     if isinstance(content, str) and content.strip():
-        txt = content.strip()
-        if not _looks_like_english_cot(txt):
-            return txt
-        kept = [
-            ln.strip()
-            for ln in re.split(r"[\r\n]+", txt)
-            if ln.strip() and not _looks_like_english_cot(ln)
-        ]
-        if kept:
+        txt = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+        if not txt or _looks_like_english_cot(txt) or _has_prompt_leak(txt):
+            kept = [
+                ln.strip()
+                for ln in re.split(r"[\r\n]+", txt)
+                if ln.strip() and not _looks_like_english_cot(ln) and not _has_prompt_leak(ln)
+            ]
             return "\n".join(kept)
-
-    for field in ("reasoning_content", "reasoning", "text"):
-        val = msg.get(field)
-        if isinstance(val, str) and val.strip():
-            rescued = _rescue_cjk_from_reasoning(val)
-            if rescued:
-                return rescued
+        return txt
     return ""
 
 
@@ -157,7 +154,7 @@ def _trim_at_boundary(chunk: str, max_chars: int) -> str:
 
 
 def clean_and_split_lines(raw: str, max_msgs: int, max_chars: int, user_text: str = "") -> List[str]:
-    """清理模型輸出、修正代名詞與非台灣詞彙，並嚴格限制則數與字數。"""
+    """清理模型輸出、過濾 Prompt 外洩與學舌反問，並限制則數與字數。"""
     if not raw or _looks_like_english_cot(raw):
         return []
 
@@ -167,7 +164,6 @@ def clean_and_split_lines(raw: str, max_msgs: int, max_chars: int, user_text: st
     for bad_word, tw_word in TW_REPLACEMENTS.items():
         text = text.replace(bad_word, tw_word)
 
-    # 修正麻糬誤用「他」的情況
     if "麻糬" in text:
         text = re.sub(r"(麻糬[^，。！？\n]{0,12})他", r"\1牠", text)
 
@@ -176,14 +172,13 @@ def clean_and_split_lines(raw: str, max_msgs: int, max_chars: int, user_text: st
     norm_user = re.sub(r"[？\?！!。，,\s]+", "", user_text or "")
 
     for line in raw_lines:
-        if _looks_like_english_cot(line):
+        if _looks_like_english_cot(line) or _has_prompt_leak(line):
             continue
         line = re.sub(r"^[\-\*\d\.\)\s]+", "", line)
         line = line.rstrip("。、；：\"'」』")
         if not line:
             continue
 
-        # 過濾原封不動學舌反問（例如對方問「為什麼」，直接回「為什麼」）
         norm_line = re.sub(r"[？\?！!。，,\s]+", "", line)
         if norm_user and norm_line == norm_user:
             continue
@@ -193,7 +188,7 @@ def clean_and_split_lines(raw: str, max_msgs: int, max_chars: int, user_text: st
             if len(parts) <= 1:
                 parts = [p.strip() for p in re.split(r"[，,]+", line) if p.strip()]
             for p in parts:
-                if _looks_like_english_cot(p):
+                if _looks_like_english_cot(p) or _has_prompt_leak(p):
                     continue
                 trimmed = _trim_at_boundary(p, max_chars)
                 if trimmed:
@@ -267,7 +262,7 @@ def build_system_prompt(
     proactive_note = (
         "這是你忙到一個段落或想念他時主動傳訊息給 Nick，圍繞當下狀態自然開頭，不要生硬問『在嗎』。"
         if is_proactive
-        else "有問必答：Nick 問問題或追問『為什麼』時，第一句務必直接回答原因或答案，嚴禁學舌反問；沒問工作就不要主動提工作或案子。"
+        else "正面回答問題：Nick 問問題或追問細節時，直接把完整意思講清楚，嚴禁只回『就是...』或單獨兩個字敷衍，也嚴禁學舌反問；沒問工作就不要主動提工作或案子。"
     )
 
     repeat_guard = (
@@ -291,16 +286,16 @@ def build_system_prompt(
         "因此養成對外人獨立防備、有事自己扛；唯獨在信任的 Nick 面前確認不會被嫌煩後才卸下心防，"
         "平時冷靜幽默會適度吐槽，身體不舒服或累時則綿綿訴苦、黏人討拍。\n"
         "自然對話與常識鐵律：\n"
-        "1. 像真人傳訊息一樣就事論事、自然接話，絕對不要為了湊字數每句硬塞『台北』、『麻糬』或生硬湊在一起比較。\n"
-        "2. 食物與生活描述必須符合常識與人設（你腸胃弱不太吃甜膩食物；法式長棍是外脆內軟有麥香、有嚼勁，不是甜食，也不像夜市）。\n"
-        "3. 感情表達含蓄自然，嚴禁肉麻油膩台詞（例如『想你想到手酸酸的』這類過度誇張的情話）。\n"
+        "1. 像真人傳訊息一樣把話講完整、自然接話（例如被問『畫面是什麼』就具體形容畫面，不要只回『就是...』或單詞），也不要每句硬塞『台北』、『麻糬』。\n"
+        "2. 食物與生活描述必須符合常識與人設（你腸胃弱不太吃甜膩食物；法式長棍是外脆內軟有麥香、有嚼勁，不是甜食）。\n"
+        "3. 感情表達含蓄自然，嚴禁肉麻油膩台詞。\n"
         "4. 遵守雪梨作息與店家營業時間：晚間與深夜只待在家裡休息，絕不在半夜出門買顏料、逛超市或喝濃咖啡。\n"
-        "說話禁令：直接輸出繁體中文短句，嚴禁英文思考過程；用道地台灣人打字口語"
+        "說話禁令：直接輸出繁體中文短句，嚴禁英文思考過程、嚴禁復誦系統規則或『剛說：』；用道地台灣人打字口語"
         "（可用喔、啦、欸、嘛、齁，嚴禁翻譯腔或 AI 客服腔，不加句號），"
-        "總共只寫 1～2 則短句，每則用換行分隔，嚴禁一次塞三四行。\n"
+        "總共只寫 1～2 則完整短句，每則用換行分隔，嚴禁一次塞三四行。\n"
         f"{tone_rule}\n"
         f"{proactive_note}{repeat_guard}\n\n"
-        "【當下背景狀態（僅作情境參考，沒問到不用硬提）】\n"
+        "【當下情境參考（沒問到不用硬提）】\n"
         f"- 時間與季節：{snapshot['sydney_time']}｜{snapshot['season']}\n"
         f"- 地點與狀態：{snapshot['location']}（{snapshot['positions']}）\n"
         f"- 身邊物品：{snapshot['items']}\n"
@@ -353,7 +348,7 @@ class ReonaBot(discord.Client):
         groq_url = _groq_endpoint()
         keys = list(GROQ_API_KEYS)
         random.shuffle(keys)
-        effective_max_tokens = max(max_tokens, 200)
+        effective_max_tokens = max(max_tokens, 512)
 
         for idx, key in enumerate(keys):
             try:
@@ -394,7 +389,7 @@ class ReonaBot(discord.Client):
                     json={
                         "systemInstruction": {"parts": [{"text": system_prompt}]},
                         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-                        "generationConfig": {"temperature": 0.68, "maxOutputTokens": max_tokens},
+                        "generationConfig": {"temperature": 0.68, "maxOutputTokens": 300},
                     },
                 ) as resp:
                     if resp.status == 200:
@@ -443,11 +438,10 @@ class ReonaBot(discord.Client):
 
         clues = self.db.retrieve_rag_clue(snap, user_text="")
         sys_prompt = build_system_prompt(snap, clues, is_proactive=True, allow_work=False)
-        max_tokens = 110 if snap["mode"] == "happy" else 95
         raw = await self._call_llm_once(
             sys_prompt,
-            "請依當下狀態自然主動發 1～2 則精簡短句給 Nick。",
-            max_tokens=max_tokens,
+            "請依當下狀態自然主動發 1～2 則完整精簡短句給 Nick。",
+            max_tokens=512,
         )
         lines = clean_and_split_lines(raw or "", snap["max_msgs"], snap["max_chars"])
         if not lines:
@@ -558,13 +552,12 @@ class ReonaBot(discord.Client):
         history_lines.reverse()
         context_block = "\n".join(history_lines[-4:])
         user_prompt = (
-            f"【最近對話】\n{context_block}\n\nNick 剛說：{user_text}"
+            f"【最近對話】\n{context_block}\n\n請直接以 Reona 身分自然回覆這句話：{user_text}"
             if context_block
-            else f"Nick 剛說：{user_text}"
+            else f"請直接以 Reona 身分自然回覆這句話：{user_text}"
         )
 
-        max_tokens = 110 if snap["mode"] == "happy" else 95
-        raw = await self._call_llm_once(sys_prompt, user_prompt, max_tokens=max_tokens)
+        raw = await self._call_llm_once(sys_prompt, user_prompt, max_tokens=512)
         lines = clean_and_split_lines(raw or "", snap["max_msgs"], snap["max_chars"], user_text=user_text)
 
         if not lines:
