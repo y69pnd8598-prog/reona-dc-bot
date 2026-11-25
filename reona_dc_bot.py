@@ -17,23 +17,31 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 PROACTIVE_ONLY = os.getenv("PROACTIVE_ONLY", "0") == "1"
 RUN_SECONDS = int(os.getenv("RUN_SECONDS", "1680"))
 
-# 攔截非台灣慣用語（一旦出現即判定污染並改走台灣短句保底）
-NON_TW_WORDS = ("搞定", "視頻", "一會兒", "挺好的", "小夥伴", "靠譜", "啥玩意", "咋了", "咱們")
+# 常見大陸用語自動替換為台灣用語，避免整句被丟掉
+TW_REPLACEMENTS = {
+    "搞定": "弄好",
+    "視頻": "影片",
+    "一會兒": "一下",
+    "挺好的": "還不錯",
+    "小夥伴": "朋友",
+    "靠譜": "可靠",
+    "咱們": "我們",
+}
 
 LOW_EFFORT_INPUTS = {"?", "？", "嗯", "嗯嗯", "喔", "哦", "好", "好喔", "哈", "哈哈", "哈哈哈", "⋯", "..."}
 VIDEO_KEYWORDS = ("視訊", "開鏡頭", "打給妳", "打給你", "facetime", "video call", "開視訊")
 
 
 def clean_and_split_lines(raw: str, max_msgs: int, max_chars: int) -> List[str]:
-    """清理模型輸出、過濾非台灣詞彙，並硬控管連發則數與每則字數上限。"""
+    """清理模型輸出、替換非台灣詞彙，並硬控管連發則數與每則字數上限。"""
     if not raw:
         return []
 
     text = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
     text = text.replace("```", "").strip()
 
-    if any(w in text for w in NON_TW_WORDS):
-        return []
+    for bad_word, tw_word in TW_REPLACEMENTS.items():
+        text = text.replace(bad_word, tw_word)
 
     raw_lines = [line.strip() for line in re.split(r"[\r\n]+", text) if line.strip()]
     cleaned: List[str] = []
@@ -47,10 +55,7 @@ def clean_and_split_lines(raw: str, max_msgs: int, max_chars: int) -> List[str]:
         if len(line) > max_chars:
             parts = [p.strip() for p in re.split(r"[，,！!？\?]+", line) if p.strip()]
             for p in parts:
-                if len(p) <= max_chars:
-                    cleaned.append(p)
-                else:
-                    cleaned.append(p[:max_chars])
+                cleaned.append(p[:max_chars])
                 if len(cleaned) >= max_msgs:
                     break
         else:
@@ -112,7 +117,7 @@ def build_system_prompt(snapshot: Dict, clues: Dict, is_proactive: bool = False)
         "你是 Reona，20多歲台北長大、現居雪梨的獨立插畫師，養一隻貓叫麻糬。\n"
         "性格底色：台北中產各自忙碌家庭長大，從小早熟獨立不愛麻煩人、心思細膩易緊張（一忙或吃冰就容易腹痛腹瀉）；"
         "平時有自己的生活步調與邊界，只有在信任的 Nick 面前才會在累或不適時展現成熟依賴。\n"
-        "說話規則：使用道地台灣打字口語（可用喔、啦、欸、嘛，不刻意裝可愛、不加句號、禁用搞定/視頻/一會兒/挺好的/咱們），"
+        "說話規則：使用道地台灣打字口語（可用喔、啦、欸、嘛，不刻意裝可愛、不加句號），"
         "每則短句用換行分隔，絕不寫長篇段落。\n"
         f"{tone_rule}\n"
         f"{proactive_note}{repeat_guard}\n\n"
@@ -150,14 +155,18 @@ class ReonaBot(discord.Client):
         await super().close()
 
     async def _call_llm_once(self, system_prompt: str, user_prompt: str, max_tokens: int) -> Optional[str]:
-        """省 Token 單次呼叫：優先 Groq 多 Key 輪替，失敗才走 Gemini 備援。"""
+        """省 Token 單次呼叫：優先 Groq 多 Key 輪替，失敗才走 Gemini 備援（印出錯誤原因方便排查）。"""
         if not self.http_session:
+            return None
+
+        if not GROQ_API_KEYS and not GEMINI_API_KEY:
+            print("[ERROR] Both GROQ_API_KEYS and GEMINI_API_KEY are empty!", flush=True)
             return None
 
         keys = list(GROQ_API_KEYS)
         random.shuffle(keys)
 
-        for key in keys:
+        for idx, key in enumerate(keys):
             try:
                 async with self.http_session.post(
                     "[https://api.groq.com/openai/v1/chat/completions](https://api.groq.com/openai/v1/chat/completions)",
@@ -174,8 +183,13 @@ class ReonaBot(discord.Client):
                 ) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        return data["choices"][0]["message"]["content"]
-            except Exception:
+                        content = data["choices"][0]["message"]["content"]
+                        print(f"[LLM Groq OK] raw={content!r}", flush=True)
+                        return content
+                    err_txt = await resp.text()
+                    print(f"[LLM Groq #{idx} HTTP {resp.status}] {err_txt[:180]}", flush=True)
+            except Exception as e:
+                print(f"[LLM Groq #{idx} Exception] {e}", flush=True)
                 continue
 
         if GEMINI_API_KEY:
@@ -192,9 +206,13 @@ class ReonaBot(discord.Client):
                 async with self.http_session.post(url, json=payload) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        return data["candidates"][0]["content"]["parts"][0]["text"]
-            except Exception:
-                pass
+                        content = data["candidates"][0]["content"]["parts"][0]["text"]
+                        print(f"[LLM Gemini OK] raw={content!r}", flush=True)
+                        return content
+                    err_txt = await resp.text()
+                    print(f"[LLM Gemini HTTP {resp.status}] {err_txt[:180]}", flush=True)
+            except Exception as e:
+                print(f"[LLM Gemini Exception] {e}", flush=True)
 
         return None
 
@@ -232,7 +250,7 @@ class ReonaBot(discord.Client):
 
         clues = self.db.retrieve_rag_clue(snap)
         sys_prompt = build_system_prompt(snap, clues, is_proactive=True)
-        max_tokens = 85 if snap["mode"] == "happy" else 55
+        max_tokens = 120 if snap["mode"] == "happy" else 90
         raw = await self._call_llm_once(
             sys_prompt,
             "請依當下六維狀態自然主動發一組短句給 Nick。",
@@ -286,7 +304,10 @@ class ReonaBot(discord.Client):
         await self.close()
 
     async def on_ready(self) -> None:
-        print(f"Reona online as {self.user}", flush=True)
+        print(
+            f"Reona online as {self.user} | Groq keys={len(GROQ_API_KEYS)} | Gemini={'YES' if GEMINI_API_KEY else 'NO'}",
+            flush=True,
+        )
         if not self._session_started:
             self._session_started = True
             asyncio.create_task(self._github_session_loop())
@@ -351,7 +372,7 @@ class ReonaBot(discord.Client):
             else f"Nick 剛說：{user_text}"
         )
 
-        max_tokens = 90 if snap["mode"] == "happy" else 60
+        max_tokens = 130 if snap["mode"] == "happy" else 95
         raw = await self._call_llm_once(sys_prompt, user_prompt, max_tokens=max_tokens)
         lines = clean_and_split_lines(raw or "", snap["max_msgs"], snap["max_chars"])
 
