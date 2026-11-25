@@ -151,6 +151,7 @@ class ReonaBot(discord.Client):
         self.db = db
         self.http_session: Optional[aiohttp.ClientSession] = None
         self._session_started = False
+        self._gemini_quota_exhausted = False
 
     def _touch(self, nick: bool = False, reona: bool = False, proactive: bool = False) -> None:
         if hasattr(self.db, "touch_timestamps"):
@@ -168,8 +169,8 @@ class ReonaBot(discord.Client):
         if not self.http_session:
             return None
 
-        if not GROQ_API_KEYS and not GEMINI_API_KEY:
-            print("[ERROR] Both GROQ_API_KEYS and GEMINI_API_KEY are empty!", flush=True)
+        if not GROQ_API_KEYS and (not GEMINI_API_KEY or self._gemini_quota_exhausted):
+            print("[ERROR] No available LLM API keys or Gemini quota exhausted.", flush=True)
             return None
 
         groq_url = _groq_endpoint()
@@ -202,28 +203,29 @@ class ReonaBot(discord.Client):
                 print(f"[LLM Groq #{idx} Exception] {e}", flush=True)
                 continue
 
-        if GEMINI_API_KEY:
-            for model_name in ("gemini-3.8-flash", "gemini-3.8-flash-lite"):
-                url = _gemini_endpoint(model_name)
-                try:
-                    async with self.http_session.post(
-                        url,
-                        params={"key": GEMINI_API_KEY},
-                        json={
-                            "systemInstruction": {"parts": [{"text": system_prompt}]},
-                            "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-                            "generationConfig": {"temperature": 0.72, "maxOutputTokens": max_tokens},
-                        },
-                    ) as resp:
-                        if resp.status == 200:
-                            data = await resp.json()
-                            content = data["candidates"][0]["content"]["parts"][0]["text"]
-                            print(f"[LLM {model_name} OK] raw={content!r}", flush=True)
-                            return content
-                        err_txt = await resp.text()
-                        print(f"[LLM {model_name} HTTP {resp.status}] {err_txt[:180]}", flush=True)
-                except Exception as e:
-                    print(f"[LLM {model_name} Exception] {e}", flush=True)
+        if GEMINI_API_KEY and not self._gemini_quota_exhausted:
+            url = _gemini_endpoint("gemini-3.8-flash")
+            try:
+                async with self.http_session.post(
+                    url,
+                    params={"key": GEMINI_API_KEY},
+                    json={
+                        "systemInstruction": {"parts": [{"text": system_prompt}]},
+                        "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+                        "generationConfig": {"temperature": 0.72, "maxOutputTokens": max_tokens},
+                    },
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        content = data["candidates"][0]["content"]["parts"][0]["text"]
+                        print(f"[LLM gemini-3.8-flash OK] raw={content!r}", flush=True)
+                        return content
+                    err_txt = await resp.text()
+                    print(f"[LLM gemini-3.8-flash HTTP {resp.status}] {err_txt[:180]}", flush=True)
+                    if resp.status == 429:
+                        self._gemini_quota_exhausted = True
+            except Exception as e:
+                print(f"[LLM gemini-3.8-flash Exception] {e}", flush=True)
 
         return None
 
