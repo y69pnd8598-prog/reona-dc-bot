@@ -11,8 +11,22 @@ import discord
 
 from reona_bg_db import SYDNEY_TZ, ReonaBGDB
 
+def _env_int(name: str, default: int, minimum: Optional[int] = None) -> int:
+    """Read an integer environment variable without crashing on bad configuration."""
+    raw = (os.getenv(name) or "").strip()
+    try:
+        value = int(raw) if raw else default
+    except (TypeError, ValueError):
+        print(f"[CONFIG] Invalid {name}={raw!r}; using {default}.", flush=True)
+        value = default
+    if minimum is not None and value < minimum:
+        print(f"[CONFIG] {name} must be >= {minimum}; using {default}.", flush=True)
+        value = default
+    return value
+
+
 DISCORD_TOKEN = (os.getenv("DISCORD_TOKEN") or os.getenv("DISCORD_BOT_TOKEN") or "").strip()
-TARGET_CHANNEL_ID = int((os.getenv("TARGET_CHANNEL_ID") or "0").strip() or "0")
+TARGET_CHANNEL_ID = _env_int("TARGET_CHANNEL_ID", 0, minimum=0)
 
 raw_groq = os.getenv("GROQ_API_KEYS") or os.getenv("GROQ_API_KEY") or ""
 GROQ_API_KEYS = [k.strip() for k in raw_groq.split(",") if k.strip()]
@@ -20,7 +34,7 @@ GROQ_MODEL = (os.getenv("GROQ_MODEL") or "llama-3.3-70b-versatile").strip()
 GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip()
 
 PROACTIVE_ONLY = (os.getenv("PROACTIVE_ONLY") or "0").strip() == "1"
-RUN_SECONDS = int((os.getenv("RUN_SECONDS") or "1680").strip() or "1680")
+RUN_SECONDS = _env_int("RUN_SECONDS", 1680)
 
 TW_REPLACEMENTS = {
     "搞定": "弄好",
@@ -70,13 +84,9 @@ ENGLISH_COT_PREFIXES = (
 )
 
 COT_JUNK_PATTERNS = (
-    r"\bcount\s+characters?\b",
-    r"\bwords?\s+or\s+less\b",
-    r"\bcharacters?\b",
-    r"\bpunctuation\b",
-    r"\bignore\b",
-    r"\bsentences?\b",
-    r"\bcolloquial\b",
+    r"\bcount\s+(?:the\s+)?characters?\b",
+    r"\b(?:write|respond)\s+in\s+\d+\s+sentences?\b",
+    r"\b(?:output|answer)\s+in\s+traditional\s+chinese\b",
     r"\bcount:\s*$",
 )
 
@@ -85,12 +95,14 @@ VIDEO_KEYWORDS = ("視訊", "開鏡頭", "打給妳", "打給你", "facetime", "
 WORK_KEYWORDS = ("工作", "畫", "插畫", "案子", "稿", "設計", "客戶", "忙什麼", "在忙", "顏料")
 
 ACTION_KEYWORDS: Dict[str, tuple] = {
-    "eat_meal": ("吃飯", "吃飽", "吃完", "晚餐", "午餐", "早餐", "宵夜"),
-    "shower": ("洗澡", "洗完澡", "沖澡"),
-    "grocery": ("採買", "買菜", "超市", "補貨"),
-    "groom_mochi": ("梳毛", "剪指甲", "幫麻糬"),
-    "clean_room": ("大掃除", "洗床單", "打掃"),
-    "delivered_work": ("交稿", "完稿", "寄出草稿"),
+    # Completion phrases only. Generic words such as「晚餐」「超市」caused
+    # questions/plans to be recorded as completed actions.
+    "eat_meal": ("吃飽了", "吃完了", "吃好了", "已經吃了"),
+    "shower": ("洗完澡了", "洗好了澡", "澡洗好了"),
+    "grocery": ("採買好了", "買完菜了", "補貨好了"),
+    "groom_mochi": ("麻糬梳完毛", "幫麻糬剪完指甲"),
+    "clean_room": ("打掃完了", "洗完床單了", "大掃除完成"),
+    "delivered_work": ("已經交稿", "交稿了", "完稿了", "草稿寄出了"),
 }
 
 
@@ -117,8 +129,8 @@ def _looks_like_english_cot(text: str) -> bool:
     alpha_count = len(re.findall(r"[A-Za-z]", s))
     if (not has_cjk) and alpha_count > 3:
         return True
-    if has_cjk and alpha_count >= 10:
-        return True
+    # Mixed Chinese/English is common in natural chat (e.g. app names and names).
+    # Do not reject it merely because it contains several Latin letters.
     return False
 
 
@@ -128,17 +140,25 @@ def _has_prompt_leak(text: str) -> bool:
 
 def _extract_groq_text(msg: Dict) -> str:
     content = msg.get("content")
-    if isinstance(content, str) and content.strip():
-        txt = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
-        if not txt or _looks_like_english_cot(txt) or _has_prompt_leak(txt):
-            kept = [
-                ln.strip()
-                for ln in re.split(r"[\r\n]+", txt)
-                if ln.strip() and not _looks_like_english_cot(ln) and not _has_prompt_leak(ln)
-            ]
-            return "\n".join(kept)
-        return txt
-    return ""
+    if isinstance(content, list):
+        # Some OpenAI-compatible endpoints return content as typed text parts.
+        content = "\n".join(
+            part.get("text", "")
+            for part in content
+            if isinstance(part, dict) and isinstance(part.get("text"), str)
+        )
+    if not isinstance(content, str) or not content.strip():
+        return ""
+
+    txt = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+    kept = [
+        ln.strip()
+        for ln in re.split(r"[\r\n]+", txt)
+        if ln.strip()
+        and not _looks_like_english_cot(ln)
+        and not _has_prompt_leak(ln)
+    ]
+    return "\\n".join(kept)
 
 
 def _trim_at_boundary(chunk: str, max_chars: int) -> str:
@@ -155,8 +175,10 @@ def _trim_at_boundary(chunk: str, max_chars: int) -> str:
 
 def clean_and_split_lines(raw: str, max_msgs: int, max_chars: int, user_text: str = "") -> List[str]:
     """清理模型輸出、過濾 Prompt 外洩與學舌反問，並限制則數與字數。"""
-    if not raw or _looks_like_english_cot(raw):
+    if not raw:
         return []
+    max_msgs = max(1, int(max_msgs))
+    max_chars = max(1, int(max_chars))
 
     text = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
     text = text.replace("```", "").strip()
@@ -322,7 +344,7 @@ class ReonaBot(discord.Client):
     def _record_done_actions_from_texts(self, *texts: str) -> None:
         if not hasattr(self.db, "mark_action_done"):
             return
-        combined = " ".join(t for t in texts if t)
+        combined = " ".join(t.strip() for t in texts if isinstance(t, str) and t.strip())
         if not combined:
             return
         for action_key, kws in ACTION_KEYWORDS.items():
@@ -394,9 +416,26 @@ class ReonaBot(discord.Client):
                 ) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        content = data["candidates"][0]["content"]["parts"][0]["text"]
-                        print(f"[LLM gemini-3.8-flash OK] raw={content!r}", flush=True)
-                        return content
+                        candidates = data.get("candidates") or []
+                        content = ""
+                        if candidates:
+                            parts = (
+                                candidates[0].get("content", {}).get("parts", [])
+                                if isinstance(candidates[0], dict)
+                                else []
+                            )
+                            content = "\n".join(
+                                part.get("text", "")
+                                for part in parts
+                                if isinstance(part, dict) and isinstance(part.get("text"), str)
+                            ).strip()
+                        if content:
+                            print(f"[LLM gemini-3.8-flash OK] raw={content!r}", flush=True)
+                            return content
+                        print(
+                            f"[LLM Gemini] No usable text in response: {json.dumps(data, ensure_ascii=False)[:300]}",
+                            flush=True,
+                        )
                     err_txt = await resp.text()
                     print(f"[LLM gemini-3.8-flash HTTP {resp.status}] {err_txt[:200]}", flush=True)
                     if resp.status == 429:
@@ -503,8 +542,8 @@ class ReonaBot(discord.Client):
         self._touch(nick=True)
 
         user_text = (message.content or "").strip()
-        is_voice = bool(message.flags.voice) or any(
-            (a.content_type or "").startswith("audio/") for a in message.attachments
+        is_voice = bool(getattr(message.flags, "voice", False)) or any(
+            (a.content_type or "").lower().startswith("audio/") for a in message.attachments
         )
 
         causal_flag = self.db.evaluate_causal_events(user_text, now_dt)
@@ -545,7 +584,12 @@ class ReonaBot(discord.Client):
         async for msg in message.channel.history(limit=5):
             if msg.id == message.id:
                 continue
-            speaker = "Reona" if msg.author.bot else "Nick"
+            if msg.author.bot:
+                if self.user is None or msg.author.id != self.user.id:
+                    continue
+                speaker = "Reona"
+            else:
+                speaker = "Nick"
             content = (msg.content or "").strip()
             if content:
                 history_lines.append(f"{speaker}: {content}")
