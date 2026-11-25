@@ -10,15 +10,16 @@ import discord
 
 from reona_bg_db import SYDNEY_TZ, ReonaBGDB
 
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "")
-TARGET_CHANNEL_ID = int(os.getenv("TARGET_CHANNEL_ID", "0"))
+DISCORD_TOKEN = (os.getenv("DISCORD_TOKEN") or os.getenv("DISCORD_BOT_TOKEN") or "").strip()
+TARGET_CHANNEL_ID = int((os.getenv("TARGET_CHANNEL_ID") or "0").strip() or "0")
 
 raw_groq = os.getenv("GROQ_API_KEYS") or os.getenv("GROQ_API_KEY") or ""
 GROQ_API_KEYS = [k.strip() for k in raw_groq.split(",") if k.strip()]
+GROQ_MODEL = (os.getenv("GROQ_MODEL") or "llama-3.3-70b-versatile").strip()
 GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip()
 
-PROACTIVE_ONLY = os.getenv("PROACTIVE_ONLY", "0") == "1"
-RUN_SECONDS = int(os.getenv("RUN_SECONDS", "1680"))
+PROACTIVE_ONLY = (os.getenv("PROACTIVE_ONLY") or "0").strip() == "1"
+RUN_SECONDS = int((os.getenv("RUN_SECONDS") or "1680").strip() or "1680")
 
 TW_REPLACEMENTS = {
     "搞定": "弄好",
@@ -45,6 +46,7 @@ def _groq_endpoint() -> str:
 
 
 def clean_and_split_lines(raw: str, max_msgs: int, max_chars: int) -> List[str]:
+    """清理模型輸出、替換非台灣詞彙，並硬控管連發則數與每則字數上限。"""
     if not raw:
         return []
 
@@ -83,6 +85,7 @@ def clean_and_split_lines(raw: str, max_msgs: int, max_chars: int) -> List[str]:
 
 
 def build_system_prompt(snapshot: Dict, clues: Dict, is_proactive: bool = False) -> str:
+    """組裝輕量、緊扣六維世界狀態與台灣成熟獨立人設的 System Prompt。"""
     mode = snapshot["mode"]
     min_m, max_m = snapshot["min_msgs"], snapshot["max_msgs"]
     max_c = snapshot["max_chars"]
@@ -166,6 +169,7 @@ class ReonaBot(discord.Client):
         await super().close()
 
     async def _call_llm_once(self, system_prompt: str, user_prompt: str, max_tokens: int) -> Optional[str]:
+        """優先走 Groq（支援 GROQ_MODEL 與多 Key 輪替），失敗或額度滿時改走 Gemini。"""
         if not self.http_session:
             return None
 
@@ -183,7 +187,7 @@ class ReonaBot(discord.Client):
                     groq_url,
                     headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
                     json={
-                        "model": "llama-3.3-70b-versatile",
+                        "model": GROQ_MODEL,
                         "messages": [
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": user_prompt},
@@ -195,12 +199,12 @@ class ReonaBot(discord.Client):
                     if resp.status == 200:
                         data = await resp.json()
                         content = data["choices"][0]["message"]["content"]
-                        print(f"[LLM Groq OK] raw={content!r}", flush=True)
+                        print(f"[LLM Groq ({GROQ_MODEL}) OK] raw={content!r}", flush=True)
                         return content
                     err_txt = await resp.text()
-                    print(f"[LLM Groq #{idx} HTTP {resp.status}] {err_txt[:180]}", flush=True)
+                    print(f"[LLM Groq #{idx} HTTP {resp.status}] {err_txt[:200]}", flush=True)
             except Exception as e:
-                print(f"[LLM Groq #{idx} Exception] {e}", flush=True)
+                print(f"[LLM Groq #{idx} Exception] {type(e).__name__}: {repr(e)}", flush=True)
                 continue
 
         if GEMINI_API_KEY and not self._gemini_quota_exhausted:
@@ -221,11 +225,11 @@ class ReonaBot(discord.Client):
                         print(f"[LLM gemini-3.8-flash OK] raw={content!r}", flush=True)
                         return content
                     err_txt = await resp.text()
-                    print(f"[LLM gemini-3.8-flash HTTP {resp.status}] {err_txt[:180]}", flush=True)
+                    print(f"[LLM gemini-3.8-flash HTTP {resp.status}] {err_txt[:200]}", flush=True)
                     if resp.status == 429:
                         self._gemini_quota_exhausted = True
             except Exception as e:
-                print(f"[LLM gemini-3.8-flash Exception] {e}", flush=True)
+                print(f"[LLM gemini-3.8-flash Exception] {type(e).__name__}: {repr(e)}", flush=True)
 
         return None
 
@@ -291,7 +295,7 @@ class ReonaBot(discord.Client):
                     print(f"Catching up missed message from Nick ({int(age)}s ago)...", flush=True)
                     await self._handle_incoming_message(msg)
         except Exception as e:
-            print(f"Catch-up check skipped: {e}", flush=True)
+            print(f"Catch-up check skipped: {type(e).__name__}: {repr(e)}", flush=True)
 
     async def _github_session_loop(self) -> None:
         channel = None
@@ -314,7 +318,7 @@ class ReonaBot(discord.Client):
 
     async def on_ready(self) -> None:
         print(
-            f"Reona online as {self.user} | Groq keys={len(GROQ_API_KEYS)} | Gemini={'YES' if GEMINI_API_KEY else 'NO'}",
+            f"Reona online as {self.user} | Groq keys={len(GROQ_API_KEYS)} ({GROQ_MODEL}) | Gemini={'YES' if GEMINI_API_KEY else 'NO'}",
             flush=True,
         )
         if not self._session_started:
