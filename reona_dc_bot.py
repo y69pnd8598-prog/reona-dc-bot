@@ -10,12 +10,12 @@ import discord
 
 from reona_bg_db import SYDNEY_TZ, ReonaBGDB
 
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "")
 TARGET_CHANNEL_ID = int(os.getenv("TARGET_CHANNEL_ID", "0"))
 
 raw_groq = os.getenv("GROQ_API_KEYS") or os.getenv("GROQ_API_KEY") or ""
 GROQ_API_KEYS = [k.strip() for k in raw_groq.split(",") if k.strip()]
-GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip().strip('"').strip("'")
+GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip()
 
 PROACTIVE_ONLY = os.getenv("PROACTIVE_ONLY", "0") == "1"
 RUN_SECONDS = int(os.getenv("RUN_SECONDS", "1680"))
@@ -34,8 +34,17 @@ LOW_EFFORT_INPUTS = {"?", "？", "嗯", "嗯嗯", "喔", "哦", "好", "好喔",
 VIDEO_KEYWORDS = ("視訊", "開鏡頭", "打給妳", "打給你", "facetime", "video call", "開視訊")
 
 
+def _gemini_endpoint(model: str) -> str:
+    host = "generativelanguage" + ".googleapis.com"
+    return f"https://{host}/v1beta/models/{model}:generateContent"
+
+
+def _groq_endpoint() -> str:
+    host = "api.groq" + ".com"
+    return f"https://{host}/openai/v1/chat/completions"
+
+
 def clean_and_split_lines(raw: str, max_msgs: int, max_chars: int) -> List[str]:
-    """清理模型輸出、替換非台灣詞彙，並硬控管連發則數與每則字數上限。"""
     if not raw:
         return []
 
@@ -74,7 +83,6 @@ def clean_and_split_lines(raw: str, max_msgs: int, max_chars: int) -> List[str]:
 
 
 def build_system_prompt(snapshot: Dict, clues: Dict, is_proactive: bool = False) -> str:
-    """組裝輕量、緊扣六維世界狀態與台灣成熟獨立人設的 System Prompt。"""
     mode = snapshot["mode"]
     min_m, max_m = snapshot["min_msgs"], snapshot["max_msgs"]
     max_c = snapshot["max_chars"]
@@ -143,22 +151,13 @@ class ReonaBot(discord.Client):
         self.db = db
         self.http_session: Optional[aiohttp.ClientSession] = None
         self._session_started = False
-        self._last_sent_text: str = ""
 
     def _touch(self, nick: bool = False, reona: bool = False, proactive: bool = False) -> None:
         if hasattr(self.db, "touch_timestamps"):
             self.db.touch_timestamps(nick=nick, reona=reona, proactive=proactive)
 
-    def _pick_non_repeat_canned(self, category: str, sub_state: str, default_text: str) -> str:
-        """抽取短句時盡量避開跟上一句一模一樣的內容。"""
-        for _ in range(5):
-            candidate = self.db.pick_canned_line(category, sub_state)
-            if candidate and candidate != self._last_sent_text:
-                return candidate
-        return self.db.pick_canned_line(category, sub_state) or default_text
-
     async def setup_hook(self) -> None:
-        self.http_session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=25))
+        self.http_session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20))
 
     async def close(self) -> None:
         if self.http_session and not self.http_session.closed:
@@ -166,7 +165,6 @@ class ReonaBot(discord.Client):
         await super().close()
 
     async def _call_llm_once(self, system_prompt: str, user_prompt: str, max_tokens: int) -> Optional[str]:
-        """省 Token 單次呼叫：優先 Groq，失敗自動走 Gemini 雙模型備援（關閉思考消耗）。"""
         if not self.http_session:
             return None
 
@@ -174,13 +172,14 @@ class ReonaBot(discord.Client):
             print("[ERROR] Both GROQ_API_KEYS and GEMINI_API_KEY are empty!", flush=True)
             return None
 
+        groq_url = _groq_endpoint()
         keys = list(GROQ_API_KEYS)
         random.shuffle(keys)
 
         for idx, key in enumerate(keys):
             try:
                 async with self.http_session.post(
-                    "[https://api.groq.com/openai/v1/chat/completions](https://api.groq.com/openai/v1/chat/completions)",
+                    groq_url,
                     headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
                     json={
                         "model": "llama-3.3-70b-versatile",
@@ -201,52 +200,34 @@ class ReonaBot(discord.Client):
                     print(f"[LLM Groq #{idx} HTTP {resp.status}] {err_txt[:180]}", flush=True)
             except Exception as e:
                 print(f"[LLM Groq #{idx} Exception] {e}", flush=True)
+                continue
 
         if GEMINI_API_KEY:
-            gemini_models = ["gemini-2.5-flash", "gemini-2.0-flash"]
-            for model_name in gemini_models:
-                gemini_url = (
-                    f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/)"
-                    f"{model_name}:generateContent"
-                )
-                gen_config: Dict = {
-                    "temperature": 0.72,
-                    "maxOutputTokens": max(250, max_tokens),
-                }
-                if "2.5" in model_name:
-                    gen_config["thinkingConfig"] = {"thinkingBudget": 0}
-
+            for model_name in ("gemini-2.5-flash", "gemini-2.0-flash"):
+                url = _gemini_endpoint(model_name)
                 try:
                     async with self.http_session.post(
-                        gemini_url,
+                        url,
                         params={"key": GEMINI_API_KEY},
                         json={
                             "systemInstruction": {"parts": [{"text": system_prompt}]},
                             "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-                            "generationConfig": gen_config,
+                            "generationConfig": {"temperature": 0.72, "maxOutputTokens": max_tokens},
                         },
                     ) as resp:
                         if resp.status == 200:
                             data = await resp.json()
-                            candidates = data.get("candidates") or []
-                            if candidates:
-                                parts = candidates[0].get("content", {}).get("parts") or []
-                                text_parts = [p.get("text", "") for p in parts if p.get("text")]
-                                content = "\n".join(text_parts).strip()
-                                if content:
-                                    print(f"[LLM {model_name} OK] raw={content!r}", flush=True)
-                                    return content
-                            print(f"[LLM {model_name} Empty] data={str(data)[:220]}", flush=True)
-                        else:
-                            err_txt = await resp.text()
-                            print(f"[LLM {model_name} HTTP {resp.status}] {err_txt[:220]}", flush=True)
+                            content = data["candidates"][0]["content"]["parts"][0]["text"]
+                            print(f"[LLM {model_name} OK] raw={content!r}", flush=True)
+                            return content
+                        err_txt = await resp.text()
+                        print(f"[LLM {model_name} HTTP {resp.status}] {err_txt[:180]}", flush=True)
                 except Exception as e:
-                    print(f"[LLM {model_name} Exception] {type(e).__name__}: {e}", flush=True)
+                    print(f"[LLM {model_name} Exception] {e}", flush=True)
 
         return None
 
     async def _send_burst(self, channel: discord.abc.Messageable, lines: List[str], delay_range: tuple) -> None:
-        """模擬真人節奏逐則打字發送。"""
         for idx, line in enumerate(lines):
             if idx > 0:
                 await asyncio.sleep(random.uniform(*delay_range))
@@ -254,11 +235,9 @@ class ReonaBot(discord.Client):
                 typing_sec = min(2.8, max(0.7, len(line) * 0.16))
                 await asyncio.sleep(typing_sec)
             await channel.send(line)
-            self._last_sent_text = line
         self._touch(reona=True)
 
     async def maybe_send_proactive(self, channel: discord.abc.Messageable) -> bool:
-        """圍繞今日主軸的背景主動發訊（嚴格控管深夜勿擾與冷卻）。"""
         now_dt = datetime.datetime.now(SYDNEY_TZ)
         if (now_dt.hour == 0 and now_dt.minute >= 30) or (1 <= now_dt.hour < 8):
             return False
@@ -280,15 +259,15 @@ class ReonaBot(discord.Client):
 
         clues = self.db.retrieve_rag_clue(snap)
         sys_prompt = build_system_prompt(snap, clues, is_proactive=True)
+        max_tokens = 120 if snap["mode"] == "happy" else 90
         raw = await self._call_llm_once(
             sys_prompt,
             "請依當下六維狀態自然主動發一組短句給 Nick。",
-            max_tokens=250,
+            max_tokens=max_tokens,
         )
         lines = clean_and_split_lines(raw or "", snap["max_msgs"], snap["max_chars"])
         if not lines:
-            cat = "sick" if snap["mode"] in ("sick", "tired") else "fallback"
-            fallback = self._pick_non_repeat_canned(cat, snap["mood"], "剛忙完一件事")
+            fallback = self.db.pick_canned_line("fallback", snap["mood"]) or "剛忙完一件事"
             lines = [fallback]
 
         await self._send_burst(channel, lines, snap["delay_range"])
@@ -301,7 +280,6 @@ class ReonaBot(discord.Client):
         return True
 
     async def _catch_up_missed_message(self, channel: discord.abc.Messageable) -> None:
-        """換班空檔若有 Nick 剛傳的未回訊息（5 分鐘內），上線時自動接住不漏訊。"""
         try:
             async for msg in channel.history(limit=1):
                 if msg.author.bot:
@@ -314,7 +292,6 @@ class ReonaBot(discord.Client):
             print(f"Catch-up check skipped: {e}", flush=True)
 
     async def _github_session_loop(self) -> None:
-        """GitHub Actions 28 分鐘班次主迴圈：補接漏訊 → 檢查主動發訊 → 線上監聽 → 到點收工存檔。"""
         channel = None
         if TARGET_CHANNEL_ID:
             channel = self.get_channel(TARGET_CHANNEL_ID) or await self.fetch_channel(TARGET_CHANNEL_ID)
@@ -354,35 +331,33 @@ class ReonaBot(discord.Client):
         causal_flag = self.db.evaluate_causal_events(user_text, now_dt)
         snap = self.db.compute_snapshot(now_dt)
 
-        # === 零 Token 優先分流（廁所 / 語音 / 視訊 / 被拒絕 / 敷衍短訊息）===
         if snap["in_restroom"]:
-            line = self._pick_non_repeat_canned("restroom", snap["gi_status"], "去一下廁所")
+            line = self.db.pick_canned_line("restroom", snap["gi_status"]) or "去一下廁所"
             await self._send_burst(message.channel, [line], snap["delay_range"])
             return
 
         if causal_flag == "request_declined":
-            line = self._pick_non_repeat_canned("request_declined", snap["mood"], "好喔那沒關係")
+            line = self.db.pick_canned_line("request_declined", snap["mood"]) or "好喔那沒關係"
             await self._send_burst(message.channel, [line], snap["delay_range"])
             return
 
         if is_voice:
-            line = self._pick_non_repeat_canned("voice_msg", snap["mode"], "用打字的啦")
+            line = self.db.pick_canned_line("voice_msg", snap["mode"]) or "用打字的啦"
             await self._send_burst(message.channel, [line], snap["delay_range"])
             return
 
         lower_txt = user_text.lower()
         if any(k in lower_txt for k in VIDEO_KEYWORDS):
-            line = self._pick_non_repeat_canned("video_req", snap["mode"], "現在在忙沒空開啦")
+            line = self.db.pick_canned_line("video_req", snap["mode"]) or "現在在忙沒空開啦"
             await self._send_burst(message.channel, [line], snap["delay_range"])
             return
 
         if user_text in LOW_EFFORT_INPUTS:
             if random.random() < 0.85:
-                line = self._pick_non_repeat_canned("low_effort", snap["mood"], "？")
+                line = self.db.pick_canned_line("low_effort", snap["mood"]) or "？"
                 await self._send_burst(message.channel, [line], snap["delay_range"])
                 return
 
-        # === 一般與深度互動：單次省 Token 呼叫 ＋ 輕量 RAG ===
         clues = self.db.retrieve_rag_clue(snap)
         sys_prompt = build_system_prompt(snap, clues, is_proactive=False)
 
@@ -402,12 +377,12 @@ class ReonaBot(discord.Client):
             else f"Nick 剛說：{user_text}"
         )
 
-        raw = await self._call_llm_once(sys_prompt, user_prompt, max_tokens=250)
+        max_tokens = 130 if snap["mode"] == "happy" else 95
+        raw = await self._call_llm_once(sys_prompt, user_prompt, max_tokens=max_tokens)
         lines = clean_and_split_lines(raw or "", snap["max_msgs"], snap["max_chars"])
 
         if not lines:
-            cat = "sick" if snap["mode"] in ("sick", "tired") else "fallback"
-            fallback = self._pick_non_repeat_canned(cat, snap["mood"], "剛在忙手邊")
+            fallback = self.db.pick_canned_line("fallback", snap["mode"]) or "剛在忙手邊"
             lines = [fallback]
 
         await self._send_burst(message.channel, lines, snap["delay_range"])
