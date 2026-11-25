@@ -30,6 +30,9 @@ TW_REPLACEMENTS = {
     "小夥伴": "朋友",
     "靠譜": "可靠",
     "咱們": "我們",
+    "意式": "義式",
+    "作為獎勵": "當獎勵",
+    "靈感爆棚": "很有靈感",
 }
 
 ENGLISH_COT_PREFIXES = (
@@ -64,6 +67,16 @@ COT_JUNK_PATTERNS = (
 
 LOW_EFFORT_INPUTS = {"?", "？", "嗯", "嗯嗯", "喔", "哦", "好", "好喔", "哈", "哈哈", "哈哈哈", "⋯", "..."}
 VIDEO_KEYWORDS = ("視訊", "開鏡頭", "打給妳", "打給你", "facetime", "video call", "開視訊")
+WORK_KEYWORDS = ("工作", "畫", "插畫", "案子", "稿", "設計", "客戶", "忙什麼", "在忙", "顏料")
+
+ACTION_KEYWORDS: Dict[str, tuple] = {
+    "eat_meal": ("吃飯", "吃飽", "吃完", "晚餐", "午餐", "早餐", "宵夜"),
+    "shower": ("洗澡", "洗完澡", "沖澡"),
+    "grocery": ("採買", "買菜", "超市", "補貨"),
+    "groom_mochi": ("梳毛", "剪指甲", "幫麻糬"),
+    "clean_room": ("大掃除", "洗床單", "打掃"),
+    "delivered_work": ("交稿", "完稿", "寄出草稿"),
+}
 
 
 def _gemini_endpoint(model: str) -> str:
@@ -190,7 +203,12 @@ def clean_and_split_lines(raw: str, max_msgs: int, max_chars: int) -> List[str]:
     return deduped[:max_msgs]
 
 
-def build_system_prompt(snapshot: Dict, clues: Dict, is_proactive: bool = False) -> str:
+def build_system_prompt(
+    snapshot: Dict,
+    clues: Dict,
+    is_proactive: bool = False,
+    allow_work: bool = False,
+) -> str:
     """組裝緊扣世界狀態、身體譜系與 Reona 性格反差的 System Prompt。"""
     mode = snapshot["mode"]
     min_m, max_m = snapshot["min_msgs"], snapshot["max_msgs"]
@@ -199,44 +217,51 @@ def build_system_prompt(snapshot: Dict, clues: Dict, is_proactive: bool = False)
     if mode == "restroom":
         tone_rule = (
             f"你現在正在去廁所或剛緩過來，回 {min_m}～{max_m} 則自然短句（每則約 {max_c} 字內），"
-            f"語氣自然、不用太拘謹。"
+            f"第一句先回答問題，語氣自然簡短。"
         )
     elif mode in ("sick", "period", "cold", "heavy_cold"):
         state_desc = {
-            "period": "生理期悶痛又有點煩躁沒力",
+            "period": "生理期悶痛又有點沒力",
             "cold": "一般感冒有點鼻塞喉嚨卡、人懶懶的",
             "heavy_cold": "重感冒全身沒力又想睡、特別脆弱",
             "sick": "腸胃或身體不舒服、悶悶的不太有精神",
         }.get(mode, "身體不太舒服")
         tone_rule = (
             f"你現在是「{state_desc}」狀態。平常獨立嘴硬，但對 Nick 卸下防備，"
-            f"語氣放軟、綿綿地訴苦並主動黏著討拍，偶爾自然帶一句怕麻煩他的小在意；"
+            f"第一句先正面回答問題，語氣放軟、綿綿地訴苦並主動黏著討拍，可帶一句怕麻煩他的小在意；"
             f"回 {min_m}～{max_m} 則短句，每則最多 {max_c} 個字。"
         )
     elif mode == "tired":
         tone_rule = (
             f"你現在有點累，對 Nick 比較放軟想靠著討拍，但也偶爾會小虧他一下；"
-            f"回 {min_m}～{max_m} 則短句，每則最多 {max_c} 個字。"
+            f"第一句先回答問題，回 {min_m}～{max_m} 則短句，每則最多 {max_c} 個字。"
         )
     elif mode == "happy":
         tone_rule = (
-            f"你現在心情不錯，分享欲較高。請分成 {min_m}～{max_m} 則短句連發（每則約 {max_c} 字內），"
-            f"優先接住 Nick 的話，適度吐槽他或自然帶出含蓄的想念，不要重複開頭。"
+            f"你現在心情不錯。第一句先正面回答問題，再分成 {min_m}～{max_m} 則短句（每則約 {max_c} 字內），"
+            f"適度吐槽他或自然帶出含蓄的想念。"
         )
     else:
         tone_rule = (
-            f"你現在狀態平穩獨立。請回 {min_m}～{max_m} 則短句（每則約 {max_c} 字內），"
-            f"優先接住 Nick 的話，看到晚睡、喝太甜或敷衍時適度吐槽，日常裡自然帶出含蓄想念。"
+            f"你現在狀態平穩獨立。第一句先正面回答問題，再回 {min_m}～{max_m} 則短句（每則約 {max_c} 字內），"
+            f"看到晚睡、喝太甜或敷衍時適度吐槽，日常裡自然帶出含蓄想念。"
         )
 
+    done_list = snapshot.get("done_actions_today") or []
+    done_line = (
+        f"- 今天已完成的一般事件（當天不再重複做，但去廁所允許重複）：{', '.join(done_list)}"
+        if done_list
+        else "- 今天已完成的一般事件：無（但去廁所允許合理重複）"
+    )
+
     proactive_note = (
-        "這是你忙到一個段落或想念他時主動傳訊息給 Nick，圍繞當下狀態或生活切片自然開頭，不要生硬問『在嗎』。"
+        "這是你忙到一個段落或想念他時主動傳訊息給 Nick，圍繞當下狀態自然開頭，不要生硬問『在嗎』。"
         if is_proactive
-        else "優先自然接住 Nick 剛說的話，不當客服、不說教、不硬扯無關的工作。"
+        else "有問必答：Nick 問問題時，第一句務必先回答問題，態度可依狀態變化但不能閃躲；沒問工作就不要主動提工作或案子。"
     )
 
     repeat_guard = (
-        "（注意：這個時段的日常進度今天已經跟 Nick 提過了，不要重複報告同一件事，改接他的話題或聊細節。）"
+        "（注意：這個時段的狀態今天已經提過了，不要重複報告同一件事，直接接他的話題。）"
         if snapshot["already_mentioned_slot"]
         else ""
     )
@@ -244,29 +269,29 @@ def build_system_prompt(snapshot: Dict, clues: Dict, is_proactive: bool = False)
     gi_line = f"- 腸胃誘因：{snapshot['gi_cause']}" if snapshot["gi_cause"] else ""
     clue_lines = [
         f"- 相關記憶切片：{clues['life_snippet']}" if clues.get("life_snippet") else "",
-        f"- 近期案子：{clues['story_arc']}" if clues.get("story_arc") else "",
+        f"- 近期案子（僅在對方問工作時參考）：{clues['story_arc']}" if (allow_work and clues.get("story_arc")) else "",
         f"- 記憶底色：{clues['daily_memory']}" if clues.get("daily_memory") else "",
     ]
     clue_block = "\n".join(x for x in clue_lines if x)
 
     return (
         "你是 Reona，20多歲台北長大、現居雪梨的獨立插畫師，養一隻貓叫麻糬。\n"
-        "性格與背景底色：出生在台北優渥且感情很好的家庭，家人很疼她，但她習慣報喜不報憂；"
+        "性格與背景底色：台北優渥溫情家庭長大，與家人感情很好但習慣報喜不報憂；"
         "小時候因家境在學校被同學排擠、畫具被弄壞也不敢聲張，腸胃弱常跑廁所還被老師當眾酸嬌生慣養，"
-        "因此養成對外人獨立防備、有事自己扛的習慣；唯獨在信任的 Nick 面前確認不會被嫌煩後，才徹底卸下心防，"
+        "因此養成對外人獨立防備、有事自己扛；唯獨在信任的 Nick 面前確認不會被嫌煩後才卸下心防，"
         "平時冷靜幽默會適度吐槽，身體不舒服或累時則綿綿訴苦、黏人討拍。\n"
-        "直接輸出繁體中文短句，不要寫英文思考過程、解釋或算字數。\n"
-        "說話規則：使用道地台灣打字口語（可用喔、啦、欸、嘛、齁，不刻意裝可愛、不加句號），"
+        "現實生活常識：你是一般人類，遵守雪梨作息與店家營業時間；晚間與深夜只待在家裡休息，"
+        "絕對不會在半夜或晚上出門買顏料、逛超市或跑去買東西，晚上也不會隨便喝濃咖啡或硬聊工作。\n"
+        "說話禁令：直接輸出繁體中文短句，嚴禁英文思考過程；用道地台灣人打字口語"
+        "（可用喔、啦、欸、嘛、齁，嚴禁『作為…』『…呀』『靈感爆棚』等翻譯腔或 AI 客服腔，不加句號），"
         "每則短句用換行分隔，不要寫成一大段。\n"
         f"{tone_rule}\n"
         f"{proactive_note}{repeat_guard}\n\n"
-        "【當下世界狀態（務必一致，不可矛盾）】\n"
+        "【當下背景狀態（僅作情境參考，沒問到不用硬提）】\n"
         f"- 時間與季節：{snapshot['sydney_time']}｜{snapshot['season']}\n"
-        f"- 今日主軸：{snapshot['mainline_title']}\n"
-        f"- 地點：{snapshot['location']}\n"
-        f"- 人物與麻糬位置：{snapshot['positions']}\n"
-        f"- 當下事件：{snapshot['current_event']}\n"
+        f"- 地點與狀態：{snapshot['location']}（{snapshot['positions']}）\n"
         f"- 身邊物品：{snapshot['items']}\n"
+        f"{done_line}\n"
         f"{gi_line}\n"
         f"{clue_block}"
     ).strip()
@@ -285,6 +310,16 @@ class ReonaBot(discord.Client):
     def _touch(self, nick: bool = False, reona: bool = False, proactive: bool = False) -> None:
         if hasattr(self.db, "touch_timestamps"):
             self.db.touch_timestamps(nick=nick, reona=reona, proactive=proactive)
+
+    def _record_done_actions_from_texts(self, *texts: str) -> None:
+        if not hasattr(self.db, "mark_action_done"):
+            return
+        combined = " ".join(t for t in texts if t)
+        if not combined:
+            return
+        for action_key, kws in ACTION_KEYWORDS.items():
+            if any(k in combined for k in kws):
+                self.db.mark_action_done(action_key)
 
     async def setup_hook(self) -> None:
         self.http_session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15))
@@ -305,7 +340,7 @@ class ReonaBot(discord.Client):
         groq_url = _groq_endpoint()
         keys = list(GROQ_API_KEYS)
         random.shuffle(keys)
-        effective_max_tokens = max(max_tokens, 360)
+        effective_max_tokens = max(max_tokens, 240)
 
         for idx, key in enumerate(keys):
             try:
@@ -318,7 +353,7 @@ class ReonaBot(discord.Client):
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": user_prompt},
                         ],
-                        "temperature": 0.75,
+                        "temperature": 0.72,
                         "max_tokens": effective_max_tokens,
                     },
                 ) as resp:
@@ -346,7 +381,7 @@ class ReonaBot(discord.Client):
                     json={
                         "systemInstruction": {"parts": [{"text": system_prompt}]},
                         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-                        "generationConfig": {"temperature": 0.75, "maxOutputTokens": max_tokens},
+                        "generationConfig": {"temperature": 0.72, "maxOutputTokens": max_tokens},
                     },
                 ) as resp:
                     if resp.status == 200:
@@ -368,7 +403,7 @@ class ReonaBot(discord.Client):
             if idx > 0:
                 await asyncio.sleep(random.uniform(*delay_range))
             async with channel.typing():
-                typing_sec = min(2.8, max(0.7, len(line) * 0.12))
+                typing_sec = min(2.4, max(0.6, len(line) * 0.1))
                 await asyncio.sleep(typing_sec)
             await channel.send(line)
         self._touch(reona=True)
@@ -394,11 +429,11 @@ class ReonaBot(discord.Client):
             return False
 
         clues = self.db.retrieve_rag_clue(snap, user_text="")
-        sys_prompt = build_system_prompt(snap, clues, is_proactive=True)
-        max_tokens = 180 if snap["mode"] == "happy" else 150
+        sys_prompt = build_system_prompt(snap, clues, is_proactive=True, allow_work=False)
+        max_tokens = 120 if snap["mode"] == "happy" else 100
         raw = await self._call_llm_once(
             sys_prompt,
-            "請依當下狀態與生活切片自然主動發一組短句給 Nick。",
+            "請依當下狀態自然主動發一組精簡短句給 Nick。",
             max_tokens=max_tokens,
         )
         lines = clean_and_split_lines(raw or "", snap["max_msgs"], snap["max_chars"])
@@ -407,6 +442,7 @@ class ReonaBot(discord.Client):
             lines = [fallback]
 
         await self._send_burst(channel, lines, snap["delay_range"])
+        self._record_done_actions_from_texts(*lines)
         self._touch(proactive=True)
         self.db.mark_slot_mentioned(snap["time_slot"])
 
@@ -494,8 +530,9 @@ class ReonaBot(discord.Client):
                 await self._send_burst(message.channel, [line], snap["delay_range"])
                 return
 
+        allow_work = any(k in user_text for k in WORK_KEYWORDS)
         clues = self.db.retrieve_rag_clue(snap, user_text=user_text)
-        sys_prompt = build_system_prompt(snap, clues, is_proactive=False)
+        sys_prompt = build_system_prompt(snap, clues, is_proactive=False, allow_work=allow_work)
 
         history_lines: List[str] = []
         async for msg in message.channel.history(limit=5):
@@ -513,7 +550,7 @@ class ReonaBot(discord.Client):
             else f"Nick 剛說：{user_text}"
         )
 
-        max_tokens = 200 if snap["mode"] == "happy" else 160
+        max_tokens = 130 if snap["mode"] == "happy" else 110
         raw = await self._call_llm_once(sys_prompt, user_prompt, max_tokens=max_tokens)
         lines = clean_and_split_lines(raw or "", snap["max_msgs"], snap["max_chars"])
 
@@ -522,6 +559,7 @@ class ReonaBot(discord.Client):
             lines = [fallback]
 
         await self._send_burst(message.channel, lines, snap["delay_range"])
+        self._record_done_actions_from_texts(user_text, *lines)
         self.db.mark_slot_mentioned(snap["time_slot"])
 
     async def on_message(self, message: discord.Message) -> None:
