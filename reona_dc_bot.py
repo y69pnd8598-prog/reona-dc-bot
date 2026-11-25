@@ -10,17 +10,16 @@ import discord
 
 from reona_bg_db import SYDNEY_TZ, ReonaBGDB
 
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "")
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
 TARGET_CHANNEL_ID = int(os.getenv("TARGET_CHANNEL_ID", "0"))
 
 raw_groq = os.getenv("GROQ_API_KEYS") or os.getenv("GROQ_API_KEY") or ""
 GROQ_API_KEYS = [k.strip() for k in raw_groq.split(",") if k.strip()]
-GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip()
+GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip().strip('"').strip("'")
 
 PROACTIVE_ONLY = os.getenv("PROACTIVE_ONLY", "0") == "1"
 RUN_SECONDS = int(os.getenv("RUN_SECONDS", "1680"))
 
-# 常見大陸用語自動替換為台灣用語，避免整句被丟掉
 TW_REPLACEMENTS = {
     "搞定": "弄好",
     "視頻": "影片",
@@ -144,13 +143,22 @@ class ReonaBot(discord.Client):
         self.db = db
         self.http_session: Optional[aiohttp.ClientSession] = None
         self._session_started = False
+        self._last_sent_text: str = ""
 
     def _touch(self, nick: bool = False, reona: bool = False, proactive: bool = False) -> None:
         if hasattr(self.db, "touch_timestamps"):
             self.db.touch_timestamps(nick=nick, reona=reona, proactive=proactive)
 
+    def _pick_non_repeat_canned(self, category: str, sub_state: str, default_text: str) -> str:
+        """抽取短句時盡量避開跟上一句一模一樣的內容。"""
+        for _ in range(5):
+            candidate = self.db.pick_canned_line(category, sub_state)
+            if candidate and candidate != self._last_sent_text:
+                return candidate
+        return self.db.pick_canned_line(category, sub_state) or default_text
+
     async def setup_hook(self) -> None:
-        self.http_session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20))
+        self.http_session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=25))
 
     async def close(self) -> None:
         if self.http_session and not self.http_session.closed:
@@ -158,7 +166,7 @@ class ReonaBot(discord.Client):
         await super().close()
 
     async def _call_llm_once(self, system_prompt: str, user_prompt: str, max_tokens: int) -> Optional[str]:
-        """省 Token 單次呼叫：優先 Groq 多 Key 輪替，失敗才走 Gemini 備援。"""
+        """省 Token 單次呼叫：優先 Groq，失敗自動走 Gemini 雙模型備援（關閉思考消耗）。"""
         if not self.http_session:
             return None
 
@@ -193,32 +201,47 @@ class ReonaBot(discord.Client):
                     print(f"[LLM Groq #{idx} HTTP {resp.status}] {err_txt[:180]}", flush=True)
             except Exception as e:
                 print(f"[LLM Groq #{idx} Exception] {e}", flush=True)
-                continue
 
         if GEMINI_API_KEY:
-            gemini_url = (
-                "[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/)"
-                "gemini-2.5-flash:generateContent"
-            )
-            try:
-                async with self.http_session.post(
-                    gemini_url,
-                    params={"key": GEMINI_API_KEY},
-                    json={
-                        "systemInstruction": {"parts": [{"text": system_prompt}]},
-                        "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-                        "generationConfig": {"temperature": 0.72, "maxOutputTokens": max_tokens},
-                    },
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        content = data["candidates"][0]["content"]["parts"][0]["text"]
-                        print(f"[LLM Gemini OK] raw={content!r}", flush=True)
-                        return content
-                    err_txt = await resp.text()
-                    print(f"[LLM Gemini HTTP {resp.status}] {err_txt[:180]}", flush=True)
-            except Exception as e:
-                print(f"[LLM Gemini Exception] {e}", flush=True)
+            gemini_models = ["gemini-2.5-flash", "gemini-2.0-flash"]
+            for model_name in gemini_models:
+                gemini_url = (
+                    f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/)"
+                    f"{model_name}:generateContent"
+                )
+                gen_config: Dict = {
+                    "temperature": 0.72,
+                    "maxOutputTokens": max(250, max_tokens),
+                }
+                if "2.5" in model_name:
+                    gen_config["thinkingConfig"] = {"thinkingBudget": 0}
+
+                try:
+                    async with self.http_session.post(
+                        gemini_url,
+                        params={"key": GEMINI_API_KEY},
+                        json={
+                            "systemInstruction": {"parts": [{"text": system_prompt}]},
+                            "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+                            "generationConfig": gen_config,
+                        },
+                    ) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            candidates = data.get("candidates") or []
+                            if candidates:
+                                parts = candidates[0].get("content", {}).get("parts") or []
+                                text_parts = [p.get("text", "") for p in parts if p.get("text")]
+                                content = "\n".join(text_parts).strip()
+                                if content:
+                                    print(f"[LLM {model_name} OK] raw={content!r}", flush=True)
+                                    return content
+                            print(f"[LLM {model_name} Empty] data={str(data)[:220]}", flush=True)
+                        else:
+                            err_txt = await resp.text()
+                            print(f"[LLM {model_name} HTTP {resp.status}] {err_txt[:220]}", flush=True)
+                except Exception as e:
+                    print(f"[LLM {model_name} Exception] {type(e).__name__}: {e}", flush=True)
 
         return None
 
@@ -231,6 +254,7 @@ class ReonaBot(discord.Client):
                 typing_sec = min(2.8, max(0.7, len(line) * 0.16))
                 await asyncio.sleep(typing_sec)
             await channel.send(line)
+            self._last_sent_text = line
         self._touch(reona=True)
 
     async def maybe_send_proactive(self, channel: discord.abc.Messageable) -> bool:
@@ -256,15 +280,15 @@ class ReonaBot(discord.Client):
 
         clues = self.db.retrieve_rag_clue(snap)
         sys_prompt = build_system_prompt(snap, clues, is_proactive=True)
-        max_tokens = 120 if snap["mode"] == "happy" else 90
         raw = await self._call_llm_once(
             sys_prompt,
             "請依當下六維狀態自然主動發一組短句給 Nick。",
-            max_tokens=max_tokens,
+            max_tokens=250,
         )
         lines = clean_and_split_lines(raw or "", snap["max_msgs"], snap["max_chars"])
         if not lines:
-            fallback = self.db.pick_canned_line("fallback", snap["mood"]) or "剛忙完一件事"
+            cat = "sick" if snap["mode"] in ("sick", "tired") else "fallback"
+            fallback = self._pick_non_repeat_canned(cat, snap["mood"], "剛忙完一件事")
             lines = [fallback]
 
         await self._send_burst(channel, lines, snap["delay_range"])
@@ -332,29 +356,29 @@ class ReonaBot(discord.Client):
 
         # === 零 Token 優先分流（廁所 / 語音 / 視訊 / 被拒絕 / 敷衍短訊息）===
         if snap["in_restroom"]:
-            line = self.db.pick_canned_line("restroom", snap["gi_status"]) or "去一下廁所"
+            line = self._pick_non_repeat_canned("restroom", snap["gi_status"], "去一下廁所")
             await self._send_burst(message.channel, [line], snap["delay_range"])
             return
 
         if causal_flag == "request_declined":
-            line = self.db.pick_canned_line("request_declined", snap["mood"]) or "好喔那沒關係"
+            line = self._pick_non_repeat_canned("request_declined", snap["mood"], "好喔那沒關係")
             await self._send_burst(message.channel, [line], snap["delay_range"])
             return
 
         if is_voice:
-            line = self.db.pick_canned_line("voice_msg", snap["mode"]) or "用打字的啦"
+            line = self._pick_non_repeat_canned("voice_msg", snap["mode"], "用打字的啦")
             await self._send_burst(message.channel, [line], snap["delay_range"])
             return
 
         lower_txt = user_text.lower()
         if any(k in lower_txt for k in VIDEO_KEYWORDS):
-            line = self.db.pick_canned_line("video_req", snap["mode"]) or "現在在忙沒空開啦"
+            line = self._pick_non_repeat_canned("video_req", snap["mode"], "現在在忙沒空開啦")
             await self._send_burst(message.channel, [line], snap["delay_range"])
             return
 
         if user_text in LOW_EFFORT_INPUTS:
             if random.random() < 0.85:
-                line = self.db.pick_canned_line("low_effort", snap["mood"]) or "？"
+                line = self._pick_non_repeat_canned("low_effort", snap["mood"], "？")
                 await self._send_burst(message.channel, [line], snap["delay_range"])
                 return
 
@@ -378,12 +402,12 @@ class ReonaBot(discord.Client):
             else f"Nick 剛說：{user_text}"
         )
 
-        max_tokens = 130 if snap["mode"] == "happy" else 95
-        raw = await self._call_llm_once(sys_prompt, user_prompt, max_tokens=max_tokens)
+        raw = await self._call_llm_once(sys_prompt, user_prompt, max_tokens=250)
         lines = clean_and_split_lines(raw or "", snap["max_msgs"], snap["max_chars"])
 
         if not lines:
-            fallback = self.db.pick_canned_line("fallback", snap["mode"]) or "剛在忙手邊"
+            cat = "sick" if snap["mode"] in ("sick", "tired") else "fallback"
+            fallback = self._pick_non_repeat_canned(cat, snap["mood"], "剛在忙手邊")
             lines = [fallback]
 
         await self._send_burst(message.channel, lines, snap["delay_range"])
