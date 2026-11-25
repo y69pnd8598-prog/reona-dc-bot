@@ -45,6 +45,17 @@ def _groq_endpoint() -> str:
     return f"https://{host}/openai/v1/chat/completions"
 
 
+def _extract_groq_text(msg: Dict) -> str:
+    content = (msg.get("content") or "").strip()
+    if content:
+        return content
+    reasoning = (msg.get("reasoning_content") or "").strip()
+    if reasoning:
+        lines = [ln.strip() for ln in reasoning.splitlines() if ln.strip()]
+        return lines[-1] if lines else ""
+    return ""
+
+
 def clean_and_split_lines(raw: str, max_msgs: int, max_chars: int) -> List[str]:
     """清理模型輸出、替換非台灣詞彙，並硬控管連發則數與每則字數上限。"""
     if not raw:
@@ -169,7 +180,7 @@ class ReonaBot(discord.Client):
         await super().close()
 
     async def _call_llm_once(self, system_prompt: str, user_prompt: str, max_tokens: int) -> Optional[str]:
-        """優先走 Groq（支援 GROQ_MODEL 與多 Key 輪替），失敗或額度滿時改走 Gemini。"""
+        """優先走 Groq（支援 GROQ_MODEL 與多 Key 輪替，若回空則改用 llama-3.3-70b-versatile 再試）。"""
         if not self.http_session:
             return None
 
@@ -181,31 +192,39 @@ class ReonaBot(discord.Client):
         keys = list(GROQ_API_KEYS)
         random.shuffle(keys)
 
-        for idx, key in enumerate(keys):
-            try:
-                async with self.http_session.post(
-                    groq_url,
-                    headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                    json={
-                        "model": GROQ_MODEL,
-                        "messages": [
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_prompt},
-                        ],
-                        "temperature": 0.72,
-                        "max_tokens": max_tokens,
-                    },
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        content = data["choices"][0]["message"]["content"]
-                        print(f"[LLM Groq ({GROQ_MODEL}) OK] raw={content!r}", flush=True)
-                        return content
-                    err_txt = await resp.text()
-                    print(f"[LLM Groq #{idx} HTTP {resp.status}] {err_txt[:200]}", flush=True)
-            except Exception as e:
-                print(f"[LLM Groq #{idx} Exception] {type(e).__name__}: {repr(e)}", flush=True)
-                continue
+        models_to_try = [GROQ_MODEL]
+        if GROQ_MODEL != "llama-3.3-70b-versatile":
+            models_to_try.append("llama-3.3-70b-versatile")
+
+        for model_name in models_to_try:
+            for idx, key in enumerate(keys):
+                try:
+                    async with self.http_session.post(
+                        groq_url,
+                        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                        json={
+                            "model": model_name,
+                            "messages": [
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": user_prompt},
+                            ],
+                            "temperature": 0.72,
+                            "max_tokens": max_tokens,
+                        },
+                    ) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            msg_obj = data["choices"][0]["message"]
+                            content = _extract_groq_text(msg_obj)
+                            print(f"[LLM Groq ({model_name}) OK] raw={content!r}", flush=True)
+                            if content:
+                                return content
+                        else:
+                            err_txt = await resp.text()
+                            print(f"[LLM Groq ({model_name}) #{idx} HTTP {resp.status}] {err_txt[:200]}", flush=True)
+                except Exception as e:
+                    print(f"[LLM Groq ({model_name}) #{idx} Exception] {type(e).__name__}: {repr(e)}", flush=True)
+                    continue
 
         if GEMINI_API_KEY and not self._gemini_quota_exhausted:
             url = _gemini_endpoint("gemini-3.8-flash")
