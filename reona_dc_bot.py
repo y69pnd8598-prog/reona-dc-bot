@@ -203,7 +203,7 @@ class ReonaBot(discord.Client):
                 continue
 
         if GEMINI_API_KEY:
-            for model_name in ("gemini-2.5-flash", "gemini-2.0-flash"):
+            for model_name in ("gemini-3.8-flash", "gemini-3.8-flash-lite"):
                 url = _gemini_endpoint(model_name)
                 try:
                     async with self.http_session.post(
