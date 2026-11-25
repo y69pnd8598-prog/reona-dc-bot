@@ -34,6 +34,66 @@ jobs:
       - name: Install dependencies
         run: pip install discord.py aiohttp
 
+      - name: Reset daily transient state on new Sydney day
+        env:
+          REONA_DB_PATH: reona_bg.db
+        run: |
+          python - <<'EOF'
+          import datetime
+          import os
+          import sqlite3
+          from zoneinfo import ZoneInfo
+
+          db_path = os.getenv("REONA_DB_PATH", "reona_bg.db")
+          if not os.path.exists(db_path):
+              print("No existing DB yet; will initialize fresh on bot startup.")
+              raise SystemExit(0)
+
+          today_sydney = datetime.datetime.now(ZoneInfo("Australia/Sydney")).strftime("%Y-%m-%d")
+          conn = sqlite3.connect(db_path)
+          try:
+              cols = {r[1] for r in conn.execute("PRAGMA table_info(runtime_state)").fetchall()}
+              if not cols:
+                  raise SystemExit(0)
+
+              row = conn.execute("SELECT * FROM runtime_state WHERE id = 1").fetchone()
+              if not row:
+                  raise SystemExit(0)
+
+              col_names = [d[0] for d in conn.execute("SELECT * FROM runtime_state WHERE id = 1").description]
+              state = dict(zip(col_names, row))
+
+              if state.get("mainline_date") != today_sydney:
+                  updates = {
+                      "mainline_date": "",
+                      "mainline_key": "",
+                      "mainline_title": "",
+                      "gi_cause": "",
+                      "gi_triggered_today": 0,
+                      "mood": "normal",
+                      "mood_until": 0,
+                      "recovery_until": 0,
+                      "gi_status": "normal",
+                      "gi_until": 0,
+                      "illness_status": "normal",
+                      "illness_until": 0,
+                      "restroom_until": 0,
+                      "pending_request_until": 0,
+                      "mentioned_slots": "",
+                      "done_actions_today": "",
+                  }
+                  set_clauses = [f"{k} = ?" for k in updates if k in cols]
+                  params = [updates[k] for k in updates if k in cols]
+                  if set_clauses:
+                      conn.execute(f"UPDATE runtime_state SET {', '.join(set_clauses)} WHERE id = 1", params)
+                      conn.commit()
+                      print(f"Reset daily transient state for new Sydney day: {today_sydney}")
+              else:
+                  print(f"Same Sydney day ({today_sydney}); keeping today's transient state.")
+          finally:
+              conn.close()
+          EOF
+
       - name: Run Reona bot
         env:
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
