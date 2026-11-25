@@ -11,7 +11,7 @@ DEFAULT_DB_PATH = os.getenv("REONA_DB_PATH", "reona_bg.db")
 
 
 class ReonaBGDB:
-    """Reona 的每日主軸狀態引擎 ＋ 輕量 RAG 資料庫（單檔 SQLite，零 Token 消耗）。"""
+    """Reona 的六維世界狀態引擎 ＋ 輕量 RAG 資料庫（單檔 SQLite，零 Token 消耗）。"""
 
     def __init__(self, db_path: str = DEFAULT_DB_PATH):
         self.db_path = db_path
@@ -32,16 +32,19 @@ class ReonaBGDB:
                     mainline_date TEXT NOT NULL DEFAULT '',
                     mainline_key TEXT NOT NULL DEFAULT '',
                     mainline_title TEXT NOT NULL DEFAULT '',
-                    mainline_phase TEXT NOT NULL DEFAULT 'steady',
                     gi_cause TEXT NOT NULL DEFAULT '',
                     gi_triggered_today INTEGER NOT NULL DEFAULT 0,
                     mood TEXT NOT NULL DEFAULT 'normal',
                     mood_until REAL NOT NULL DEFAULT 0,
+                    recovery_until REAL NOT NULL DEFAULT 0,
                     gi_status TEXT NOT NULL DEFAULT 'normal',
                     gi_until REAL NOT NULL DEFAULT 0,
                     restroom_until REAL NOT NULL DEFAULT 0,
+                    pending_request_until REAL NOT NULL DEFAULT 0,
+                    mentioned_slots TEXT NOT NULL DEFAULT '',
                     last_nick_ts REAL NOT NULL DEFAULT 0,
                     last_reona_ts REAL NOT NULL DEFAULT 0,
+                    last_proactive_ts REAL NOT NULL DEFAULT 0,
                     updated_at REAL NOT NULL DEFAULT 0
                 );
 
@@ -50,10 +53,7 @@ class ReonaBGDB:
                     mainline_key TEXT NOT NULL UNIQUE,
                     title TEXT NOT NULL,
                     is_weekend INTEGER NOT NULL DEFAULT 0,
-                    morning_desc TEXT NOT NULL,
-                    afternoon_desc TEXT NOT NULL,
-                    evening_desc TEXT NOT NULL,
-                    night_desc TEXT NOT NULL,
+                    phases_json TEXT NOT NULL,
                     evening_mood TEXT NOT NULL DEFAULT 'normal',
                     gi_risk REAL NOT NULL DEFAULT 0.25,
                     gi_cause_hint TEXT NOT NULL DEFAULT '',
@@ -106,133 +106,204 @@ class ReonaBGDB:
                 );
                 """
             )
+
+            # 自動補齊舊版 runtime_state 可能缺少的欄位
+            existing_cols = {r[1] for r in conn.execute("PRAGMA table_info(runtime_state)").fetchall()}
+            migrations = {
+                "recovery_until": "REAL NOT NULL DEFAULT 0",
+                "gi_status": "TEXT NOT NULL DEFAULT 'normal'",
+                "gi_until": "REAL NOT NULL DEFAULT 0",
+                "restroom_until": "REAL NOT NULL DEFAULT 0",
+                "pending_request_until": "REAL NOT NULL DEFAULT 0",
+                "mentioned_slots": "TEXT NOT NULL DEFAULT ''",
+                "last_nick_ts": "REAL NOT NULL DEFAULT 0",
+                "last_reona_ts": "REAL NOT NULL DEFAULT 0",
+                "last_proactive_ts": "REAL NOT NULL DEFAULT 0",
+                "updated_at": "REAL NOT NULL DEFAULT 0",
+            }
+            for col_name, col_def in migrations.items():
+                if col_name not in existing_cols:
+                    conn.execute(f"ALTER TABLE runtime_state ADD COLUMN {col_name} {col_def}")
+
             conn.execute(
-                """
-                INSERT OR IGNORE INTO runtime_state (id, updated_at)
-                VALUES (1, ?)
-                """,
+                "INSERT OR IGNORE INTO runtime_state (id, updated_at) VALUES (1, ?)",
                 (datetime.datetime.now(SYDNEY_TZ).timestamp(),),
             )
 
     def _seed_defaults_if_empty(self) -> None:
-        """初始化每日主軸、台灣打字短句池、生活與童年/家庭/好壞記憶切片。"""
         with self._connect() as conn:
             if conn.execute("SELECT COUNT(*) FROM daily_mainlines").fetchone()[0] == 0:
                 mainlines = [
-                    # 平日主軸（插畫師接案日常）
                     (
                         "work_sketch_rush",
                         "趕商業插畫草稿",
                         0,
-                        "早上剛泡好熱茶，準備整理客戶 brief 開畫草稿",
-                        "下午盯著螢幕修構圖比例，時間過超快",
-                        "傍晚終於把草稿線條順完，肩膀有點緊",
-                        "晚上收工放空，不想再看色票了",
+                        json.dumps(
+                            {
+                                "morning": {
+                                    "location": "雪梨租屋處畫桌前",
+                                    "positions": "Reona 剛坐上工作椅；麻糬在窗台曬春末太陽",
+                                    "event": "泡好熱烏龍茶，正在整理客戶 brief 開畫草稿",
+                                    "items": "保溫杯、數位筆、草稿本",
+                                },
+                                "afternoon": {
+                                    "location": "雪梨租屋處畫桌前（冷氣房）",
+                                    "positions": "Reona 盯著螢幕修構圖；麻糬趴在畫桌角落睡覺",
+                                    "event": "下午趕著把草稿比例順完，時間過超快",
+                                    "items": "數位板、色票本、喝一半的冰美式",
+                                },
+                                "evening": {
+                                    "location": "家裡客廳沙發",
+                                    "positions": "Reona 剛離開畫桌伸懶腰；麻糬跑來蹭腳邊討罐頭",
+                                    "event": "傍晚終於把草稿線條順完，肩膀有點緊",
+                                    "items": "熱水袋、馬克杯、抱枕",
+                                },
+                                "night": {
+                                    "location": "房間床邊",
+                                    "positions": "Reona 洗完澡靠在床頭；麻糬縮在床尾",
+                                    "event": "晚上收工放空，不想再看色票了",
+                                    "items": "溫開水、手機、薄毯",
+                                },
+                            },
+                            ensure_ascii=False,
+                        ),
                         "tired",
                         0.45,
-                        "下午趕稿空腹喝了一杯冰美式提神",
+                        "下午趕稿吹冷氣又空腹喝冰美式",
                         12,
                     ),
                     (
                         "work_final_delivery",
                         "交最終完稿日",
                         0,
-                        "早上在做完稿前的最後細節檢查",
-                        "下午把檔案丟給客戶了，正在等對方確認",
-                        "客戶居然一次就過稿沒退件，整個人鬆一口氣",
-                        "晚上心情很好，打算弄點好吃的犒賞自己",
+                        json.dumps(
+                            {
+                                "morning": {
+                                    "location": "雪梨租屋處畫桌前",
+                                    "positions": "Reona 專心檢查圖層；麻糬蹲在書架上看著她",
+                                    "event": "在做完稿交件前的最後細節檢查",
+                                    "items": "高解析度輸出檔、保溫杯、眼鏡",
+                                },
+                                "afternoon": {
+                                    "location": "雪梨租屋處畫桌前",
+                                    "positions": "Reona 剛寄出信件靠在椅背上；麻糬在抓貓抓板",
+                                    "event": "把完稿檔案寄給客戶了，正在等對方確認",
+                                    "items": "筆電、手機、熱菊花茶",
+                                },
+                                "evening": {
+                                    "location": "家裡廚房與餐桌",
+                                    "positions": "Reona 在弄晚餐；麻糬在飯碗旁邊轉圈",
+                                    "event": "客戶居然一次就過稿沒退件，整個人鬆一口氣",
+                                    "items": "熱湯、餐具、手機",
+                                },
+                                "night": {
+                                    "location": "家裡客廳沙發",
+                                    "positions": "Reona 窩在沙發上；麻糬直接趴在她腿上",
+                                    "event": "交完大案子心情超好，邊摸貓邊放空",
+                                    "items": "無咖啡因花草茶、抱枕",
+                                },
+                            },
+                            ensure_ascii=False,
+                        ),
                         "happy",
                         0.30,
-                        "前幾天趕稿作息有點亂，一放鬆腸胃就開始抗議",
+                        "前幾天趕稿作息亂掉，一鬆懈腸胃就鬧脾氣",
                         12,
                     ),
-                    (
-                        "work_client_revision",
-                        "跟客戶來回改稿",
-                        0,
-                        "一早起來就看到信箱有修改意見，先喝口水冷靜",
-                        "下午一直在微調配色跟光影，有點考驗耐心",
-                        "總算把修改版交出去，今天腦袋快燒乾",
-                        "晚上只想窩在沙發上撸麻糬充電",
-                        "tired",
-                        0.40,
-                        "改稿改到太晚吃飯，隨便吃點冷的就胃悶了",
-                        10,
-                    ),
-                    (
-                        "work_admin_prep",
-                        "整理作品集與請款日",
-                        0,
-                        "早上在對帳跟整理這週的案子進度",
-                        "下午泡在書桌前整理新作品集排版",
-                        "雜事處理得差不多，步調算滿穩的",
-                        "晚上早早洗完澡在房間聽音樂",
-                        "normal",
-                        0.15,
-                        "下午嘴饞喝了點冷飲",
-                        10,
-                    ),
-                    # 週末主軸（雪梨生活節奏）
                     (
                         "wknd_grocery_walk",
                         "出門採買補貨散步",
                         1,
-                        "週末睡到自然醒，慢慢吃早餐看陽光",
-                        "下午出門去超市補貨，順便在雪梨街頭散步",
-                        "提著戰利品回家，順手買了杯咖啡",
-                        "晚上把冰箱塞滿覺得很療癒",
+                        json.dumps(
+                            {
+                                "morning": {
+                                    "location": "家裡餐桌旁",
+                                    "positions": "Reona 睡到自然醒慢慢吃早餐；麻糬在地板翻肚",
+                                    "event": "週末早上難得不用趕稿，邊看陽光邊吃吐司",
+                                    "items": "手沖熱茶、烤吐司、太陽眼鏡",
+                                },
+                                "afternoon": {
+                                    "location": "雪梨街頭與超市",
+                                    "positions": "Reona 在外面採買；麻糬獨自在家看門睡午覺",
+                                    "event": "推著推車補買下週食材跟貓砂，順便散步",
+                                    "items": "帆布購物袋、超市清單、冰拿鐵",
+                                },
+                                "evening": {
+                                    "location": "雪梨租屋處廚房",
+                                    "positions": "Reona 剛提著袋子進門；麻糬立刻衝到玄關迎接",
+                                    "event": "把買回來的東西塞滿冰箱，吹到傍晚海風很舒服",
+                                    "items": "剛買的水果、貓零食、溫水",
+                                },
+                                "night": {
+                                    "location": "家裡客廳沙發",
+                                    "positions": "Reona 洗完澡在沙發滑手機；麻糬窩在旁邊",
+                                    "event": "採買完覺得下週很有安全感，準備早點休息",
+                                    "items": "薄外套、熱茶、香氛蠟燭",
+                                },
+                            },
+                            ensure_ascii=False,
+                        ),
                         "happy",
                         0.35,
-                        "下午在外面嘴饞喝了冰飲又吹到風",
+                        "下午外面太陽大貪喝冰拿鐵，傍晚又吹到海風",
                         12,
                     ),
                     (
                         "wknd_home_mochi",
                         "在家大掃除陪麻糬",
                         1,
-                        "早上在整理畫桌跟洗床單，麻糬一直跟前跟後",
-                        "下午幫麻糬梳毛剪指甲，跟牠鬥智鬥勇",
-                        "家裡變得很乾淨，泡了壺熱烏龍茶發呆",
-                        "晚上窩在毯子裡看劇放空",
+                        json.dumps(
+                            {
+                                "morning": {
+                                    "location": "雪梨租屋處工作室",
+                                    "positions": "Reona 在整理畫桌；麻糬好奇地鑽進紙箱",
+                                    "event": "週末早上洗床單順便清理畫具",
+                                    "items": "吸塵器、抹布、髮圈",
+                                },
+                                "afternoon": {
+                                    "location": "家裡客廳地毯上",
+                                    "positions": "Reona 坐在地毯上；麻糬被抓著梳毛一臉無奈",
+                                    "event": "下午幫麻糬梳毛剪指甲，跟牠鬥智鬥勇",
+                                    "items": "針梳、指甲剪、肉泥條",
+                                },
+                                "evening": {
+                                    "location": "家裡客廳沙發",
+                                    "positions": "Reona 泡好茶坐下；麻糬舔完毛在旁邊打盹",
+                                    "event": "家裡變得很乾淨，開著冷氣放空發呆",
+                                    "items": "熱烏龍茶、薄毯、抱枕",
+                                },
+                                "night": {
+                                    "location": "房間床邊",
+                                    "positions": "Reona 靠在枕頭上；麻糬縮在腳邊",
+                                    "event": "晚上在房間聽音樂看點閒書",
+                                    "items": "溫開水、藍牙耳機、手機",
+                                },
+                            },
+                            ensure_ascii=False,
+                        ),
                         "normal",
                         0.15,
-                        "晚上吃太飽稍微有點脹氣",
+                        "傍晚冷氣開太涼沒蓋肚子",
                         12,
-                    ),
-                    (
-                        "wknd_cafe_recharge",
-                        "去喜歡的咖啡廳放空",
-                        1,
-                        "早上挑了本畫冊出門，打算去常去的角落坐坐",
-                        "下午在咖啡廳邊看人來人往邊隨手塗鴉",
-                        "充電充得很夠，吹著傍晚的風慢慢散步回家",
-                        "晚上靈感不錯，心情輕飄飄的",
-                        "happy",
-                        0.30,
-                        "在咖啡廳點了冰拿鐵結果腸胃又鬧脾氣",
-                        10,
                     ),
                 ]
                 conn.executemany(
                     """
                     INSERT INTO daily_mainlines (
-                        mainline_key, title, is_weekend,
-                        morning_desc, afternoon_desc, evening_desc, night_desc,
+                        mainline_key, title, is_weekend, phases_json,
                         evening_mood, gi_risk, gi_cause_hint, weight
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     mainlines,
                 )
 
             if conn.execute("SELECT COUNT(*) FROM canned_lines").fetchone()[0] == 0:
                 canned_rows = [
-                    # 廁所極簡（4~6 字，台灣口語）
                     ("restroom", "normal", "去一下廁所", 12),
                     ("restroom", "normal", "還在廁所喔", 10),
                     ("restroom", "normal", "等我一下啦", 10),
                     ("restroom", "sick", "還在廁所裡", 12),
                     ("restroom", "sick", "肚子又絞了", 12),
-                    # 腸胃不適 / 疲憊示弱（4~6 字，成熟依賴）
                     ("sick", "any", "肚子有點悶", 12),
                     ("sick", "any", "先喝點溫水", 12),
                     ("sick", "any", "沒什麼力氣", 10),
@@ -240,13 +311,26 @@ class ReonaBGDB:
                     ("tired", "any", "今天好累喔", 12),
                     ("tired", "any", "想靠著你了", 10),
                     ("tired", "any", "讓我喘口氣", 10),
-                    # 敷衍訊息反擊（？、嗯、喔、哈）
                     ("low_effort", "normal", "？", 12),
                     ("low_effort", "normal", "在忙嗎", 10),
                     ("low_effort", "normal", "嗯？", 10),
                     ("low_effort", "normal", "敷衍我喔", 8),
                     ("low_effort", "tired", "⋯", 10),
-                    # 防卡保底短句
+                    ("voice_msg", "normal", "懶得點開聽欸", 12),
+                    ("voice_msg", "normal", "用打字的啦", 12),
+                    ("voice_msg", "normal", "現在不方便聽", 10),
+                    ("voice_msg", "tired", "沒力氣聽語音", 10),
+                    ("voice_msg", "sick", "先打字好嗎", 10),
+                    ("video_req", "normal", "現在超邋遢不要", 12),
+                    ("video_req", "normal", "在忙沒空開啦", 10),
+                    ("video_req", "happy", "懶得整理頭髮", 10),
+                    ("video_req", "tired", "今天狀態超差", 12),
+                    ("video_req", "sick", "沒力氣開視訊", 12),
+                    ("request_declined", "normal", "好喔那沒關係", 12),
+                    ("request_declined", "normal", "你先忙你的啦", 12),
+                    ("request_declined", "happy", "行吧我自己來", 10),
+                    ("request_declined", "tired", "好啦我先休息", 12),
+                    ("request_declined", "sick", "沒事我喝溫水", 12),
                     ("fallback", "normal", "剛在忙手邊", 10),
                     ("fallback", "normal", "晚點再聊喔", 10),
                     ("fallback", "happy", "剛想到一件", 10),
@@ -260,22 +344,15 @@ class ReonaBGDB:
 
             if conn.execute("SELECT COUNT(*) FROM life_snippets").fetchone()[0] == 0:
                 snippet_rows = [
-                    # 日常與雪梨生活
                     ("drawing", "neutral", "normal", "any", 0, "畫桌旁邊永遠放著保溫杯，冷掉就不再喝了。", 12),
-                    ("sydney", "neutral", "normal", "afternoon", 1, "雪梨下午的陽光很舒服，走去超商買東西心情都會變好。", 12),
+                    ("sydney", "neutral", "normal", "afternoon", 1, "雪梨快夏天了白天太陽超亮，但進室內冷氣又偏冷。", 12),
                     ("mochi", "good", "happy", "any", -1, "麻糬剛剛直接踩過我的數位板，還一臉理所當然。", 12),
-                    ("mochi", "neutral", "normal", "evening", -1, "麻糬蹲在窗邊看鳥看得超入迷，叫牠都不理。", 10),
-                    # 原生家庭與童年性格底色（中產各自忙碌、早熟不愛麻煩人、敏感易緊張）
                     ("roots", "neutral", "normal", "night", -1, "從小家裡大家各忙各的，習慣有事自己先消化完再說。", 10),
                     ("roots", "neutral", "tired", "night", -1, "小時候一緊張就會肚子痛，長大後忙起來這個毛病還是沒變。", 11),
-                    # 好的記憶（溫暖有光）
                     ("good_memory", "good", "happy", "any", -1, "記得以前在台北下雨天收工，去巷口喝到一碗熱湯整個人都活過來。", 10),
                     ("good_memory", "good", "happy", "evening", -1, "第一次收到陌生人私訊說被我的插畫療癒到，那張截圖我還留著。", 10),
-                    ("good_memory", "good", "normal", "afternoon", 1, "剛來雪梨沒多久在海邊發呆吹風，突然覺得一個人也能過得很好。", 9),
-                    # 不好的記憶（警戒、委屈、硬撐的代價，僅在疲憊或不適時偶爾浮現）
                     ("bad_memory", "bad", "tired", "night", -1, "以前剛接案時不敢拒絕別人，熬夜硬撐到半夜自己跑去掛急診。", 8),
                     ("bad_memory", "bad", "sick", "any", -1, "小時候有次被誤會卻懶得解釋，悶在心裡結果連拉兩天肚子。", 7),
-                    # 成熟依賴與立場邊界
                     ("reliance", "good", "tired", "night", -1, "平常習慣自己扛，但累的時候有你在旁邊聽著真的安心很多。", 12),
                     ("boundary", "neutral", "normal", "night", -1, "太晚了別跟著熬夜啦，我自己的進度我自己會顧好。", 11),
                 ]
@@ -330,6 +407,17 @@ class ReonaBGDB:
         return "night"
 
     @staticmethod
+    def _season_hint(dt: datetime.datetime) -> str:
+        m = dt.month
+        if m in (11, 12, 1, 2):
+            return "雪梨春末夏季（白天日照長、陽光強，室內冷氣偏涼，傍晚有海風）"
+        if m in (3, 4, 5):
+            return "雪梨秋季（早晚微涼乾爽）"
+        if m in (6, 7, 8):
+            return "雪梨冬季（早晚偏冷乾燥）"
+        return "雪梨春季（氣候溫和偶爾有風）"
+
+    @staticmethod
     def _weighted_choice(rows: List[sqlite3.Row]) -> Optional[sqlite3.Row]:
         if not rows:
             return None
@@ -337,11 +425,10 @@ class ReonaBGDB:
         return random.choices(rows, weights=weights, k=1)[0]
 
     def _ensure_today_mainline(self, conn: sqlite3.Connection, dt: datetime.datetime) -> Dict[str, Any]:
-        """確保今天已鎖定一條每日主軸；換日時自動抽一條符合平日/週末的新主軸。"""
         today_str = dt.strftime("%Y-%m-%d")
         row = dict(conn.execute("SELECT * FROM runtime_state WHERE id = 1").fetchone())
 
-        if row["mainline_date"] != today_str or not row["mainline_key"]:
+        if row.get("mainline_date") != today_str or not row.get("mainline_key"):
             is_wknd = 1 if dt.weekday() >= 5 else 0
             candidates = conn.execute(
                 "SELECT * FROM daily_mainlines WHERE is_weekend = ?",
@@ -354,8 +441,9 @@ class ReonaBGDB:
                     UPDATE runtime_state
                     SET mainline_date = ?, mainline_key = ?, mainline_title = ?,
                         gi_cause = ?, gi_triggered_today = 0,
-                        mood = 'normal', mood_until = 0,
+                        mood = 'normal', mood_until = 0, recovery_until = 0,
                         gi_status = 'normal', gi_until = 0, restroom_until = 0,
+                        pending_request_until = 0, mentioned_slots = '',
                         updated_at = ?
                     WHERE id = 1
                     """,
@@ -371,7 +459,7 @@ class ReonaBGDB:
 
         ml = conn.execute(
             "SELECT * FROM daily_mainlines WHERE mainline_key = ?",
-            (row["mainline_key"],),
+            (row.get("mainline_key", ""),),
         ).fetchone()
         return {"state": row, "mainline": dict(ml) if ml else None}
 
@@ -379,50 +467,82 @@ class ReonaBGDB:
         self,
         mood: Optional[str] = None,
         mood_duration_sec: int = 2400,
+        recovery_sec: int = 0,
         gi_status: Optional[str] = None,
         gi_duration_sec: int = 2400,
         restroom_sec: int = 0,
         gi_cause: Optional[str] = None,
+        pending_request_sec: int = 0,
     ) -> None:
         now = datetime.datetime.now(SYDNEY_TZ).timestamp()
         with self._connect() as conn:
             row = dict(conn.execute("SELECT * FROM runtime_state WHERE id = 1").fetchone())
-            new_mood = mood if mood is not None else row["mood"]
-            new_mood_until = (now + mood_duration_sec) if mood is not None else row["mood_until"]
+            new_mood = mood if mood is not None else row.get("mood", "normal")
+            new_mood_until = (now + mood_duration_sec) if mood is not None else float(row.get("mood_until") or 0)
+            new_recovery = (now + recovery_sec) if recovery_sec > 0 else float(row.get("recovery_until") or 0)
 
-            new_gi = gi_status if gi_status is not None else row["gi_status"]
-            new_gi_until = (now + gi_duration_sec) if gi_status is not None else row["gi_until"]
-            new_gi_triggered = 1 if gi_status == "upset" else row["gi_triggered_today"]
-            new_cause = gi_cause if gi_cause is not None else row["gi_cause"]
+            new_gi = gi_status if gi_status is not None else row.get("gi_status", "normal")
+            new_gi_until = (now + gi_duration_sec) if gi_status is not None else float(row.get("gi_until") or 0)
+            new_gi_triggered = 1 if gi_status == "upset" else int(row.get("gi_triggered_today") or 0)
+            new_cause = gi_cause if gi_cause is not None else row.get("gi_cause", "")
 
-            new_restroom_until = (now + restroom_sec) if restroom_sec > 0 else row["restroom_until"]
+            new_restroom_until = (now + restroom_sec) if restroom_sec > 0 else float(row.get("restroom_until") or 0)
+            new_pending = (
+                (now + pending_request_sec)
+                if pending_request_sec > 0
+                else float(row.get("pending_request_until") or 0)
+            )
 
             conn.execute(
                 """
                 UPDATE runtime_state
-                SET mood = ?, mood_until = ?, gi_status = ?, gi_until = ?,
-                    gi_triggered_today = ?, gi_cause = ?, restroom_until = ?, updated_at = ?
+                SET mood = ?, mood_until = ?, recovery_until = ?,
+                    gi_status = ?, gi_until = ?, gi_triggered_today = ?, gi_cause = ?,
+                    restroom_until = ?, pending_request_until = ?, updated_at = ?
                 WHERE id = 1
                 """,
                 (
                     new_mood,
                     new_mood_until,
+                    new_recovery,
                     new_gi,
                     new_gi_until,
                     new_gi_triggered,
                     new_cause,
                     new_restroom_until,
+                    new_pending,
                     now,
                 ),
             )
 
-    def evaluate_causal_events(self, user_text: str = "", now_dt: Optional[datetime.datetime] = None) -> None:
-        """
-        圍繞每日主軸的因果推進（非隨機亂跳）：
-        1. 對話關鍵字若觸及誇獎/貓咪/美食，順勢帶出好心情。
-        2. 下午到晚上時段，依今日主軸的 gi_risk 決定是否誘發腸胃不適（每天最多一次主發作）。
-        3. 若正在腸胃不適期間，有合理機率短暫去廁所（180~360 秒）。
-        """
+    def clear_pending_request(self) -> None:
+        with self._connect() as conn:
+            conn.execute("UPDATE runtime_state SET pending_request_until = 0 WHERE id = 1")
+
+    def mark_slot_mentioned(self, slot: str) -> None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT mentioned_slots FROM runtime_state WHERE id = 1").fetchone()
+            raw_slots = row["mentioned_slots"] if row and row["mentioned_slots"] else ""
+            slots = [s for s in raw_slots.split(",") if s]
+            if slot not in slots:
+                slots.append(slot)
+                conn.execute(
+                    "UPDATE runtime_state SET mentioned_slots = ? WHERE id = 1",
+                    (",".join(slots),),
+                )
+
+    def touch_timestamps(self, nick: bool = False, reona: bool = False, proactive: bool = False) -> None:
+        now = datetime.datetime.now(SYDNEY_TZ).timestamp()
+        with self._connect() as conn:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(runtime_state)").fetchall()}
+            if nick and "last_nick_ts" in cols:
+                conn.execute("UPDATE runtime_state SET last_nick_ts = ? WHERE id = 1", (now,))
+            if reona and "last_reona_ts" in cols:
+                conn.execute("UPDATE runtime_state SET last_reona_ts = ? WHERE id = 1", (now,))
+            if proactive and "last_proactive_ts" in cols:
+                conn.execute("UPDATE runtime_state SET last_proactive_ts = ? WHERE id = 1", (now,))
+
+    def evaluate_causal_events(self, user_text: str = "", now_dt: Optional[datetime.datetime] = None) -> Optional[str]:
         dt = now_dt or datetime.datetime.now(SYDNEY_TZ)
         now = dt.timestamp()
         slot = self._time_slot(dt)
@@ -432,41 +552,55 @@ class ReonaBGDB:
             state = bundle["state"]
             ml = bundle["mainline"]
             if not ml:
-                return
+                return None
 
-            # 1. 互動語意微調情緒（圍繞互動因果）
             txt = (user_text or "").strip()
-            if txt:
+            pending_until = float(state.get("pending_request_until") or 0)
+
+            if txt and now < pending_until:
+                decline_kw = ("不要", "沒空", "不行", "改天", "沒辦法", "先忙", "算了", "晚點再說", "沒時間")
+                if any(k in txt for k in decline_kw):
+                    self.clear_pending_request()
+                    self.set_state(mood="normal", mood_duration_sec=3600, recovery_sec=5400)
+                    return "request_declined"
+
+            in_recovery = now < float(state.get("recovery_until") or 0)
+            gi_status = state.get("gi_status") or "normal"
+            mood_until = float(state.get("mood_until") or 0)
+            gi_triggered_today = int(state.get("gi_triggered_today") or 0)
+            restroom_until = float(state.get("restroom_until") or 0)
+
+            if txt and not in_recovery:
                 if any(k in txt for k in ("厲害", "好棒", "喜歡", "好看", "麻糬", "好吃", "辛苦了", "抱抱")):
-                    if state["gi_status"] == "normal" and now >= state["mood_until"]:
+                    if gi_status == "normal" and now >= mood_until:
                         self.set_state(mood="happy", mood_duration_sec=2700)
                 elif any(k in txt for k in ("喝冰", "冰咖啡", "吃辣", "熬夜", "別睡")):
-                    if state["gi_triggered_today"] == 0 and random.random() < 0.45:
+                    if gi_triggered_today == 0 and random.random() < 0.45:
                         self.set_state(
                             gi_status="upset",
                             gi_duration_sec=3000,
+                            recovery_sec=5400,
                             restroom_sec=random.randint(180, 320),
                         )
 
-            # 2. 下午/傍晚依今日主軸風險自然誘發腸胃體質（每日最多主發作一次）
-            if slot in ("afternoon", "evening") and state["gi_triggered_today"] == 0 and state["gi_status"] == "normal":
-                # 每次檢查給予平滑小機率，累積在下午到傍晚期間接近 gi_risk
+            if slot in ("afternoon", "evening") and gi_triggered_today == 0 and gi_status == "normal":
                 step_prob = float(ml["gi_risk"]) * 0.18
                 if random.random() < step_prob:
                     self.set_state(
                         gi_status="upset",
                         gi_duration_sec=random.randint(2400, 4200),
+                        recovery_sec=5400,
                         restroom_sec=random.randint(180, 360),
                         gi_cause=ml["gi_cause_hint"],
                     )
 
-            # 3. 腸胃不適期間，若剛結束上一次廁所一段時間，可能再跑一趟
-            if state["gi_status"] == "upset" and now > state["restroom_until"] + 900:
+            if gi_status == "upset" and now > restroom_until + 900:
                 if random.random() < 0.25:
                     self.set_state(restroom_sec=random.randint(150, 300))
 
+        return None
+
     def compute_snapshot(self, now_dt: Optional[datetime.datetime] = None) -> Dict[str, Any]:
-        """計算當下完整狀態（圍繞每日主軸 ＋ 體質狀態 ＋ 字數與連發規則）。"""
         dt = now_dt or datetime.datetime.now(SYDNEY_TZ)
         now = dt.timestamp()
         slot = self._time_slot(dt)
@@ -477,33 +611,55 @@ class ReonaBGDB:
             row = bundle["state"]
             ml = bundle["mainline"]
 
-            # 依時段取得主軸當下階段描述與預設情緒
             if ml:
-                phase_map = {
-                    "morning": (ml["morning_desc"], "normal"),
-                    "afternoon": (ml["afternoon_desc"], "normal"),
-                    "evening": (ml["evening_desc"], ml["evening_mood"]),
-                    "night": (ml["night_desc"], ml["evening_mood"]),
-                }
-                phase_desc, default_mood = phase_map[slot]
+                phases = json.loads(ml["phases_json"])
+                p = phases.get(slot, phases["afternoon"])
+                default_mood = ml["evening_mood"] if slot in ("evening", "night") else "normal"
             else:
-                phase_desc, default_mood = ("日常自由步調", "normal")
+                p = {
+                    "location": "雪梨租屋處",
+                    "positions": "Reona 在家；麻糬在旁邊",
+                    "event": "日常自由步調",
+                    "items": "保溫杯、手機",
+                }
+                default_mood = "normal"
 
-            mood = row["mood"] if now < row["mood_until"] else default_mood
-            gi = row["gi_status"] if now < row["gi_until"] else "normal"
-            in_restroom = now < row["restroom_until"]
+            in_recovery = now < float(row.get("recovery_until") or 0)
+            stored_mood = row.get("mood") or "normal"
+            mood_until = float(row.get("mood_until") or 0)
+            mood = stored_mood if now < mood_until else default_mood
+            if in_recovery and mood == "happy":
+                mood = "normal"
 
-            if mood != row["mood"] or gi != row["gi_status"]:
+            stored_gi = row.get("gi_status") or "normal"
+            gi_until = float(row.get("gi_until") or 0)
+            gi = stored_gi if now < gi_until else "normal"
+            in_restroom = now < float(row.get("restroom_until") or 0)
+
+            location = "家裡洗手間" if in_restroom else (
+                "家裡客廳沙發" if gi != "normal" else p["location"]
+            )
+            positions = (
+                "Reona 在廁所；麻糬蹲在門外等"
+                if in_restroom
+                else ("Reona 抱著熱水袋蜷在沙發上；麻糬趴在腳邊守著" if gi != "normal" else p["positions"])
+            )
+            items = (
+                "手機、衛生紙"
+                if in_restroom
+                else ("熱水袋、溫開水、腸胃藥" if gi != "normal" else p["items"])
+            )
+
+            raw_slots = row.get("mentioned_slots") or ""
+            mentioned_slots = [s for s in raw_slots.split(",") if s]
+            already_mentioned = slot in mentioned_slots
+
+            if mood != stored_mood or gi != stored_gi:
                 conn.execute(
-                    """
-                    UPDATE runtime_state
-                    SET mood = ?, gi_status = ?, updated_at = ?
-                    WHERE id = 1
-                    """,
+                    "UPDATE runtime_state SET mood = ?, gi_status = ?, updated_at = ? WHERE id = 1",
                     (mood, gi, now),
                 )
 
-        # 動態決定連發則數與每則字數上限
         if in_restroom:
             mode = "restroom"
             min_msgs, max_msgs = 1, 1
@@ -532,19 +688,28 @@ class ReonaBGDB:
 
         return {
             "sydney_time": dt.strftime("%Y-%m-%d %H:%M"),
+            "season": self._season_hint(dt),
             "time_slot": slot,
             "is_weekend": is_weekend,
-            "mainline_title": row["mainline_title"],
-            "mainline_phase": phase_desc,
+            "mainline_title": row.get("mainline_title") or "日常步調",
+            "location": location,
+            "positions": positions,
+            "current_event": p["event"],
+            "items": items,
+            "already_mentioned_slot": already_mentioned,
             "mood": mood,
+            "in_recovery": in_recovery,
             "gi_status": gi,
-            "gi_cause": row["gi_cause"] if gi != "normal" else "",
+            "gi_cause": (row.get("gi_cause") or "") if gi != "normal" else "",
             "in_restroom": in_restroom,
             "mode": mode,
             "min_msgs": min_msgs,
             "max_msgs": max_msgs,
             "max_chars": max_chars,
             "delay_range": delay_range,
+            "last_nick_ts": float(row.get("last_nick_ts") or 0),
+            "last_reona_ts": float(row.get("last_reona_ts") or 0),
+            "last_proactive_ts": float(row.get("last_proactive_ts") or 0),
         }
 
     def pick_canned_line(self, category: str, sub_state: str = "any") -> Optional[str]:
@@ -565,12 +730,10 @@ class ReonaBGDB:
         return chosen["text"] if chosen else None
 
     def retrieve_rag_clue(self, snapshot: Dict[str, Any]) -> Dict[str, Optional[str]]:
-        """輕量 RAG：圍繞今日主軸 ＋ 當下狀態，精準撈取最多 1 條背景線索與動態記憶。"""
         mood = snapshot["mood"]
         slot = snapshot["time_slot"]
         weekend_flag = 1 if snapshot["is_weekend"] else 0
 
-        # 不好的記憶只在疲憊或腸胃不適時低機率浮現，平常以中性與好記憶為主
         allowed_polarities = ("neutral", "good")
         if mood in ("tired", "sick") or snapshot["gi_status"] != "normal":
             if random.random() < 0.35:
@@ -592,20 +755,11 @@ class ReonaBGDB:
             snippet = self._weighted_choice(snippet_rows)
 
             mem_row = conn.execute(
-                """
-                SELECT * FROM daily_memories
-                ORDER BY importance DESC, id DESC
-                LIMIT 1
-                """
+                "SELECT * FROM daily_memories ORDER BY importance DESC, id DESC LIMIT 1"
             ).fetchone()
 
             arc_row = conn.execute(
-                """
-                SELECT * FROM story_arcs
-                WHERE is_active = 1
-                ORDER BY id ASC
-                LIMIT 1
-                """
+                "SELECT * FROM story_arcs WHERE is_active = 1 ORDER BY id ASC LIMIT 1"
             ).fetchone()
 
         arc_clue = None
@@ -616,8 +770,6 @@ class ReonaBGDB:
                 arc_clue = f"{arc_row['title']}：{steps[idx]}"
 
         return {
-            "today_mainline": f"{snapshot['mainline_title']}（{snapshot['mainline_phase']}）",
-            "gi_context": snapshot["gi_cause"] if snapshot["gi_status"] != "normal" else None,
             "life_snippet": snippet["content"] if snippet else None,
             "daily_memory": mem_row["content"] if mem_row else None,
             "story_arc": arc_clue,
@@ -659,12 +811,3 @@ class ReonaBGDB:
                     "INSERT INTO nick_notes (topic, content, updated_at) VALUES (?, ?, ?)",
                     (topic.strip(), content.strip(), now),
                 )
-
-
-if __name__ == "__main__":
-    db = ReonaBGDB(":memory:")
-    db.evaluate_causal_events("今天工作辛苦了，麻糬乖嗎")
-    snap = db.compute_snapshot()
-    clues = db.retrieve_rag_clue(snap)
-    print("Snapshot:", json.dumps(snap, ensure_ascii=False, indent=2))
-    print("RAG Clues:", json.dumps(clues, ensure_ascii=False, indent=2))
