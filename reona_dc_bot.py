@@ -156,8 +156,8 @@ def _trim_at_boundary(chunk: str, max_chars: int) -> str:
     return cut.strip()
 
 
-def clean_and_split_lines(raw: str, max_msgs: int, max_chars: int) -> List[str]:
-    """清理模型輸出、替換非台灣詞彙，並在自然語意邊界切分連發短句。"""
+def clean_and_split_lines(raw: str, max_msgs: int, max_chars: int, user_text: str = "") -> List[str]:
+    """清理模型輸出、修正代名詞與非台灣詞彙，並嚴格限制則數與字數。"""
     if not raw or _looks_like_english_cot(raw):
         return []
 
@@ -167,8 +167,13 @@ def clean_and_split_lines(raw: str, max_msgs: int, max_chars: int) -> List[str]:
     for bad_word, tw_word in TW_REPLACEMENTS.items():
         text = text.replace(bad_word, tw_word)
 
+    # 修正麻糬誤用「他」的情況
+    if "麻糬" in text:
+        text = re.sub(r"(麻糬[^，。！？\n]{0,12})他", r"\1牠", text)
+
     raw_lines = [line.strip() for line in re.split(r"[\r\n]+", text) if line.strip()]
     cleaned: List[str] = []
+    norm_user = re.sub(r"[？\?！!。，,\s]+", "", user_text or "")
 
     for line in raw_lines:
         if _looks_like_english_cot(line):
@@ -176,6 +181,11 @@ def clean_and_split_lines(raw: str, max_msgs: int, max_chars: int) -> List[str]:
         line = re.sub(r"^[\-\*\d\.\)\s]+", "", line)
         line = line.rstrip("。、；：\"'」』")
         if not line:
+            continue
+
+        # 過濾原封不動學舌反問（例如對方問「為什麼」，直接回「為什麼」）
+        norm_line = re.sub(r"[？\?！!。，,\s]+", "", line)
+        if norm_user and norm_line == norm_user:
             continue
 
         if len(line) > max_chars:
@@ -257,7 +267,7 @@ def build_system_prompt(
     proactive_note = (
         "這是你忙到一個段落或想念他時主動傳訊息給 Nick，圍繞當下狀態自然開頭，不要生硬問『在嗎』。"
         if is_proactive
-        else "有問必答：Nick 問問題時，第一句務必先回答問題，態度可依狀態變化但不能閃躲；沒問工作就不要主動提工作或案子。"
+        else "有問必答：Nick 問問題或追問『為什麼』時，第一句務必直接回答原因或答案，嚴禁學舌反問；沒問工作就不要主動提工作或案子。"
     )
 
     repeat_guard = (
@@ -275,16 +285,19 @@ def build_system_prompt(
     clue_block = "\n".join(x for x in clue_lines if x)
 
     return (
-        "你是 Reona，20多歲台北長大、現居雪梨的獨立插畫師，養一隻貓叫麻糬。\n"
+        "你是 Reona，20多歲台北長大、現居雪梨的獨立插畫師，養一隻貓叫麻糬（提到麻糬一律用『牠』，不可用『他』）。\n"
         "性格與背景底色：台北優渥溫情家庭長大，與家人感情很好但習慣報喜不報憂；"
         "小時候因家境在學校被同學排擠、畫具被弄壞也不敢聲張，腸胃弱常跑廁所還被老師當眾酸嬌生慣養，"
         "因此養成對外人獨立防備、有事自己扛；唯獨在信任的 Nick 面前確認不會被嫌煩後才卸下心防，"
         "平時冷靜幽默會適度吐槽，身體不舒服或累時則綿綿訴苦、黏人討拍。\n"
-        "現實生活常識：你是一般人類，遵守雪梨作息與店家營業時間；晚間與深夜只待在家裡休息，"
-        "絕對不會在半夜或晚上出門買顏料、逛超市或跑去買東西，晚上也不會隨便喝濃咖啡或硬聊工作。\n"
+        "自然對話與常識鐵律：\n"
+        "1. 像真人傳訊息一樣就事論事、自然接話，絕對不要為了湊字數每句硬塞『台北』、『麻糬』或生硬湊在一起比較。\n"
+        "2. 食物與生活描述必須符合常識與人設（你腸胃弱不太吃甜膩食物；法式長棍是外脆內軟有麥香、有嚼勁，不是甜食，也不像夜市）。\n"
+        "3. 感情表達含蓄自然，嚴禁肉麻油膩台詞（例如『想你想到手酸酸的』這類過度誇張的情話）。\n"
+        "4. 遵守雪梨作息與店家營業時間：晚間與深夜只待在家裡休息，絕不在半夜出門買顏料、逛超市或喝濃咖啡。\n"
         "說話禁令：直接輸出繁體中文短句，嚴禁英文思考過程；用道地台灣人打字口語"
-        "（可用喔、啦、欸、嘛、齁，嚴禁『作為…』『…呀』『靈感爆棚』等翻譯腔或 AI 客服腔，不加句號），"
-        "每則短句用換行分隔，不要寫成一大段。\n"
+        "（可用喔、啦、欸、嘛、齁，嚴禁翻譯腔或 AI 客服腔，不加句號），"
+        "總共只寫 1～2 則短句，每則用換行分隔，嚴禁一次塞三四行。\n"
         f"{tone_rule}\n"
         f"{proactive_note}{repeat_guard}\n\n"
         "【當下背景狀態（僅作情境參考，沒問到不用硬提）】\n"
@@ -340,7 +353,7 @@ class ReonaBot(discord.Client):
         groq_url = _groq_endpoint()
         keys = list(GROQ_API_KEYS)
         random.shuffle(keys)
-        effective_max_tokens = max(max_tokens, 240)
+        effective_max_tokens = max(max_tokens, 200)
 
         for idx, key in enumerate(keys):
             try:
@@ -353,7 +366,7 @@ class ReonaBot(discord.Client):
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": user_prompt},
                         ],
-                        "temperature": 0.72,
+                        "temperature": 0.68,
                         "max_tokens": effective_max_tokens,
                     },
                 ) as resp:
@@ -381,7 +394,7 @@ class ReonaBot(discord.Client):
                     json={
                         "systemInstruction": {"parts": [{"text": system_prompt}]},
                         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-                        "generationConfig": {"temperature": 0.72, "maxOutputTokens": max_tokens},
+                        "generationConfig": {"temperature": 0.68, "maxOutputTokens": max_tokens},
                     },
                 ) as resp:
                     if resp.status == 200:
@@ -430,10 +443,10 @@ class ReonaBot(discord.Client):
 
         clues = self.db.retrieve_rag_clue(snap, user_text="")
         sys_prompt = build_system_prompt(snap, clues, is_proactive=True, allow_work=False)
-        max_tokens = 120 if snap["mode"] == "happy" else 100
+        max_tokens = 110 if snap["mode"] == "happy" else 95
         raw = await self._call_llm_once(
             sys_prompt,
-            "請依當下狀態自然主動發一組精簡短句給 Nick。",
+            "請依當下狀態自然主動發 1～2 則精簡短句給 Nick。",
             max_tokens=max_tokens,
         )
         lines = clean_and_split_lines(raw or "", snap["max_msgs"], snap["max_chars"])
@@ -550,9 +563,9 @@ class ReonaBot(discord.Client):
             else f"Nick 剛說：{user_text}"
         )
 
-        max_tokens = 130 if snap["mode"] == "happy" else 110
+        max_tokens = 110 if snap["mode"] == "happy" else 95
         raw = await self._call_llm_once(sys_prompt, user_prompt, max_tokens=max_tokens)
-        lines = clean_and_split_lines(raw or "", snap["max_msgs"], snap["max_chars"])
+        lines = clean_and_split_lines(raw or "", snap["max_msgs"], snap["max_chars"], user_text=user_text)
 
         if not lines:
             fallback = self.db.pick_canned_line("fallback", snap["mode"]) or "剛在忙手邊，你呢"
