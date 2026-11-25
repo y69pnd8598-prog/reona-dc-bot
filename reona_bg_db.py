@@ -1,9 +1,12 @@
 import datetime
 import json
+import math
 import os
 import random
+import re
 import sqlite3
-from typing import Any, Dict, List, Optional
+from collections import Counter
+from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 SYDNEY_TZ = ZoneInfo("Australia/Sydney")
@@ -12,7 +15,7 @@ DEFAULT_DB_PATH = os.getenv("REONA_DB_PATH", "reona_bg.db")
 DEFAULT_PHASES: Dict[str, Dict[str, str]] = {
     "morning": {
         "location": "雪梨租屋處畫桌前",
-        "positions": "Reona 剛坐上工作椅；麻糬在窗台曬春末太陽",
+        "positions": "Reona 剛坐上工作椅；麻糬在窗台曬太陽",
         "event": "泡好熱烏龍茶，正在整理今天的插畫進度",
         "items": "保溫杯、數位筆、草稿本",
     },
@@ -38,7 +41,9 @@ DEFAULT_PHASES: Dict[str, Dict[str, str]] = {
 
 
 class ReonaBGDB:
-    """Reona 的六維世界狀態引擎 ＋ 輕量 RAG 資料庫（單檔 SQLite，零 Token 消耗）。"""
+    """Reona 的世界狀態引擎 ＋ 輕量相似度檢索資料庫（單檔 SQLite）。"""
+
+    SIMILARITY_THRESHOLD = 0.22
 
     def __init__(self, db_path: str = DEFAULT_DB_PATH):
         self.db_path = db_path
@@ -66,6 +71,8 @@ class ReonaBGDB:
                     recovery_until REAL NOT NULL DEFAULT 0,
                     gi_status TEXT NOT NULL DEFAULT 'normal',
                     gi_until REAL NOT NULL DEFAULT 0,
+                    illness_status TEXT NOT NULL DEFAULT 'normal',
+                    illness_until REAL NOT NULL DEFAULT 0,
                     restroom_until REAL NOT NULL DEFAULT 0,
                     pending_request_until REAL NOT NULL DEFAULT 0,
                     mentioned_slots TEXT NOT NULL DEFAULT '',
@@ -139,6 +146,8 @@ class ReonaBGDB:
                 "recovery_until": "REAL NOT NULL DEFAULT 0",
                 "gi_status": "TEXT NOT NULL DEFAULT 'normal'",
                 "gi_until": "REAL NOT NULL DEFAULT 0",
+                "illness_status": "TEXT NOT NULL DEFAULT 'normal'",
+                "illness_until": "REAL NOT NULL DEFAULT 0",
                 "restroom_until": "REAL NOT NULL DEFAULT 0",
                 "pending_request_until": "REAL NOT NULL DEFAULT 0",
                 "mentioned_slots": "TEXT NOT NULL DEFAULT ''",
@@ -180,15 +189,15 @@ class ReonaBGDB:
                             {
                                 "morning": {
                                     "location": "雪梨租屋處畫桌前",
-                                    "positions": "Reona 剛坐上工作椅；麻糬在窗台曬春末太陽",
-                                    "event": "泡好熱烏龍茶，正在整理客戶 brief 開畫草稿",
+                                    "positions": "Reona 剛坐上工作椅；麻糬在窗台曬太陽",
+                                    "event": "泡好熱烏龍茶，正在整理今天的插畫進度",
                                     "items": "保溫杯、數位筆、草稿本",
                                 },
                                 "afternoon": {
                                     "location": "雪梨租屋處畫桌前（冷氣房）",
                                     "positions": "Reona 盯著螢幕修構圖；麻糬趴在畫桌角落睡覺",
                                     "event": "下午趕著把草稿比例順完，時間過超快",
-                                    "items": "數位板、色票本、喝一半的冰美式",
+                                    "items": "數位板、色票本、喝一半的溫茶",
                                 },
                                 "evening": {
                                     "location": "家裡客廳沙發",
@@ -207,7 +216,7 @@ class ReonaBGDB:
                         ),
                         "tired",
                         0.45,
-                        "下午趕稿吹冷氣又空腹喝冰美式",
+                        "下午趕稿吹冷氣又空腹喝冰的",
                         12,
                     ),
                     (
@@ -264,7 +273,7 @@ class ReonaBGDB:
                                     "location": "雪梨街頭與超市",
                                     "positions": "Reona 在外面採買；麻糬獨自在家看門睡午覺",
                                     "event": "推著推車補買下週食材跟貓砂，順便散步",
-                                    "items": "帆布購物袋、超市清單、冰拿鐵",
+                                    "items": "帆布購物袋、超市清單、溫水",
                                 },
                                 "evening": {
                                     "location": "雪梨租屋處廚房",
@@ -283,7 +292,7 @@ class ReonaBGDB:
                         ),
                         "happy",
                         0.35,
-                        "下午外面太陽大貪喝冰拿鐵，傍晚又吹到海風",
+                        "下午外面太陽大貪喝冰的，傍晚又吹到海風",
                         12,
                     ),
                     (
@@ -337,43 +346,27 @@ class ReonaBGDB:
 
             if conn.execute("SELECT COUNT(*) FROM canned_lines").fetchone()[0] == 0:
                 canned_rows = [
-                    ("restroom", "normal", "去一下廁所", 12),
-                    ("restroom", "normal", "還在廁所喔", 10),
-                    ("restroom", "normal", "等我一下啦", 10),
-                    ("restroom", "sick", "還在廁所裡", 12),
-                    ("restroom", "sick", "肚子又絞了", 12),
-                    ("sick", "any", "肚子有點悶", 12),
-                    ("sick", "any", "先喝點溫水", 12),
-                    ("sick", "any", "沒什麼力氣", 10),
-                    ("sick", "any", "腸胃又鬧了", 10),
-                    ("tired", "any", "今天好累喔", 12),
-                    ("tired", "any", "想靠著你了", 10),
-                    ("tired", "any", "讓我喘口氣", 10),
-                    ("low_effort", "normal", "？", 12),
-                    ("low_effort", "normal", "在忙嗎", 10),
-                    ("low_effort", "normal", "嗯？", 10),
-                    ("low_effort", "normal", "敷衍我喔", 8),
-                    ("low_effort", "tired", "⋯", 10),
-                    ("voice_msg", "normal", "懶得點開聽欸", 12),
-                    ("voice_msg", "normal", "用打字的啦", 12),
-                    ("voice_msg", "normal", "現在不方便聽", 10),
-                    ("voice_msg", "tired", "沒力氣聽語音", 10),
-                    ("voice_msg", "sick", "先打字好嗎", 10),
-                    ("video_req", "normal", "現在超邋遢不要", 12),
-                    ("video_req", "normal", "在忙沒空開啦", 10),
-                    ("video_req", "happy", "懶得整理頭髮", 10),
-                    ("video_req", "tired", "今天狀態超差", 12),
-                    ("video_req", "sick", "沒力氣開視訊", 12),
-                    ("request_declined", "normal", "好喔那沒關係", 12),
-                    ("request_declined", "normal", "你先忙你的啦", 12),
-                    ("request_declined", "happy", "行吧我自己來", 10),
-                    ("request_declined", "tired", "好啦我先休息", 12),
-                    ("request_declined", "sick", "沒事我喝溫水", 12),
-                    ("fallback", "normal", "剛在忙手邊", 10),
-                    ("fallback", "normal", "晚點再聊喔", 10),
-                    ("fallback", "happy", "剛想到一件", 10),
-                    ("fallback", "tired", "先休息一下", 10),
-                    ("fallback", "sick", "先躺一下喔", 10),
+                    ("restroom", "normal", "去一下廁所，等我一下", 12),
+                    ("restroom", "normal", "還在廁所喔，很快出來", 10),
+                    ("restroom", "sick", "還在廁所裡，肚子又絞了", 12),
+                    ("sick", "any", "肚子有點悶，先喝點溫水", 12),
+                    ("sick", "any", "今天身體不太舒服，沒什麼力氣", 12),
+                    ("sick", "any", "腸胃又鬧脾氣了，你別嫌我煩", 10),
+                    ("tired", "any", "今天好累喔，想靠著你一下", 12),
+                    ("tired", "any", "讓我喘口氣，有你在旁邊聽著好多了", 10),
+                    ("low_effort", "normal", "嗯？怎麼突然這樣", 12),
+                    ("low_effort", "normal", "在忙嗎，還是又在敷衍我", 10),
+                    ("low_effort", "tired", "⋯好累喔，想跟你說說話", 10),
+                    ("voice_msg", "normal", "現在不太方便聽語音，用打字的啦", 12),
+                    ("voice_msg", "sick", "沒什麼力氣聽語音，先打字好嗎", 12),
+                    ("video_req", "normal", "現在超邋遢不要啦", 12),
+                    ("video_req", "sick", "現在沒力氣開視訊，想先乖乖躺著", 12),
+                    ("request_declined", "normal", "好喔那沒關係，你先忙你的", 12),
+                    ("request_declined", "sick", "好啦沒事，我先喝點溫水休息", 12),
+                    ("fallback", "normal", "剛在忙手邊的事，你呢", 10),
+                    ("fallback", "happy", "剛想到一件好笑的事想跟你说", 10),
+                    ("fallback", "tired", "先休息一下，你陪我聊聊天好不好", 10),
+                    ("fallback", "sick", "先躺一下喔，你會不會覺得我很麻煩", 10),
                 ]
                 conn.executemany(
                     "INSERT INTO canned_lines (category, sub_state, text, weight) VALUES (?, ?, ?, ?)",
@@ -381,19 +374,7 @@ class ReonaBGDB:
                 )
 
             if conn.execute("SELECT COUNT(*) FROM life_snippets").fetchone()[0] == 0:
-                snippet_rows = [
-                    ("drawing", "neutral", "normal", "any", 0, "畫桌旁邊永遠放著保溫杯，冷掉就不再喝了。", 12),
-                    ("sydney", "neutral", "normal", "afternoon", 1, "雪梨快夏天了白天太陽超亮，但進室內冷氣又偏冷。", 12),
-                    ("mochi", "good", "happy", "any", -1, "麻糬剛剛直接踩過我的數位板，還一臉理所當然。", 12),
-                    ("roots", "neutral", "normal", "night", -1, "從小家裡大家各忙各的，習慣有事自己先消化完再說。", 10),
-                    ("roots", "neutral", "tired", "night", -1, "小時候一緊張就會肚子痛，長大後忙起來這個毛病還是沒變。", 11),
-                    ("good_memory", "good", "happy", "any", -1, "記得以前在台北下雨天收工，去巷口喝到一碗熱湯整個人都活過來。", 10),
-                    ("good_memory", "good", "happy", "evening", -1, "第一次收到陌生人私訊說被我的插畫療癒到，那張截圖我還留著。", 10),
-                    ("bad_memory", "bad", "tired", "night", -1, "以前剛接案時不敢拒絕別人，熬夜硬撐到半夜自己跑去掛急診。", 8),
-                    ("bad_memory", "bad", "sick", "any", -1, "小時候有次被誤會卻懶得解釋，悶在心裡結果連拉兩天肚子。", 7),
-                    ("reliance", "good", "tired", "night", -1, "平常習慣自己扛，但累的時候有你在旁邊聽著真的安心很多。", 12),
-                    ("boundary", "neutral", "normal", "night", -1, "太晚了別跟著熬夜啦，我自己的進度我自己會顧好。", 11),
-                ]
+                snippet_rows = self._default_life_snippets()
                 conn.executemany(
                     """
                     INSERT INTO life_snippets (topic, polarity, mood_fit, time_slot, is_weekend, content, weight)
@@ -428,10 +409,118 @@ class ReonaBGDB:
                 conn.execute(
                     """
                     INSERT INTO daily_memories (mem_date, category, content, importance, created_at)
-                    VALUES (?, 'life', '台北長大的獨立插畫師，現在帶著貓咪麻糬在雪梨生活。', 8, ?)
+                    VALUES (?, 'life', '台北優渥溫情家庭長大的插畫師，跟家人感情很好，但小時候在學校受過委屈，現在帶著麻糬在雪梨靠自己生活。', 8, ?)
                     """,
                     (now_dt.strftime("%Y-%m-%d"), now_dt.timestamp()),
                 )
+
+    @staticmethod
+    def _default_life_snippets() -> List[Tuple[str, str, str, str, int, str, int]]:
+        return [
+            # 1. 深層背景與童年校園陰影（低頻率、高情緒權重）
+            (
+                "childhood_bullying",
+                "bad",
+                "any",
+                "night",
+                -1,
+                "小時候家裡環境其實不錯，但在學校反而常被同學排擠，連畫具被弄壞也不敢聲張，怕爸媽擔心或去學校鬧大，就自己默默吞了。",
+                9,
+            ),
+            (
+                "childhood_gi_teacher",
+                "bad",
+                "any",
+                "any",
+                -1,
+                "小時候腸胃就很敏感、常跑廁所，結果被老師當眾酸嬌生慣養、毛病多，從那之後我只要不舒服就習慣硬撐，很怕別人覺得我很麻煩。",
+                9,
+            ),
+            (
+                "sydney_independence",
+                "neutral",
+                "any",
+                "any",
+                -1,
+                "一個人來雪梨接案生活，其實也是想低調靠自己的本事站穩，不想一直靠家裡，也不想讓遠在台北的家人替我操心。",
+                10,
+            ),
+            # 2. 家人溫情切片（中低頻率、生活溫度底色）
+            (
+                "family_bond",
+                "good",
+                "any",
+                "any",
+                -1,
+                "我跟台北的家人感情其實很好，爸媽很疼我，偶爾還會寄台灣的腸胃藥或小零食過來，只是我習慣報喜不報憂，不舒服很少跟家裡說。",
+                11,
+            ),
+            (
+                "family_care",
+                "good",
+                "happy",
+                "evening",
+                -1,
+                "跟家裡聊麻糬跟生活瑣事的時候很放鬆，他們都很支持我在外面過自己的步調。",
+                10,
+            ),
+            # 3. 對你的專屬安全感與反差討拍
+            (
+                "reliance_comfort",
+                "good",
+                "tired",
+                "night",
+                -1,
+                "平常在外面習慣自己扛、嘴硬逞強，但跟你在一起時只要確定你不會嫌我煩，累的時候就會忍不住想黏著你討拍。",
+                12,
+            ),
+            (
+                "illness_clingy",
+                "good",
+                "any",
+                "any",
+                -1,
+                "生理期或感冒、腸胃不舒服的時候，我其實特別沒力氣也特別想撒嬌，只敢在你面前把委屈說出來，你不會覺得我很麻煩吧？",
+                12,
+            ),
+            # 4. 日常感官與生活習慣
+            (
+                "gi_diet_habit",
+                "neutral",
+                "any",
+                "any",
+                -1,
+                "我自己腸胃偏弱，太冰、太甜或太刺激的東西都不太敢亂碰，看到別人拿鐵又加奶又加糖，心裡都會默默替他的胃捏一把冷汗。",
+                11,
+            ),
+            (
+                "drawing_habit",
+                "neutral",
+                "normal",
+                "any",
+                0,
+                "畫桌旁邊永遠放著保溫杯，冷掉就不再喝了；畫到卡關時會起來伸懶腰順便看麻糬發呆。",
+                10,
+            ),
+            (
+                "mochi_daily",
+                "good",
+                "happy",
+                "any",
+                -1,
+                "麻糬剛剛又踩過我的畫桌，一臉理所當然的樣子，看牠這樣心情就很難壞起來。",
+                11,
+            ),
+            (
+                "sydney_weather",
+                "neutral",
+                "normal",
+                "afternoon",
+                1,
+                "雪梨白天陽光很亮，但進室內冷氣又偏涼，一不小心就容易著涼或肚子悶。",
+                10,
+            ),
+        ]
 
     @staticmethod
     def _time_slot(dt: datetime.datetime) -> str:
@@ -462,6 +551,38 @@ class ReonaBGDB:
         weights = [max(1, int(r["weight"])) for r in rows]
         return random.choices(rows, weights=weights, k=1)[0]
 
+    @staticmethod
+    def _tokenize_for_similarity(text: str) -> Counter:
+        cleaned = re.sub(r"\s+", "", (text or "").lower())
+        if not cleaned:
+            return Counter()
+        tokens: List[str] = []
+        tokens.extend(re.findall(r"[a-z0-9_]+", cleaned))
+        for ch in cleaned:
+            if "\u4e00" <= ch <= "\u9fff":
+                tokens.append(ch)
+        for i in range(len(cleaned) - 1):
+            pair = cleaned[i : i + 2]
+            if not re.fullmatch(r"[\W_]+", pair):
+                tokens.append(pair)
+        return Counter(tokens)
+
+    @classmethod
+    def _cosine_similarity(cls, query_text: str, doc_text: str) -> float:
+        q_vec = cls._tokenize_for_similarity(query_text)
+        d_vec = cls._tokenize_for_similarity(doc_text)
+        if not q_vec or not d_vec:
+            return 0.0
+        common = set(q_vec.keys()) & set(d_vec.keys())
+        dot = sum(q_vec[k] * d_vec[k] for k in common)
+        if dot <= 0:
+            return 0.0
+        q_norm = math.sqrt(sum(v * v for v in q_vec.values()))
+        d_norm = math.sqrt(sum(v * v for v in d_vec.values()))
+        if q_norm == 0 or d_norm == 0:
+            return 0.0
+        return dot / (q_norm * d_norm)
+
     def _ensure_today_mainline(self, conn: sqlite3.Connection, dt: datetime.datetime) -> Dict[str, Any]:
         today_str = dt.strftime("%Y-%m-%d")
         row = dict(conn.execute("SELECT * FROM runtime_state WHERE id = 1").fetchone())
@@ -481,9 +602,10 @@ class ReonaBGDB:
                     SET mainline_date = ?, mainline_key = ?, mainline_title = ?,
                         gi_cause = ?, gi_triggered_today = 0,
                         mood = 'normal', mood_until = 0, recovery_until = 0,
-                        gi_status = 'normal', gi_until = 0, restroom_until = 0,
-                        pending_request_until = 0, mentioned_slots = '',
-                        updated_at = ?
+                        gi_status = 'normal', gi_until = 0,
+                        illness_status = 'normal', illness_until = 0,
+                        restroom_until = 0, pending_request_until = 0,
+                        mentioned_slots = '', updated_at = ?
                     WHERE id = 1
                     """,
                     (
@@ -509,6 +631,8 @@ class ReonaBGDB:
         recovery_sec: int = 0,
         gi_status: Optional[str] = None,
         gi_duration_sec: int = 2400,
+        illness_status: Optional[str] = None,
+        illness_duration_sec: int = 7200,
         restroom_sec: int = 0,
         gi_cause: Optional[str] = None,
         pending_request_sec: int = 0,
@@ -525,6 +649,13 @@ class ReonaBGDB:
             new_gi_triggered = 1 if gi_status == "upset" else int(row.get("gi_triggered_today") or 0)
             new_cause = gi_cause if gi_cause is not None else row.get("gi_cause", "")
 
+            new_illness = illness_status if illness_status is not None else row.get("illness_status", "normal")
+            new_illness_until = (
+                (now + illness_duration_sec)
+                if illness_status is not None
+                else float(row.get("illness_until") or 0)
+            )
+
             new_restroom_until = (now + restroom_sec) if restroom_sec > 0 else float(row.get("restroom_until") or 0)
             new_pending = (
                 (now + pending_request_sec)
@@ -537,6 +668,7 @@ class ReonaBGDB:
                 UPDATE runtime_state
                 SET mood = ?, mood_until = ?, recovery_until = ?,
                     gi_status = ?, gi_until = ?, gi_triggered_today = ?, gi_cause = ?,
+                    illness_status = ?, illness_until = ?,
                     restroom_until = ?, pending_request_until = ?, updated_at = ?
                 WHERE id = 1
                 """,
@@ -548,6 +680,8 @@ class ReonaBGDB:
                     new_gi_until,
                     new_gi_triggered,
                     new_cause,
+                    new_illness,
+                    new_illness_until,
                     new_restroom_until,
                     new_pending,
                     now,
@@ -679,57 +813,79 @@ class ReonaBGDB:
             stored_gi = row.get("gi_status") or "normal"
             gi_until = float(row.get("gi_until") or 0)
             gi = stored_gi if now < gi_until else "normal"
+
+            stored_illness = row.get("illness_status") or "normal"
+            illness_until = float(row.get("illness_until") or 0)
+            illness = stored_illness if now < illness_until else "normal"
+
             in_restroom = now < float(row.get("restroom_until") or 0)
 
+            is_unwell = (gi != "normal") or (illness != "normal") or (mood == "sick")
+
             location = "家裡洗手間" if in_restroom else (
-                "家裡客廳沙發" if gi != "normal" else p["location"]
+                "家裡客廳沙發" if is_unwell else p["location"]
             )
             positions = (
                 "Reona 在廁所；麻糬蹲在門外等"
                 if in_restroom
-                else ("Reona 抱著熱水袋蜷在沙發上；麻糬趴在腳邊守著" if gi != "normal" else p["positions"])
+                else ("Reona 抱著熱水袋蜷在沙發上；麻糬趴在腳邊守著" if is_unwell else p["positions"])
             )
             items = (
                 "手機、衛生紙"
                 if in_restroom
-                else ("熱水袋、溫開水、腸胃藥" if gi != "normal" else p["items"])
+                else ("熱水袋、溫開水、常備藥" if is_unwell else p["items"])
             )
 
             raw_slots = row.get("mentioned_slots") or ""
             mentioned_slots = [s for s in raw_slots.split(",") if s]
             already_mentioned = slot in mentioned_slots
 
-            if mood != stored_mood or gi != stored_gi:
+            if mood != stored_mood or gi != stored_gi or illness != stored_illness:
                 conn.execute(
-                    "UPDATE runtime_state SET mood = ?, gi_status = ?, updated_at = ? WHERE id = 1",
-                    (mood, gi, now),
+                    "UPDATE runtime_state SET mood = ?, gi_status = ?, illness_status = ?, updated_at = ? WHERE id = 1",
+                    (mood, gi, illness, now),
                 )
 
         if in_restroom:
             mode = "restroom"
-            min_msgs, max_msgs = 1, 1
-            max_chars = 6
+            min_msgs, max_msgs = 1, 2
+            max_chars = 35
             delay_range = (1.5, 4.0)
+        elif illness in ("heavy_cold", "flu"):
+            mode = "heavy_cold"
+            min_msgs, max_msgs = 2, 4
+            max_chars = 90
+            delay_range = (2.0, 4.5)
+        elif illness == "cold":
+            mode = "cold"
+            min_msgs, max_msgs = 2, 3
+            max_chars = 80
+            delay_range = (1.8, 4.0)
+        elif illness == "period":
+            mode = "period"
+            min_msgs, max_msgs = 2, 4
+            max_chars = 90
+            delay_range = (1.8, 4.0)
         elif gi != "normal" or mood == "sick":
             mode = "sick"
-            min_msgs, max_msgs = 1, 2
-            max_chars = 6
-            delay_range = (2.0, 5.0)
+            min_msgs, max_msgs = 2, 3
+            max_chars = 80
+            delay_range = (1.8, 4.0)
         elif mood == "tired":
             mode = "tired"
-            min_msgs, max_msgs = 1, 2
-            max_chars = 6
-            delay_range = (2.0, 5.0)
+            min_msgs, max_msgs = 2, 3
+            max_chars = 75
+            delay_range = (1.8, 3.8)
         elif mood == "happy":
             mode = "happy"
-            min_msgs, max_msgs = 3, 4
-            max_chars = 15
+            min_msgs, max_msgs = 2, 4
+            max_chars = 90
             delay_range = (1.5, 3.2)
         else:
             mode = "normal"
-            min_msgs, max_msgs = 1, 3
-            max_chars = 10
-            delay_range = (1.5, 4.0)
+            min_msgs, max_msgs = 2, 4
+            max_chars = 85
+            delay_range = (1.5, 3.8)
 
         return {
             "sydney_time": dt.strftime("%Y-%m-%d %H:%M"),
@@ -745,6 +901,7 @@ class ReonaBGDB:
             "mood": mood,
             "in_recovery": in_recovery,
             "gi_status": gi,
+            "illness_status": illness,
             "gi_cause": (row.get("gi_cause") or "") if gi != "normal" else "",
             "in_restroom": in_restroom,
             "mode": mode,
@@ -774,15 +931,25 @@ class ReonaBGDB:
         chosen = self._weighted_choice(rows)
         return chosen["text"] if chosen else None
 
-    def retrieve_rag_clue(self, snapshot: Dict[str, Any]) -> Dict[str, Optional[str]]:
+    def retrieve_rag_clue(
+        self,
+        snapshot: Dict[str, Any],
+        user_text: str = "",
+        threshold: Optional[float] = None,
+    ) -> Dict[str, Optional[str]]:
         mood = snapshot["mood"]
         slot = snapshot["time_slot"]
         weekend_flag = 1 if snapshot["is_weekend"] else 0
+        is_unwell = (
+            snapshot.get("gi_status", "normal") != "normal"
+            or snapshot.get("illness_status", "normal") != "normal"
+            or mood in ("sick", "period", "cold", "heavy_cold")
+        )
+        score_cut = self.SIMILARITY_THRESHOLD if threshold is None else threshold
 
         allowed_polarities = ("neutral", "good")
-        if mood in ("tired", "sick") or snapshot["gi_status"] != "normal":
-            if random.random() < 0.35:
-                allowed_polarities = ("neutral", "bad")
+        if mood in ("tired", "sick", "period", "cold", "heavy_cold") or snapshot.get("gi_status", "normal") != "normal":
+            allowed_polarities = ("neutral", "good", "bad")
 
         placeholders = ",".join("?" for _ in allowed_polarities)
 
@@ -797,15 +964,37 @@ class ReonaBGDB:
                 """,
                 (*allowed_polarities, mood, slot, weekend_flag),
             ).fetchall()
-            snippet = self._weighted_choice(snippet_rows)
+
+            candidates = [dict(r) for r in snippet_rows]
+            if is_unwell:
+                filtered = [c for c in candidates if c.get("topic") != "drawing_habit"]
+                if filtered:
+                    candidates = filtered
+
+            chosen_snippet: Optional[str] = None
+            q = (user_text or "").strip()
+            if q and candidates:
+                scored: List[Tuple[float, Dict[str, Any]]] = []
+                for c in candidates:
+                    doc = f"{c.get('topic', '')} {c.get('content', '')}"
+                    sim = self._cosine_similarity(q, doc)
+                    if sim >= score_cut:
+                        scored.append((sim, c))
+                if scored:
+                    scored.sort(key=lambda item: (item[0], int(item[1].get("weight") or 10)), reverse=True)
+                    top_pool = [item[1] for item in scored[:2]]
+                    picked = random.choice(top_pool)
+                    chosen_snippet = picked["content"]
 
             mem_row = conn.execute(
                 "SELECT * FROM daily_memories ORDER BY importance DESC, id DESC LIMIT 1"
             ).fetchone()
 
-            arc_row = conn.execute(
-                "SELECT * FROM story_arcs WHERE is_active = 1 ORDER BY id ASC LIMIT 1"
-            ).fetchone()
+            arc_row = None
+            if not is_unwell:
+                arc_row = conn.execute(
+                    "SELECT * FROM story_arcs WHERE is_active = 1 ORDER BY id ASC LIMIT 1"
+                ).fetchone()
 
         arc_clue = None
         if arc_row:
@@ -815,7 +1004,7 @@ class ReonaBGDB:
                 arc_clue = f"{arc_row['title']}：{steps[idx]}"
 
         return {
-            "life_snippet": snippet["content"] if snippet else None,
+            "life_snippet": chosen_snippet,
             "daily_memory": mem_row["content"] if mem_row else None,
             "story_arc": arc_clue,
         }
