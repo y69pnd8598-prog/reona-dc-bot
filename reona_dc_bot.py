@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import json
 import os
 import random
 import re
@@ -46,13 +47,14 @@ def _groq_endpoint() -> str:
 
 
 def _extract_groq_text(msg: Dict) -> str:
-    content = (msg.get("content") or "").strip()
-    if content:
-        return content
-    reasoning = (msg.get("reasoning_content") or "").strip()
-    if reasoning:
-        lines = [ln.strip() for ln in reasoning.splitlines() if ln.strip()]
-        return lines[-1] if lines else ""
+    for field in ("content", "reasoning_content", "reasoning", "text"):
+        val = msg.get(field)
+        if isinstance(val, str) and val.strip():
+            txt = val.strip()
+            if field in ("reasoning_content", "reasoning"):
+                lines = [ln.strip() for ln in txt.splitlines() if ln.strip()]
+                return lines[-1] if lines else ""
+            return txt
     return ""
 
 
@@ -172,7 +174,7 @@ class ReonaBot(discord.Client):
             self.db.touch_timestamps(nick=nick, reona=reona, proactive=proactive)
 
     async def setup_hook(self) -> None:
-        self.http_session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20))
+        self.http_session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15))
 
     async def close(self) -> None:
         if self.http_session and not self.http_session.closed:
@@ -180,7 +182,6 @@ class ReonaBot(discord.Client):
         await super().close()
 
     async def _call_llm_once(self, system_prompt: str, user_prompt: str, max_tokens: int) -> Optional[str]:
-        """優先走 Groq（支援 GROQ_MODEL 與多 Key 輪替，若回空則改用 llama-3.3-70b-versatile 再試）。"""
         if not self.http_session:
             return None
 
@@ -192,39 +193,35 @@ class ReonaBot(discord.Client):
         keys = list(GROQ_API_KEYS)
         random.shuffle(keys)
 
-        models_to_try = [GROQ_MODEL]
-        if GROQ_MODEL != "llama-3.3-70b-versatile":
-            models_to_try.append("llama-3.3-70b-versatile")
-
-        for model_name in models_to_try:
-            for idx, key in enumerate(keys):
-                try:
-                    async with self.http_session.post(
-                        groq_url,
-                        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                        json={
-                            "model": model_name,
-                            "messages": [
-                                {"role": "system", "content": system_prompt},
-                                {"role": "user", "content": user_prompt},
-                            ],
-                            "temperature": 0.72,
-                            "max_tokens": max_tokens,
-                        },
-                    ) as resp:
-                        if resp.status == 200:
-                            data = await resp.json()
-                            msg_obj = data["choices"][0]["message"]
-                            content = _extract_groq_text(msg_obj)
-                            print(f"[LLM Groq ({model_name}) OK] raw={content!r}", flush=True)
-                            if content:
-                                return content
-                        else:
-                            err_txt = await resp.text()
-                            print(f"[LLM Groq ({model_name}) #{idx} HTTP {resp.status}] {err_txt[:200]}", flush=True)
-                except Exception as e:
-                    print(f"[LLM Groq ({model_name}) #{idx} Exception] {type(e).__name__}: {repr(e)}", flush=True)
-                    continue
+        for idx, key in enumerate(keys):
+            try:
+                async with self.http_session.post(
+                    groq_url,
+                    headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                    json={
+                        "model": GROQ_MODEL,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                        "temperature": 0.72,
+                        "max_tokens": max_tokens,
+                    },
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        msg_obj = data["choices"][0]["message"]
+                        content = _extract_groq_text(msg_obj)
+                        print(f"[LLM Groq ({GROQ_MODEL}) #{idx} OK] raw={content!r}", flush=True)
+                        if content:
+                            return content
+                        print(f"[LLM Groq Empty Msg Keys] {json.dumps(msg_obj, ensure_ascii=False)[:240]}", flush=True)
+                    else:
+                        err_txt = await resp.text()
+                        print(f"[LLM Groq ({GROQ_MODEL}) #{idx} HTTP {resp.status}] {err_txt[:200]}", flush=True)
+            except Exception as e:
+                print(f"[LLM Groq ({GROQ_MODEL}) #{idx} Exception] {type(e).__name__}: {repr(e)}", flush=True)
+                continue
 
         if GEMINI_API_KEY and not self._gemini_quota_exhausted:
             url = _gemini_endpoint("gemini-3.8-flash")
