@@ -9,6 +9,33 @@ from zoneinfo import ZoneInfo
 SYDNEY_TZ = ZoneInfo("Australia/Sydney")
 DEFAULT_DB_PATH = os.getenv("REONA_DB_PATH", "reona_bg.db")
 
+DEFAULT_PHASES: Dict[str, Dict[str, str]] = {
+    "morning": {
+        "location": "雪梨租屋處畫桌前",
+        "positions": "Reona 剛坐上工作椅；麻糬在窗台曬春末太陽",
+        "event": "泡好熱烏龍茶，正在整理今天的插畫進度",
+        "items": "保溫杯、數位筆、草稿本",
+    },
+    "afternoon": {
+        "location": "雪梨租屋處畫桌前（冷氣房）",
+        "positions": "Reona 盯著螢幕修構圖；麻糬趴在畫桌角落睡覺",
+        "event": "下午專心畫圖，室內冷氣偏涼",
+        "items": "數位板、色票本、溫開水",
+    },
+    "evening": {
+        "location": "家裡客廳沙發",
+        "positions": "Reona 剛離開畫桌伸懶腰；麻糬跑來蹭腳邊",
+        "event": "傍晚收工準備晚餐與放空",
+        "items": "熱水袋、馬克杯、抱枕",
+    },
+    "night": {
+        "location": "房間床邊",
+        "positions": "Reona 靠在床頭；麻糬縮在床尾",
+        "event": "晚上休息放空，準備睡覺",
+        "items": "溫開水、手機、薄毯",
+    },
+}
+
 
 class ReonaBGDB:
     """Reona 的六維世界狀態引擎 ＋ 輕量 RAG 資料庫（單檔 SQLite，零 Token 消耗）。"""
@@ -53,7 +80,7 @@ class ReonaBGDB:
                     mainline_key TEXT NOT NULL UNIQUE,
                     title TEXT NOT NULL,
                     is_weekend INTEGER NOT NULL DEFAULT 0,
-                    phases_json TEXT NOT NULL,
+                    phases_json TEXT NOT NULL DEFAULT '{}',
                     evening_mood TEXT NOT NULL DEFAULT 'normal',
                     gi_risk REAL NOT NULL DEFAULT 0.25,
                     gi_cause_hint TEXT NOT NULL DEFAULT '',
@@ -107,9 +134,8 @@ class ReonaBGDB:
                 """
             )
 
-            # 自動補齊舊版 runtime_state 可能缺少的欄位
-            existing_cols = {r[1] for r in conn.execute("PRAGMA table_info(runtime_state)").fetchall()}
-            migrations = {
+            runtime_cols = {r[1] for r in conn.execute("PRAGMA table_info(runtime_state)").fetchall()}
+            runtime_migrations = {
                 "recovery_until": "REAL NOT NULL DEFAULT 0",
                 "gi_status": "TEXT NOT NULL DEFAULT 'normal'",
                 "gi_until": "REAL NOT NULL DEFAULT 0",
@@ -121,9 +147,21 @@ class ReonaBGDB:
                 "last_proactive_ts": "REAL NOT NULL DEFAULT 0",
                 "updated_at": "REAL NOT NULL DEFAULT 0",
             }
-            for col_name, col_def in migrations.items():
-                if col_name not in existing_cols:
+            for col_name, col_def in runtime_migrations.items():
+                if col_name not in runtime_cols:
                     conn.execute(f"ALTER TABLE runtime_state ADD COLUMN {col_name} {col_def}")
+
+            mainline_cols = {r[1] for r in conn.execute("PRAGMA table_info(daily_mainlines)").fetchall()}
+            mainline_migrations = {
+                "phases_json": "TEXT NOT NULL DEFAULT '{}'",
+                "evening_mood": "TEXT NOT NULL DEFAULT 'normal'",
+                "gi_risk": "REAL NOT NULL DEFAULT 0.25",
+                "gi_cause_hint": "TEXT NOT NULL DEFAULT ''",
+                "weight": "INTEGER NOT NULL DEFAULT 10",
+            }
+            for col_name, col_def in mainline_migrations.items():
+                if col_name not in mainline_cols:
+                    conn.execute(f"ALTER TABLE daily_mainlines ADD COLUMN {col_name} {col_def}")
 
             conn.execute(
                 "INSERT OR IGNORE INTO runtime_state (id, updated_at) VALUES (1, ?)",
@@ -436,6 +474,7 @@ class ReonaBGDB:
             ).fetchall()
             chosen = self._weighted_choice(candidates)
             if chosen:
+                chosen_dict = dict(chosen)
                 conn.execute(
                     """
                     UPDATE runtime_state
@@ -449,9 +488,9 @@ class ReonaBGDB:
                     """,
                     (
                         today_str,
-                        chosen["mainline_key"],
-                        chosen["title"],
-                        chosen["gi_cause_hint"],
+                        chosen_dict.get("mainline_key", ""),
+                        chosen_dict.get("title", "日常步調"),
+                        chosen_dict.get("gi_cause_hint", ""),
                         dt.timestamp(),
                     ),
                 )
@@ -583,15 +622,16 @@ class ReonaBGDB:
                             restroom_sec=random.randint(180, 320),
                         )
 
+            gi_risk = float(ml.get("gi_risk") or 0.25)
             if slot in ("afternoon", "evening") and gi_triggered_today == 0 and gi_status == "normal":
-                step_prob = float(ml["gi_risk"]) * 0.18
+                step_prob = gi_risk * 0.18
                 if random.random() < step_prob:
                     self.set_state(
                         gi_status="upset",
                         gi_duration_sec=random.randint(2400, 4200),
                         recovery_sec=5400,
                         restroom_sec=random.randint(180, 360),
-                        gi_cause=ml["gi_cause_hint"],
+                        gi_cause=ml.get("gi_cause_hint") or "",
                     )
 
             if gi_status == "upset" and now > restroom_until + 900:
@@ -611,18 +651,23 @@ class ReonaBGDB:
             row = bundle["state"]
             ml = bundle["mainline"]
 
+            phases = dict(DEFAULT_PHASES)
+            default_mood = "normal"
+
             if ml:
-                phases = json.loads(ml["phases_json"])
-                p = phases.get(slot, phases["afternoon"])
-                default_mood = ml["evening_mood"] if slot in ("evening", "night") else "normal"
-            else:
-                p = {
-                    "location": "雪梨租屋處",
-                    "positions": "Reona 在家；麻糬在旁邊",
-                    "event": "日常自由步調",
-                    "items": "保溫杯、手機",
-                }
-                default_mood = "normal"
+                raw_phases = ml.get("phases_json") or "{}"
+                try:
+                    parsed = json.loads(raw_phases)
+                    if isinstance(parsed, dict):
+                        for k, v in parsed.items():
+                            if isinstance(v, dict):
+                                phases[k] = {**DEFAULT_PHASES.get(k, DEFAULT_PHASES["afternoon"]), **v}
+                except Exception:
+                    pass
+                if ml.get("evening_mood") and slot in ("evening", "night"):
+                    default_mood = ml["evening_mood"]
+
+            p = phases.get(slot, phases["afternoon"])
 
             in_recovery = now < float(row.get("recovery_until") or 0)
             stored_mood = row.get("mood") or "normal"
