@@ -12,8 +12,11 @@ from reona_bg_db import SYDNEY_TZ, ReonaBGDB
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "")
 TARGET_CHANNEL_ID = int(os.getenv("TARGET_CHANNEL_ID", "0"))
-GROQ_API_KEYS = [k.strip() for k in os.getenv("GROQ_API_KEYS", "").split(",") if k.strip()]
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+
+raw_groq = os.getenv("GROQ_API_KEYS") or os.getenv("GROQ_API_KEY") or ""
+GROQ_API_KEYS = [k.strip() for k in raw_groq.split(",") if k.strip()]
+GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip()
+
 PROACTIVE_ONLY = os.getenv("PROACTIVE_ONLY", "0") == "1"
 RUN_SECONDS = int(os.getenv("RUN_SECONDS", "1680"))
 
@@ -155,7 +158,7 @@ class ReonaBot(discord.Client):
         await super().close()
 
     async def _call_llm_once(self, system_prompt: str, user_prompt: str, max_tokens: int) -> Optional[str]:
-        """省 Token 單次呼叫：優先 Groq 多 Key 輪替，失敗才走 Gemini 備援（印出錯誤原因方便排查）。"""
+        """省 Token 單次呼叫：優先 Groq 多 Key 輪替，失敗才走 Gemini 備援。"""
         if not self.http_session:
             return None
 
@@ -193,17 +196,20 @@ class ReonaBot(discord.Client):
                 continue
 
         if GEMINI_API_KEY:
+            gemini_url = (
+                "[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/)"
+                "gemini-2.5-flash:generateContent"
+            )
             try:
-                url = (
-                    "[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/)"
-                    f"gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
-                )
-                payload = {
-                    "systemInstruction": {"parts": [{"text": system_prompt}]},
-                    "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-                    "generationConfig": {"temperature": 0.72, "maxOutputTokens": max_tokens},
-                }
-                async with self.http_session.post(url, json=payload) as resp:
+                async with self.http_session.post(
+                    gemini_url,
+                    params={"key": GEMINI_API_KEY},
+                    json={
+                        "systemInstruction": {"parts": [{"text": system_prompt}]},
+                        "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+                        "generationConfig": {"temperature": 0.72, "maxOutputTokens": max_tokens},
+                    },
+                ) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         content = data["candidates"][0]["content"]["parts"][0]["text"]
