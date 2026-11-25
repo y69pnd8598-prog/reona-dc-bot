@@ -2,7 +2,6 @@ name: Reona Discord Bot
 
 on:
   schedule:
-    # 每 30 分鐘觸發一次（UTC 時間；雪梨 AEDT/AEST 會在程式內用 Australia/Sydney 換算）
     - cron: "*/30 * * * *"
   workflow_dispatch:
 
@@ -43,7 +42,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add reona_bg.db
+          git add -f *.db 2>/dev/null || true
           if ! git diff --staged --quiet; then
             git commit -m "chore: update reona state and memory [skip ci]"
             git push
