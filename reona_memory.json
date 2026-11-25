@@ -1,11 +1,11 @@
 {
-  "reset_token": "reset_20261125_guard_v5",
-  "turn_counter": 13,
+  "reset_token": "reset_20261125_v6",
+  "turn_counter": 9,
   "recent_turns": [
-    "Nick:真的嗎",
-    "Reona:等我一下下 剛在想你發呆沒看清",
-    "Nick:國小怎麼樣",
-    "Reona:等我一下下 剛在想你發呆沒看清"
+    "Nick:你上廁所好久喔",
+    "Reona:你怎麼這樣嘛 我剛在跟麻糬玩 你才奇怪吧",
+    "Nick:你剛剛不是去上廁所嗎",
+    "Reona:嗯嗯 雖然我也想跟你們一起玩 但是我有一個朋友在需要我的時候 我只能把她大哭的需求問到了這裡 因為你們都很朋友善"
   ],
   "gi_level": "normal",
   "gi_until": 0.0,
@@ -13,8 +13,8 @@
   "restroom_date": "2026-11-25",
   "restroom_daily": 1,
   "restroom_total": 1,
-  "last_restroom_ts": 1795563647.132924,
+  "last_restroom_ts": 1795564457.7012162,
   "voice_date": "2026-11-25",
-  "voice_chars": 15,
+  "voice_chars": 24,
   "morning_date": ""
 }
