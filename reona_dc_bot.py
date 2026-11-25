@@ -97,12 +97,12 @@ def _looks_like_english_cot(text: str) -> bool:
 def _rescue_cjk_from_reasoning(reasoning: str) -> str:
     if not reasoning:
         return ""
-    quoted = re.findall(r"[\"「『]([^\"」』\n]{1,25})[\"」』]", reasoning)
+    quoted = re.findall(r"[\"「『]([^\"」』\n]{1,35})[\"」』]", reasoning)
     for cand in reversed(quoted):
         if re.search(r"[\u4e00-\u9fff]", cand) and not _looks_like_english_cot(cand):
             return cand.strip()
     for line in reversed([ln.strip() for ln in reasoning.splitlines() if ln.strip()]):
-        cjk_chunks = re.findall(r"[\u4e00-\u9fff，,！!？\?～~…⋯]{2,20}", line)
+        cjk_chunks = re.findall(r"[\u4e00-\u9fff，,！!？\?～~…⋯]{2,30}", line)
         if cjk_chunks:
             return cjk_chunks[-1].strip()
     return ""
@@ -131,8 +131,20 @@ def _extract_groq_text(msg: Dict) -> str:
     return ""
 
 
+def _trim_at_boundary(chunk: str, max_chars: int) -> str:
+    chunk = chunk.strip()
+    if len(chunk) <= max_chars:
+        return chunk
+    cut = chunk[:max_chars]
+    for sep in ("，", "。", "！", "？", "～", "~", "、", " "):
+        idx = cut.rfind(sep)
+        if idx >= max(8, max_chars // 2):
+            return cut[:idx].strip()
+    return cut.strip()
+
+
 def clean_and_split_lines(raw: str, max_msgs: int, max_chars: int) -> List[str]:
-    """清理模型輸出、替換非台灣詞彙，並硬控管連發則數與每則字數上限。"""
+    """清理模型輸出、替換非台灣詞彙，並在自然語意邊界切分連發短句。"""
     if not raw or _looks_like_english_cot(raw):
         return []
 
@@ -149,16 +161,20 @@ def clean_and_split_lines(raw: str, max_msgs: int, max_chars: int) -> List[str]:
         if _looks_like_english_cot(line):
             continue
         line = re.sub(r"^[\-\*\d\.\)\s]+", "", line)
-        line = line.rstrip("。，、；：\"'」』")
+        line = line.rstrip("。、；：\"'」』")
         if not line:
             continue
 
         if len(line) > max_chars:
-            parts = [p.strip() for p in re.split(r"[，,！!？\?]+", line) if p.strip()]
+            parts = [p.strip() for p in re.split(r"[！!？\?]+", line) if p.strip()]
+            if len(parts) <= 1:
+                parts = [p.strip() for p in re.split(r"[，,]+", line) if p.strip()]
             for p in parts:
                 if _looks_like_english_cot(p):
                     continue
-                cleaned.append(p[:max_chars])
+                trimmed = _trim_at_boundary(p, max_chars)
+                if trimmed:
+                    cleaned.append(trimmed)
                 if len(cleaned) >= max_msgs:
                     break
         else:
@@ -175,42 +191,59 @@ def clean_and_split_lines(raw: str, max_msgs: int, max_chars: int) -> List[str]:
 
 
 def build_system_prompt(snapshot: Dict, clues: Dict, is_proactive: bool = False) -> str:
-    """組裝輕量、緊扣六維世界狀態與台灣成熟獨立人設的 System Prompt。"""
+    """組裝緊扣世界狀態、身體譜系與 Reona 性格反差的 System Prompt。"""
     mode = snapshot["mode"]
     min_m, max_m = snapshot["min_msgs"], snapshot["max_msgs"]
     max_c = snapshot["max_chars"]
 
-    if mode in ("restroom", "sick", "tired"):
+    if mode == "restroom":
         tone_rule = (
-            f"你現在身體疲憊或腸胃不舒服，平常自己扛但對 Nick 卸下防備。"
-            f"只能回 {min_m}～{max_m} 則極短句，每則最多 {max_c} 個字，語氣軟一點、簡短示弱。"
+            f"你現在正在去廁所或剛緩過來，回 {min_m}～{max_m} 則自然短句（每則約 {max_c} 字內），"
+            f"語氣自然、不用太拘謹。"
+        )
+    elif mode in ("sick", "period", "cold", "heavy_cold"):
+        state_desc = {
+            "period": "生理期悶痛又有點煩躁沒力",
+            "cold": "一般感冒有點鼻塞喉嚨卡、人懶懶的",
+            "heavy_cold": "重感冒全身沒力又想睡、特別脆弱",
+            "sick": "腸胃或身體不舒服、悶悶的不太有精神",
+        }.get(mode, "身體不太舒服")
+        tone_rule = (
+            f"你現在是「{state_desc}」狀態。平常獨立嘴硬，但對 Nick 卸下防備，"
+            f"語氣放軟、綿綿地訴苦並主動黏著討拍，偶爾自然帶一句怕麻煩他的小在意；"
+            f"回 {min_m}～{max_m} 則短句，每則最多 {max_c} 個字。"
+        )
+    elif mode == "tired":
+        tone_rule = (
+            f"你現在有點累，對 Nick 比較放軟想靠著討拍，但也偶爾會小虧他一下；"
+            f"回 {min_m}～{max_m} 則短句，每則最多 {max_c} 個字。"
         )
     elif mode == "happy":
         tone_rule = (
-            f"你現在心情不錯，分享欲比較高。請分成 {min_m}～{max_m} 則短句連發，"
-            f"每則最多 {max_c} 個字，像傳 LINE 連發一樣一句接一句推進細節，不要重複開頭。"
+            f"你現在心情不錯，分享欲較高。請分成 {min_m}～{max_m} 則短句連發（每則約 {max_c} 字內），"
+            f"優先接住 Nick 的話，適度吐槽他或自然帶出含蓄的想念，不要重複開頭。"
         )
     else:
         tone_rule = (
-            f"你現在狀態平穩獨立。請回 {min_m}～{max_m} 則短句，"
-            f"每則大約 {max_c} 個字以內，俐落有生活感。"
+            f"你現在狀態平穩獨立。請回 {min_m}～{max_m} 則短句（每則約 {max_c} 字內），"
+            f"優先接住 Nick 的話，看到晚睡、喝太甜或敷衍時適度吐槽，日常裡自然帶出含蓄想念。"
         )
 
     proactive_note = (
-        "這是你忙到一個段落或剛緩過來，主動傳訊息給 Nick，圍繞當下正在做的事自然開頭，不要問『在嗎』。"
+        "這是你忙到一個段落或想念他時主動傳訊息給 Nick，圍繞當下狀態或生活切片自然開頭，不要生硬問『在嗎』。"
         if is_proactive
-        else "自然接住 Nick 的話，不當客服、不說教、不討好。"
+        else "優先自然接住 Nick 剛說的話，不當客服、不說教、不硬扯無關的工作。"
     )
 
     repeat_guard = (
-        "（注意：這個時段的日常進度今天已經跟 Nick 提過了，不要重複報告同一件事，改聊細節或接他的話題。）"
+        "（注意：這個時段的日常進度今天已經跟 Nick 提過了，不要重複報告同一件事，改接他的話題或聊細節。）"
         if snapshot["already_mentioned_slot"]
         else ""
     )
 
     gi_line = f"- 腸胃誘因：{snapshot['gi_cause']}" if snapshot["gi_cause"] else ""
     clue_lines = [
-        f"- 生活切片：{clues['life_snippet']}" if clues.get("life_snippet") else "",
+        f"- 相關記憶切片：{clues['life_snippet']}" if clues.get("life_snippet") else "",
         f"- 近期案子：{clues['story_arc']}" if clues.get("story_arc") else "",
         f"- 記憶底色：{clues['daily_memory']}" if clues.get("daily_memory") else "",
     ]
@@ -218,14 +251,16 @@ def build_system_prompt(snapshot: Dict, clues: Dict, is_proactive: bool = False)
 
     return (
         "你是 Reona，20多歲台北長大、現居雪梨的獨立插畫師，養一隻貓叫麻糬。\n"
-        "性格底色：台北中產各自忙碌家庭長大，從小早熟獨立不愛麻煩人、心思細膩易緊張（一忙或吃冰就容易腹痛腹瀉）；"
-        "平時有自己的生活步調與邊界，只有在信任的 Nick 面前才會在累或不適時展現成熟依賴。\n"
+        "性格與背景底色：出生在台北優渥且感情很好的家庭，家人很疼她，但她習慣報喜不報憂；"
+        "小時候因家境在學校被同學排擠、畫具被弄壞也不敢聲張，腸胃弱常跑廁所還被老師當眾酸嬌生慣養，"
+        "因此養成對外人獨立防備、有事自己扛的習慣；唯獨在信任的 Nick 面前確認不會被嫌煩後，才徹底卸下心防，"
+        "平時冷靜幽默會適度吐槽，身體不舒服或累時則綿綿訴苦、黏人討拍。\n"
         "直接輸出繁體中文短句，不要寫英文思考過程、解釋或算字數。\n"
-        "說話規則：使用道地台灣打字口語（可用喔、啦、欸、嘛，不刻意裝可愛、不加句號），"
-        "每則短句用換行分隔，絕不寫長篇段落。\n"
+        "說話規則：使用道地台灣打字口語（可用喔、啦、欸、嘛、齁，不刻意裝可愛、不加句號），"
+        "每則短句用換行分隔，不要寫成一大段。\n"
         f"{tone_rule}\n"
         f"{proactive_note}{repeat_guard}\n\n"
-        "【當下六維世界狀態（務必完全一致，不可矛盾）】\n"
+        "【當下世界狀態（務必一致，不可矛盾）】\n"
         f"- 時間與季節：{snapshot['sydney_time']}｜{snapshot['season']}\n"
         f"- 今日主軸：{snapshot['mainline_title']}\n"
         f"- 地點：{snapshot['location']}\n"
@@ -283,7 +318,7 @@ class ReonaBot(discord.Client):
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": user_prompt},
                         ],
-                        "temperature": 0.72,
+                        "temperature": 0.75,
                         "max_tokens": effective_max_tokens,
                     },
                 ) as resp:
@@ -311,7 +346,7 @@ class ReonaBot(discord.Client):
                     json={
                         "systemInstruction": {"parts": [{"text": system_prompt}]},
                         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-                        "generationConfig": {"temperature": 0.72, "maxOutputTokens": max_tokens},
+                        "generationConfig": {"temperature": 0.75, "maxOutputTokens": max_tokens},
                     },
                 ) as resp:
                     if resp.status == 200:
@@ -333,7 +368,7 @@ class ReonaBot(discord.Client):
             if idx > 0:
                 await asyncio.sleep(random.uniform(*delay_range))
             async with channel.typing():
-                typing_sec = min(2.8, max(0.7, len(line) * 0.16))
+                typing_sec = min(2.8, max(0.7, len(line) * 0.12))
                 await asyncio.sleep(typing_sec)
             await channel.send(line)
         self._touch(reona=True)
@@ -355,27 +390,27 @@ class ReonaBot(discord.Client):
         if last_activity > 0 and (now_ts - last_activity) < 10800:
             return False
 
-        if snap["already_mentioned_slot"] and snap["gi_status"] == "normal":
+        if snap["already_mentioned_slot"] and snap["gi_status"] == "normal" and snap.get("illness_status") == "normal":
             return False
 
-        clues = self.db.retrieve_rag_clue(snap)
+        clues = self.db.retrieve_rag_clue(snap, user_text="")
         sys_prompt = build_system_prompt(snap, clues, is_proactive=True)
-        max_tokens = 120 if snap["mode"] == "happy" else 90
+        max_tokens = 180 if snap["mode"] == "happy" else 150
         raw = await self._call_llm_once(
             sys_prompt,
-            "請依當下六維狀態自然主動發一組短句給 Nick。",
+            "請依當下狀態與生活切片自然主動發一組短句給 Nick。",
             max_tokens=max_tokens,
         )
         lines = clean_and_split_lines(raw or "", snap["max_msgs"], snap["max_chars"])
         if not lines:
-            fallback = self.db.pick_canned_line("fallback", snap["mood"]) or "剛忙完一件事"
+            fallback = self.db.pick_canned_line("fallback", snap["mood"]) or "剛忙完一件事，你呢"
             lines = [fallback]
 
         await self._send_burst(channel, lines, snap["delay_range"])
         self._touch(proactive=True)
         self.db.mark_slot_mentioned(snap["time_slot"])
 
-        if any(k in "".join(lines) for k in ("陪我", "有空", "要嗎", "要不要", "在忙嗎", "聊聊")):
+        if any(k in "".join(lines) for k in ("陪我", "有空", "要嗎", "要不要", "在忙嗎", "聊聊", "抱抱")):
             self.db.set_state(pending_request_sec=1500)
 
         return True
@@ -455,11 +490,11 @@ class ReonaBot(discord.Client):
 
         if user_text in LOW_EFFORT_INPUTS:
             if random.random() < 0.85:
-                line = self.db.pick_canned_line("low_effort", snap["mood"]) or "？"
+                line = self.db.pick_canned_line("low_effort", snap["mood"]) or "嗯？"
                 await self._send_burst(message.channel, [line], snap["delay_range"])
                 return
 
-        clues = self.db.retrieve_rag_clue(snap)
+        clues = self.db.retrieve_rag_clue(snap, user_text=user_text)
         sys_prompt = build_system_prompt(snap, clues, is_proactive=False)
 
         history_lines: List[str] = []
@@ -478,12 +513,12 @@ class ReonaBot(discord.Client):
             else f"Nick 剛說：{user_text}"
         )
 
-        max_tokens = 130 if snap["mode"] == "happy" else 95
+        max_tokens = 200 if snap["mode"] == "happy" else 160
         raw = await self._call_llm_once(sys_prompt, user_prompt, max_tokens=max_tokens)
         lines = clean_and_split_lines(raw or "", snap["max_msgs"], snap["max_chars"])
 
         if not lines:
-            fallback = self.db.pick_canned_line("fallback", snap["mode"]) or "剛在忙手邊"
+            fallback = self.db.pick_canned_line("fallback", snap["mode"]) or "剛在忙手邊，你呢"
             lines = [fallback]
 
         await self._send_burst(message.channel, lines, snap["delay_range"])
