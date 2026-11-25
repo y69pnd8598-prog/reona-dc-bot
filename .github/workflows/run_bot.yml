@@ -2,7 +2,12 @@ name: Reona Discord Bot
 
 on:
   schedule:
-    - cron: "*/30 * * * *"
+    # 雪梨夏令時間 AEDT (UTC+11)：07:30 起床 (UTC 20:30) ～ 23:30 睡覺 (UTC 12:30)
+    # 每 30 分鐘接力啟動一次（每次跑 28 分鐘），白天全程持續在線
+    - cron: "30 20 * * *"
+    - cron: "0,30 21-23 * * *"
+    - cron: "0,30 0-11 * * *"
+    - cron: "0 12 * * *"
   workflow_dispatch:
 
 permissions:
