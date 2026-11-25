@@ -32,6 +32,17 @@ TW_REPLACEMENTS = {
     "咱們": "我們",
 }
 
+ENGLISH_COT_PREFIXES = (
+    "we need to",
+    "the user",
+    "let's ",
+    "lets ",
+    "respond as",
+    "she is currently",
+    "reona should",
+    "i need to",
+)
+
 LOW_EFFORT_INPUTS = {"?", "？", "嗯", "嗯嗯", "喔", "哦", "好", "好喔", "哈", "哈哈", "哈哈哈", "⋯", "..."}
 VIDEO_KEYWORDS = ("視訊", "開鏡頭", "打給妳", "打給你", "facetime", "video call", "開視訊")
 
@@ -46,21 +57,34 @@ def _groq_endpoint() -> str:
     return f"https://{host}/openai/v1/chat/completions"
 
 
+def _looks_like_english_cot(text: str) -> bool:
+    low = text.strip().lower()
+    if any(low.startswith(p) for p in ENGLISH_COT_PREFIXES):
+        return True
+    has_cjk = bool(re.search(r"[\u4e00-\u9fff]", text))
+    alpha_count = len(re.findall(r"[A-Za-z]", text))
+    return (not has_cjk) and alpha_count > 12
+
+
 def _extract_groq_text(msg: Dict) -> str:
     for field in ("content", "reasoning_content", "reasoning", "text"):
         val = msg.get(field)
-        if isinstance(val, str) and val.strip():
-            txt = val.strip()
-            if field in ("reasoning_content", "reasoning"):
-                lines = [ln.strip() for ln in txt.splitlines() if ln.strip()]
-                return lines[-1] if lines else ""
-            return txt
+        if not isinstance(val, str) or not val.strip():
+            continue
+        txt = val.strip()
+        if field in ("reasoning_content", "reasoning"):
+            lines = [ln.strip() for ln in txt.splitlines() if ln.strip() and not _looks_like_english_cot(ln)]
+            return lines[-1] if lines else ""
+        if _looks_like_english_cot(txt):
+            lines = [ln.strip() for ln in txt.splitlines() if ln.strip() and not _looks_like_english_cot(ln)]
+            return "\n".join(lines) if lines else ""
+        return txt
     return ""
 
 
 def clean_and_split_lines(raw: str, max_msgs: int, max_chars: int) -> List[str]:
     """清理模型輸出、替換非台灣詞彙，並硬控管連發則數與每則字數上限。"""
-    if not raw:
+    if not raw or _looks_like_english_cot(raw):
         return []
 
     text = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
@@ -73,6 +97,8 @@ def clean_and_split_lines(raw: str, max_msgs: int, max_chars: int) -> List[str]:
     cleaned: List[str] = []
 
     for line in raw_lines:
+        if _looks_like_english_cot(line):
+            continue
         line = re.sub(r"^[\-\*\d\.\)\s]+", "", line)
         line = line.rstrip("。，、；：\"'」』")
         if not line:
@@ -81,6 +107,8 @@ def clean_and_split_lines(raw: str, max_msgs: int, max_chars: int) -> List[str]:
         if len(line) > max_chars:
             parts = [p.strip() for p in re.split(r"[，,！!？\?]+", line) if p.strip()]
             for p in parts:
+                if _looks_like_english_cot(p):
+                    continue
                 cleaned.append(p[:max_chars])
                 if len(cleaned) >= max_msgs:
                     break
@@ -143,6 +171,7 @@ def build_system_prompt(snapshot: Dict, clues: Dict, is_proactive: bool = False)
         "你是 Reona，20多歲台北長大、現居雪梨的獨立插畫師，養一隻貓叫麻糬。\n"
         "性格底色：台北中產各自忙碌家庭長大，從小早熟獨立不愛麻煩人、心思細膩易緊張（一忙或吃冰就容易腹痛腹瀉）；"
         "平時有自己的生活步調與邊界，只有在信任的 Nick 面前才會在累或不適時展現成熟依賴。\n"
+        "直接輸出繁體中文短句，不要寫英文思考過程或解釋。\n"
         "說話規則：使用道地台灣打字口語（可用喔、啦、欸、嘛，不刻意裝可愛、不加句號），"
         "每則短句用換行分隔，絕不寫長篇段落。\n"
         f"{tone_rule}\n"
@@ -192,6 +221,7 @@ class ReonaBot(discord.Client):
         groq_url = _groq_endpoint()
         keys = list(GROQ_API_KEYS)
         random.shuffle(keys)
+        effective_max_tokens = max(max_tokens, 360)
 
         for idx, key in enumerate(keys):
             try:
@@ -205,7 +235,7 @@ class ReonaBot(discord.Client):
                             {"role": "user", "content": user_prompt},
                         ],
                         "temperature": 0.72,
-                        "max_tokens": max_tokens,
+                        "max_tokens": effective_max_tokens,
                     },
                 ) as resp:
                     if resp.status == 200:
@@ -215,7 +245,7 @@ class ReonaBot(discord.Client):
                         print(f"[LLM Groq ({GROQ_MODEL}) #{idx} OK] raw={content!r}", flush=True)
                         if content:
                             return content
-                        print(f"[LLM Groq Empty Msg Keys] {json.dumps(msg_obj, ensure_ascii=False)[:240]}", flush=True)
+                        print(f"[LLM Groq Filtered/Empty Msg] {json.dumps(msg_obj, ensure_ascii=False)[:240]}", flush=True)
                     else:
                         err_txt = await resp.text()
                         print(f"[LLM Groq ({GROQ_MODEL}) #{idx} HTTP {resp.status}] {err_txt[:200]}", flush=True)
