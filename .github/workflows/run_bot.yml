@@ -15,6 +15,7 @@ concurrency:
 jobs:
   run-reona:
     runs-on: ubuntu-latest
+    timeout-minutes: 32
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -35,10 +36,12 @@ jobs:
           GROQ_API_KEYS: ${{ secrets.GROQ_API_KEYS }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           REONA_DB_PATH: reona_bg.db
-          PROACTIVE_ONLY: "1"
+          PROACTIVE_ONLY: "0"
+          RUN_SECONDS: "1680"
         run: python reona_dc_bot.py
 
       - name: Persist SQLite memory back to repo
+        if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
