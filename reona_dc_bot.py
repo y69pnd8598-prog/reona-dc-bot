@@ -41,6 +41,25 @@ ENGLISH_COT_PREFIXES = (
     "she is currently",
     "reona should",
     "i need to",
+    "but ",
+    "so ",
+    "okay,",
+    "okay.",
+    "or ",
+    "count:",
+    "that's ",
+    "it's ",
+)
+
+COT_JUNK_PATTERNS = (
+    r"\bcount\s+characters?\b",
+    r"\bwords?\s+or\s+less\b",
+    r"\bcharacters?\b",
+    r"\bpunctuation\b",
+    r"\bignore\b",
+    r"\bsentences?\b",
+    r"\bcolloquial\b",
+    r"\bcount:\s*$",
 )
 
 LOW_EFFORT_INPUTS = {"?", "？", "嗯", "嗯嗯", "喔", "哦", "好", "好喔", "哈", "哈哈", "哈哈哈", "⋯", "..."}
@@ -58,27 +77,57 @@ def _groq_endpoint() -> str:
 
 
 def _looks_like_english_cot(text: str) -> bool:
-    low = text.strip().lower()
+    s = text.strip()
+    if not s:
+        return True
+    low = s.lower()
     if any(low.startswith(p) for p in ENGLISH_COT_PREFIXES):
         return True
-    has_cjk = bool(re.search(r"[\u4e00-\u9fff]", text))
-    alpha_count = len(re.findall(r"[A-Za-z]", text))
-    return (not has_cjk) and alpha_count > 12
+    if any(re.search(pat, low) for pat in COT_JUNK_PATTERNS):
+        return True
+    has_cjk = bool(re.search(r"[\u4e00-\u9fff]", s))
+    alpha_count = len(re.findall(r"[A-Za-z]", s))
+    if (not has_cjk) and alpha_count > 3:
+        return True
+    if has_cjk and alpha_count >= 10:
+        return True
+    return False
+
+
+def _rescue_cjk_from_reasoning(reasoning: str) -> str:
+    if not reasoning:
+        return ""
+    quoted = re.findall(r"[\"「『]([^\"」』\n]{1,25})[\"」』]", reasoning)
+    for cand in reversed(quoted):
+        if re.search(r"[\u4e00-\u9fff]", cand) and not _looks_like_english_cot(cand):
+            return cand.strip()
+    for line in reversed([ln.strip() for ln in reasoning.splitlines() if ln.strip()]):
+        cjk_chunks = re.findall(r"[\u4e00-\u9fff，,！!？\?～~…⋯]{2,20}", line)
+        if cjk_chunks:
+            return cjk_chunks[-1].strip()
+    return ""
 
 
 def _extract_groq_text(msg: Dict) -> str:
-    for field in ("content", "reasoning_content", "reasoning", "text"):
+    content = msg.get("content")
+    if isinstance(content, str) and content.strip():
+        txt = content.strip()
+        if not _looks_like_english_cot(txt):
+            return txt
+        kept = [
+            ln.strip()
+            for ln in re.split(r"[\r\n]+", txt)
+            if ln.strip() and not _looks_like_english_cot(ln)
+        ]
+        if kept:
+            return "\n".join(kept)
+
+    for field in ("reasoning_content", "reasoning", "text"):
         val = msg.get(field)
-        if not isinstance(val, str) or not val.strip():
-            continue
-        txt = val.strip()
-        if field in ("reasoning_content", "reasoning"):
-            lines = [ln.strip() for ln in txt.splitlines() if ln.strip() and not _looks_like_english_cot(ln)]
-            return lines[-1] if lines else ""
-        if _looks_like_english_cot(txt):
-            lines = [ln.strip() for ln in txt.splitlines() if ln.strip() and not _looks_like_english_cot(ln)]
-            return "\n".join(lines) if lines else ""
-        return txt
+        if isinstance(val, str) and val.strip():
+            rescued = _rescue_cjk_from_reasoning(val)
+            if rescued:
+                return rescued
     return ""
 
 
@@ -134,17 +183,17 @@ def build_system_prompt(snapshot: Dict, clues: Dict, is_proactive: bool = False)
     if mode in ("restroom", "sick", "tired"):
         tone_rule = (
             f"你現在身體疲憊或腸胃不舒服，平常自己扛但對 Nick 卸下防備。"
-            f"只能回 {min_m}～{max_m} 則極短句，每則嚴格 {max_c} 個字以內，語氣軟一點、簡短示弱。"
+            f"只能回 {min_m}～{max_m} 則極短句，每則最多 {max_c} 個字，語氣軟一點、簡短示弱。"
         )
     elif mode == "happy":
         tone_rule = (
             f"你現在心情不錯，分享欲比較高。請分成 {min_m}～{max_m} 則短句連發，"
-            f"每則 {max_c} 個字以內，像傳 LINE 連發一樣一句接一句推進細節，不要重複開頭。"
+            f"每則最多 {max_c} 個字，像傳 LINE 連發一樣一句接一句推進細節，不要重複開頭。"
         )
     else:
         tone_rule = (
             f"你現在狀態平穩獨立。請回 {min_m}～{max_m} 則短句，"
-            f"每則 4～{max_c} 個字，俐落有生活感。"
+            f"每則大約 {max_c} 個字以內，俐落有生活感。"
         )
 
     proactive_note = (
@@ -171,7 +220,7 @@ def build_system_prompt(snapshot: Dict, clues: Dict, is_proactive: bool = False)
         "你是 Reona，20多歲台北長大、現居雪梨的獨立插畫師，養一隻貓叫麻糬。\n"
         "性格底色：台北中產各自忙碌家庭長大，從小早熟獨立不愛麻煩人、心思細膩易緊張（一忙或吃冰就容易腹痛腹瀉）；"
         "平時有自己的生活步調與邊界，只有在信任的 Nick 面前才會在累或不適時展現成熟依賴。\n"
-        "直接輸出繁體中文短句，不要寫英文思考過程或解釋。\n"
+        "直接輸出繁體中文短句，不要寫英文思考過程、解釋或算字數。\n"
         "說話規則：使用道地台灣打字口語（可用喔、啦、欸、嘛，不刻意裝可愛、不加句號），"
         "每則短句用換行分隔，絕不寫長篇段落。\n"
         f"{tone_rule}\n"
