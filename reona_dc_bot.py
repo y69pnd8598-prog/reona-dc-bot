@@ -39,6 +39,12 @@ PROACTIVE_ONLY = (os.getenv("PROACTIVE_ONLY") or "0").strip() == "1"
 RUN_SECONDS = _env_int("RUN_SECONDS", 1680)
 
 TW_REPLACEMENTS = {
+    "\\u200d": "",
+    "\\u200c": "",
+    "\\u200b": "",
+    "\u200d": "",
+    "\u200c": "",
+    "\u200b": "",
     "搞定": "弄好",
     "視頻": "影片",
     "一會兒": "一下",
@@ -53,6 +59,8 @@ TW_REPLACEMENTS = {
     "靈感爆棚": "很有靈感",
     "腸胃調整": "肚子順一下",
     "腸胃調": "肚子順一下",
+    "熱一個": "熱一下",
+    "先把湯倒進": "先把湯倒好",
     "再說，": "",
     "再說,": "",
     "。": "",
@@ -73,6 +81,8 @@ PROMPT_LEAK_KEYWORDS = (
     "最近對話",
     "近期對話",
     "打字風格",
+    "我今天說過",
+    "Nick說過",
 )
 
 ENGLISH_COT_PREFIXES = (
@@ -105,12 +115,23 @@ LOW_EFFORT_INPUTS = {"?", "？", "嗯", "嗯嗯", "喔", "哦", "好", "好喔",
 QUESTION_HINTS = (
     "？", "?", "什麼", "哪", "怎麼", "為何", "為什麼", "嗎",
     "幾點", "誰", "多少", "要不要", "有沒有", "是不是", "吃了", "畫了",
-    "幹嘛", "做什麼",
+    "幹嘛", "做什麼", "記得", "剛說",
 )
 VIDEO_KEYWORDS = ("視訊", "開鏡頭", "打給妳", "打給你", "facetime", "video call", "開視訊")
 WORK_KEYWORDS = ("工作", "畫", "插畫", "案子", "稿", "設計", "客戶", "忙什麼", "在忙", "顏料", "圖")
 CAT_KEYWORDS = ("貓", "麻糬", "寵物", "罐頭", "貓砂", "掉毛")
 RESTROOM_DODGE_PHRASES = ("還在廁所", "去一下廁所", "肚子又絞了")
+
+REONA_FACT_TRIGGERS = (
+    "吃了", "喝了", "啃了", "煮了", "熱了", "買了", "畫了", "在畫",
+    "長棍", "麵包", "雞湯", "湯麵", "拉麵", "粥", "吐司", "烏龍茶", "菊花茶", "咖啡",
+    "廁所", "熱水袋", "胃", "肚子", "不舒服", "交稿", "完稿",
+)
+
+NICK_FACT_TRIGGERS = (
+    "我剛", "我吃", "我喝", "我要", "我會", "我在", "我等下", "我晚點", "我回來",
+    "我不", "我喜歡", "我討厭", "帶", "買", "加班", "下班", "回家", "睡覺", "出門",
+)
 
 ACTION_KEYWORDS: Dict[str, tuple] = {
     "eat_meal": ("吃飽了", "吃完了", "吃好了", "已經吃了"),
@@ -202,7 +223,6 @@ def _trim_at_boundary(chunk: str, max_chars: int) -> str:
 
 
 def _cap_emojis_per_line(line: str, max_emojis: int = 1) -> str:
-    """限制每則訊息最多帶 max_emojis 個 Emoji，保留自然情緒但不洗版。"""
     emoji_pattern = re.compile(
         "["
         "\U0001F300-\U0001F9FF"
@@ -228,7 +248,6 @@ def clean_and_split_lines(
     allow_cat: bool = False,
     is_question_msg: bool = False,
 ) -> List[str]:
-    """清理模型輸出、去除機器人說教感與殘句、控制 Emoji 數量與句數。"""
     if not raw:
         return []
     max_msgs = max(1, int(max_msgs))
@@ -322,13 +341,15 @@ def build_system_prompt(
     snapshot: Dict,
     matched_card: Optional[Dict],
     recent_turns: List[str],
+    reona_today_facts: List[str],
+    nick_recent_notes: List[str],
     is_proactive: bool = False,
     allow_work: bool = False,
     allow_cat: bool = False,
     is_evening_rest: bool = False,
     is_question_msg: bool = False,
 ) -> str:
-    """貼近 20 幾歲台灣女生日常傳訊息口吻、自然帶 Emoji 與年輕用語的 System Prompt。"""
+    """貼近台灣女生日常口吻，同時帶入『Reona 今日吃過/說過的事』與『Nick 說過的事』確保記憶連貫。"""
     mode = snapshot["mode"]
     max_m = 2 if (mode == "happy" or is_proactive) else 1
     max_c = max(snapshot["max_chars"], 28)
@@ -346,10 +367,18 @@ def build_system_prompt(
     state_hint = state_map.get(mode, state_map["normal"])
 
     done_list = snapshot.get("done_actions_today") or []
-    done_str = f"今天做過（不再重複）：{','.join(done_list)}" if done_list else ""
+    done_str = f"今天做過：{','.join(done_list)}" if done_list else ""
     evening_str = "現在雪梨晚上休息時間，不出門買東西或喝咖啡。" if is_evening_rest else ""
     cat_rule = "" if allow_cat else "沒問到貓就別提麻糬。"
     work_rule = "" if allow_work else "沒問工作就別提畫畫或案子。"
+
+    reona_mem_str = ""
+    if reona_today_facts:
+        reona_mem_str = "我今天說過/吃過（被問到要一致，別吃書）：" + "；".join(reona_today_facts[-5:])
+
+    nick_mem_str = ""
+    if nick_recent_notes:
+        nick_mem_str = "Nick說過的事（記得並自然接梗）：" + "；".join(nick_recent_notes[-5:])
 
     rag_str = ""
     if matched_card and matched_card.get("content"):
@@ -358,30 +387,31 @@ def build_system_prompt(
 
     turns_str = ""
     if recent_turns:
-        turns_str = "剛才對話：\n" + "\n".join(recent_turns[-4:])
+        turns_str = "剛才對話：\n" + "\n".join(recent_turns[-6:])
 
     if is_proactive:
         task_line = "隨口傳訊息找 Nick，像平常滑手機想到他一樣自然開頭。"
     elif is_question_msg:
-        task_line = "Nick 在問問題：直接用口語回答重點（問吃什麼就說吃了什麼、問什麼意思就白話解釋），別打官腔。"
+        task_line = "Nick 在問問題：對照『我今天說過/吃過』與『Nick說過的事』用口語直接回答重點，別打官腔或自相矛盾。"
     else:
-        task_line = "像一般台灣女生回男友 LINE 一樣自然接話（例如他叫『寶貝』就回『怎麼了』『幹嘛啦』，別自顧自背誦身體報告）。"
+        task_line = "像一般台灣女生回男友 LINE 一樣自然接話，記住雙方剛說過的話並順著接下去。"
 
     return (
         "你是 Reona，20多歲台北長大、住雪梨的女生（插畫師，養一隻貓叫麻糬，提到牠用『牠』）。\n"
         "你在跟男友 Nick 傳 Discord 訊息。你個性獨立但對他很放鬆，平時講話輕鬆自然、會小吐槽，不舒服時語氣變軟撒嬌。\n"
-        "關鍵人稱：『我』是你自己（Reona），『你』是 Nick，不要搞混誰吃東西、誰不舒服。\n"
+        "關鍵人稱：『我』是你自己（Reona），『你』是 Nick，Nick 在外面、我在家，別把『等你回來』講成『等我回來』。\n"
         "打字風格（最重要）：\n"
         "- 完全像一般20幾歲台灣女生在 LINE / Discord 打字，自然穿插年輕人日常口語（例如：『笑死』『真假』『好扯』『超煩』『耍廢』『先躺』『QQ』『好喔』『幹嘛啦』『還好嗎』）。\n"
-        "- 適時帶一點自然 Emoji 或簡單顏文字增加情緒（例如 🥺、🥲、😮‍💨、🙄、🫠、🤣、💤、QQ），但一則最多放 1 個，不要每句都硬加、也不要用油膩愛心海。\n"
+        "- 適時帶一點自然 Emoji 或簡單顏文字增加情緒（例如 🥺、🥲、😮‍💨、🙄、🫠、🤣、💤、QQ），一則最多放 1 個，不要硬加。\n"
         "- 嚴禁健康衛教或客服說教口吻（禁止『再說，』『免得』『擾亂』『安靜下來』『咱的』、句尾『呢』『呀』、不加句號）。\n"
-        "- 順著剛才的對話自然接話，不要突然跳tone回『什麼？我跟你說……』，也不要硬塞不搭的 Emoji。\n"
-        "- 不要每句都在重複講胃悶或消化，除非他問起。\n"
+        "- 順著剛才的對話自然接話，不要突然跳tone，也不要沒問起就一直重複報備胃悶。\n"
         f"- {task_line}\n"
         f"- 腸胃弱不吃太甜膩（法式長棍是脆硬麥香麵包，不是甜食）。{cat_rule}{work_rule}{evening_str}\n"
         f"- 目前狀態：{state_hint}\n"
         f"- 只寫 1～{max_m} 則短句，每則 {max_c} 字內，直接輸出繁體中文，不准有任何英文或規則字眼。\n"
         f"當下：{snapshot['sydney_time']}｜{snapshot['location']}｜{done_str}\n"
+        f"{reona_mem_str}\n"
+        f"{nick_mem_str}\n"
         f"{rag_str}\n"
         f"{turns_str}"
     ).strip()
@@ -413,6 +443,34 @@ class ReonaBot(discord.Client):
         for action_key, kws in ACTION_KEYWORDS.items():
             if any(k in combined for k in kws):
                 self.db.mark_action_done(action_key)
+
+    def _extract_and_store_facts(
+        self,
+        now_dt: datetime.datetime,
+        nick_text: str = "",
+        reona_lines: Optional[List[str]] = None,
+    ) -> None:
+        """零額外 API 成本，自動把 Reona 吃過/說過的事與 Nick 說過的重點寫入 SQLite。"""
+        time_tag = now_dt.strftime("%H:%M")
+
+        if nick_text and len(nick_text) >= 2:
+            if any(k in nick_text for k in NICK_FACT_TRIGGERS) or len(nick_text) >= 6:
+                clean_nick = re.sub(r"\s+", " ", nick_text).strip()[:45]
+                topic_key = f"nick_{now_dt.strftime('%Y%m%d_%H%M%S')}"
+                self.db.upsert_nick_note(topic_key, f"[{time_tag}] Nick說：{clean_nick}")
+
+        if reona_lines:
+            for line in reona_lines:
+                clean_line = re.sub(r"\s+", " ", line).strip()
+                if not clean_line:
+                    continue
+                if any(k in clean_line for k in REONA_FACT_TRIGGERS):
+                    self.db.add_daily_memory(
+                        content=f"[{time_tag}] 我說過：{clean_line[:45]}",
+                        category="spoken_fact",
+                        importance=8,
+                        keep_max=10,
+                    )
 
     def _seed_recent_reona_from_memory(self) -> None:
         for turn in self.rag.get_recent_turns(limit=8):
@@ -556,6 +614,8 @@ class ReonaBot(discord.Client):
             self._recent_reona_lines = self._recent_reona_lines[-8:]
             self.rag.append_turn("Reona", line)
 
+        now_dt = datetime.datetime.now(SYDNEY_TZ)
+        self._extract_and_store_facts(now_dt, reona_lines=filtered_lines)
         self.rag.save_if_dirty()
         self._touch(reona=True)
 
@@ -564,7 +624,7 @@ class ReonaBot(discord.Client):
         if (now_dt.hour == 0 and now_dt.minute >= 30) or (1 <= now_dt.hour < 8):
             return False
 
-        self.db.evaluate_causal_events("", now_dt)
+        self.db.evaluate_causal_events("", now_dt, allow_random_gi=True)
         snap = self.db.compute_snapshot(now_dt)
         now_ts = now_dt.timestamp()
 
@@ -579,11 +639,16 @@ class ReonaBot(discord.Client):
         if snap["already_mentioned_slot"] and snap["gi_status"] == "normal" and snap.get("illness_status") == "normal":
             return False
 
-        recent_turns = self.rag.get_recent_turns(limit=4)
+        recent_turns = self.rag.get_recent_turns(limit=6)
+        reona_facts = self.db.get_today_memories(now_dt, limit=5) if hasattr(self.db, "get_today_memories") else []
+        nick_notes = self.db.get_recent_nick_notes(limit=5) if hasattr(self.db, "get_recent_nick_notes") else []
+
         sys_prompt = build_system_prompt(
             snap,
             matched_card=None,
             recent_turns=recent_turns,
+            reona_today_facts=reona_facts,
+            nick_recent_notes=nick_notes,
             is_proactive=True,
             allow_work=False,
             allow_cat=False,
@@ -668,11 +733,12 @@ class ReonaBot(discord.Client):
             (a.content_type or "").lower().startswith("audio/") for a in message.attachments
         )
 
-        causal_flag = self.db.evaluate_causal_events(user_text, now_dt)
+        causal_flag = self.db.evaluate_causal_events(user_text, now_dt, allow_random_gi=False)
         snap = self.db.compute_snapshot(now_dt)
 
         if user_text and not is_voice:
             self.rag.append_turn("Nick", user_text)
+            self._extract_and_store_facts(now_dt, nick_text=user_text)
 
         is_question_msg = _is_question(user_text)
 
@@ -723,10 +789,15 @@ class ReonaBot(discord.Client):
                 flush=True,
             )
 
+        reona_facts = self.db.get_today_memories(now_dt, limit=5) if hasattr(self.db, "get_today_memories") else []
+        nick_notes = self.db.get_recent_nick_notes(limit=5) if hasattr(self.db, "get_recent_nick_notes") else []
+
         sys_prompt = build_system_prompt(
             snap,
             matched_card=matched_card,
             recent_turns=recent_turns,
+            reona_today_facts=reona_facts,
+            nick_recent_notes=nick_notes,
             is_proactive=False,
             allow_work=allow_work,
             allow_cat=allow_cat,
@@ -735,7 +806,7 @@ class ReonaBot(discord.Client):
         )
 
         history_lines: List[str] = []
-        async for msg in message.channel.history(limit=5):
+        async for msg in message.channel.history(limit=6):
             if msg.id == message.id:
                 continue
             if msg.author.bot:
@@ -748,7 +819,7 @@ class ReonaBot(discord.Client):
             if content:
                 history_lines.append(f"{speaker}: {content}")
         history_lines.reverse()
-        context_block = "\n".join(history_lines[-4:])
+        context_block = "\n".join(history_lines[-5:])
         user_prompt = (
             f"【最近對話】\n{context_block}\n\n請直接以 Reona 身分自然回覆這句話：{user_text}"
             if context_block
