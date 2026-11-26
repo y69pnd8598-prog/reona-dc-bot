@@ -14,7 +14,6 @@ from reona_rag import ReonaMemoryRAG
 
 
 def _env_int(name: str, default: int, minimum: Optional[int] = None) -> int:
-    """Read an integer environment variable without crashing on bad configuration."""
     raw = (os.getenv(name) or "").strip()
     try:
         value = int(raw) if raw else default
@@ -34,6 +33,7 @@ raw_groq = os.getenv("GROQ_API_KEYS") or os.getenv("GROQ_API_KEY") or ""
 GROQ_API_KEYS = [k.strip() for k in raw_groq.split(",") if k.strip()]
 GROQ_MODEL = (os.getenv("GROQ_MODEL") or "llama-3.3-70b-versatile").strip()
 GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip()
+GEMINI_CHAT_MODEL = (os.getenv("GEMINI_CHAT_MODEL") or "gemini-3.8-flash").strip()
 
 PROACTIVE_ONLY = (os.getenv("PROACTIVE_ONLY") or "0").strip() == "1"
 RUN_SECONDS = _env_int("RUN_SECONDS", 1680)
@@ -64,6 +64,7 @@ PROMPT_LEAK_KEYWORDS = (
     "一般事件",
     "直接輸出繁體中文",
     "最近對話",
+    "近期對話紀錄",
 )
 
 ENGLISH_COT_PREFIXES = (
@@ -93,8 +94,10 @@ COT_JUNK_PATTERNS = (
 )
 
 LOW_EFFORT_INPUTS = {"?", "？", "嗯", "嗯嗯", "喔", "哦", "好", "好喔", "哈", "哈哈", "哈哈哈", "⋯", "..."}
+QUESTION_HINTS = ("？", "?", "什麼", "哪", "怎麼", "為何", "為什麼", "嗎", "幾點", "誰", "吃了", "畫了")
 VIDEO_KEYWORDS = ("視訊", "開鏡頭", "打給妳", "打給你", "facetime", "video call", "開視訊")
-WORK_KEYWORDS = ("工作", "畫", "插畫", "案子", "稿", "設計", "客戶", "忙什麼", "在忙", "顏料")
+WORK_KEYWORDS = ("工作", "畫", "插畫", "案子", "稿", "設計", "客戶", "忙什麼", "在忙", "顏料", "圖")
+CAT_KEYWORDS = ("貓", "麻糬", "寵物", "罐頭", "貓砂", "掉毛")
 
 ACTION_KEYWORDS: Dict[str, tuple] = {
     "eat_meal": ("吃飽了", "吃完了", "吃好了", "已經吃了"),
@@ -116,8 +119,12 @@ def _groq_endpoint() -> str:
     return f"https://{host}/openai/v1/chat/completions"
 
 
+def _is_question(text: str) -> bool:
+    t = (text or "").strip()
+    return any(h in t for h in QUESTION_HINTS)
+
+
 def _is_sydney_evening_rest(now_dt: datetime.datetime) -> bool:
-    """雪梨晚間 20:30 後至隔日 08:00 前視為室內休息時段。"""
     if now_dt.hour > 20 or (now_dt.hour == 20 and now_dt.minute >= 30):
         return True
     if now_dt.hour < 8:
@@ -179,8 +186,14 @@ def _trim_at_boundary(chunk: str, max_chars: int) -> str:
     return cut.strip()
 
 
-def clean_and_split_lines(raw: str, max_msgs: int, max_chars: int, user_text: str = "") -> List[str]:
-    """清理模型輸出、過濾 Prompt 外洩與學舌反問，並限制則數與字數。"""
+def clean_and_split_lines(
+    raw: str,
+    max_msgs: int,
+    max_chars: int,
+    user_text: str = "",
+    allow_cat: bool = False,
+) -> List[str]:
+    """清理模型輸出、過濾外洩與未問及的貓話題，限制為 1～2 則完整短句。"""
     if not raw:
         return []
     max_msgs = max(1, int(max_msgs))
@@ -202,6 +215,9 @@ def clean_and_split_lines(raw: str, max_msgs: int, max_chars: int, user_text: st
     for line in raw_lines:
         if _looks_like_english_cot(line) or _has_prompt_leak(line):
             continue
+        if (not allow_cat) and ("麻糬" in line) and len(raw_lines) > 1:
+            continue
+
         line = re.sub(r"^[\-\*\d\.\)\s]+", "", line)
         line = line.rstrip("。、；：\"'」』")
         if not line:
@@ -244,14 +260,14 @@ def _is_too_similar_to_recent(candidate: str, recent_reona_lines: List[str]) -> 
     norm_cand = _normalize_for_repeat_check(candidate)
     if not norm_cand:
         return True
-    for prev in recent_reona_lines[-3:]:
+    for prev in recent_reona_lines[-6:]:
         norm_prev = _normalize_for_repeat_check(prev)
         if not norm_prev:
             continue
         if norm_cand == norm_prev:
             return True
         shorter, longer = (norm_cand, norm_prev) if len(norm_cand) <= len(norm_prev) else (norm_prev, norm_cand)
-        if len(shorter) >= 5 and shorter in longer:
+        if len(shorter) >= 4 and shorter in longer:
             return True
     return False
 
@@ -262,110 +278,63 @@ def build_system_prompt(
     recent_turns: List[str],
     is_proactive: bool = False,
     allow_work: bool = False,
+    allow_cat: bool = False,
     is_evening_rest: bool = False,
 ) -> str:
-    """組裝結合當下狀態、RAG 單筆參考卡片與近期對話的 System Prompt。"""
+    """精簡高密度 Prompt（省 Token 防 429，同時完整鎖住人設反差與行為邊界）。"""
     mode = snapshot["mode"]
     min_m, max_m = snapshot["min_msgs"], snapshot["max_msgs"]
     max_c = snapshot["max_chars"]
 
-    if mode == "restroom":
-        tone_rule = (
-            f"你現在正在去廁所或剛緩過來，回 {min_m}～{max_m} 則自然短句（每則約 {max_c} 字內），"
-            f"第一句先回答問題，語氣自然簡短。"
-        )
-    elif mode in ("sick", "period", "cold", "heavy_cold"):
-        state_desc = {
-            "period": "生理期悶痛又有點沒力",
-            "cold": "一般感冒有點鼻塞喉嚨卡、人懶懶的",
-            "heavy_cold": "重感冒全身沒力又想睡、特別脆弱",
-            "sick": "腸胃或身體不舒服、悶悶的不太有精神",
-        }.get(mode, "身體不太舒服")
-        tone_rule = (
-            f"你現在是「{state_desc}」狀態。平常獨立嘴硬，但對 Nick 卸下防備，"
-            f"第一句先正面回答問題，語氣放軟、綿綿地訴苦並主動黏著討拍，可帶一句怕麻煩他的小在意；"
-            f"回 {min_m}～{max_m} 則短句，每則最多 {max_c} 個字。"
-        )
-    elif mode == "tired":
-        tone_rule = (
-            f"你現在有點累，對 Nick 比較放軟想靠著討拍，但也偶爾會小虧他一下；"
-            f"第一句先回答問題，回 {min_m}～{max_m} 則短句，每則最多 {max_c} 個字。"
-        )
-    elif mode == "happy":
-        tone_rule = (
-            f"你現在心情不錯。第一句先正面回答問題，再分成 {min_m}～{max_m} 則短句（每則約 {max_c} 字內），"
-            f"適度吐槽他或自然帶出含蓄的想念。"
-        )
-    else:
-        tone_rule = (
-            f"你現在狀態平穩獨立。第一句先正面回答問題，再回 {min_m}～{max_m} 則短句（每則約 {max_c} 字內），"
-            f"看到晚睡、喝太甜或敷衍時適度吐槽，日常裡自然帶出含蓄想念。"
-        )
+    state_map = {
+        "restroom": "剛在廁所或腸胃微絞，簡短自然接話並先回答問題",
+        "period": "生理期悶痛沒力，對 Nick 卸下防備、語氣放軟綿綿討拍",
+        "cold": "一般感冒鼻塞喉嚨卡、懶懶的，對 Nick 放軟撒嬌討拍",
+        "heavy_cold": "重感冒全身沒力想睡、特別脆弱，黏著 Nick 訴苦討拍",
+        "sick": "腸胃悶悶不太舒服，對 Nick 卸防放軟討拍、帶點怕麻煩他的小在意",
+        "tired": "有點累，放軟想靠著討拍、偶爾小虧他",
+        "happy": "心情不錯，適度吐槽或自然帶點含蓄想念",
+        "normal": "狀態平穩獨立，冷靜幽默會小吐槽，自然帶出含蓄想念",
+    }
+    state_hint = state_map.get(mode, state_map["normal"])
 
     done_list = snapshot.get("done_actions_today") or []
-    done_line = (
-        f"- 今天已完成的一般事件（當天不再重複做，但去廁所允許重複）：{', '.join(done_list)}"
-        if done_list
-        else "- 今天已完成的一般事件：無（但去廁所允許合理重複）"
-    )
+    done_str = f"今日已完成（不再重複，去廁所除外）：{','.join(done_list)}" if done_list else ""
+    gi_str = f"腸胃誘因：{snapshot['gi_cause']}" if snapshot["gi_cause"] else ""
+    evening_str = "雪梨晚間休息時段，嚴禁出門買東西、逛超市或喝濃咖啡。" if is_evening_rest else ""
+    cat_rule = "" if allow_cat else "對方沒問到貓時，嚴禁主動提麻糬。"
+    work_rule = "" if allow_work else "對方沒問工作時，不要主動提工作或案子。"
+    repeat_str = "此時段狀態已提過，勿重複報告。" if snapshot["already_mentioned_slot"] else ""
 
-    proactive_note = (
-        "這是你忙到一個段落或想念他時主動傳訊息給 Nick，圍繞當下狀態自然開頭，不要生硬問『在嗎』。"
-        if is_proactive
-        else "正面回答問題：Nick 問問題或追問細節時，直接把完整意思講清楚，嚴禁只回『就是...』或單獨兩個字敷衍，也嚴禁學舌反問；沒問工作就不要主動提工作或案子。"
-    )
-
-    repeat_guard = (
-        "（注意：這個時段的狀態今天已經提過了，不要重複報告同一件事，直接接他的話題。）"
-        if snapshot["already_mentioned_slot"]
-        else ""
-    )
-
-    evening_guard = (
-        "- 作息限制：現在是雪梨晚間休息時段，只能待在室內休息，絕不出門買東西或喝濃咖啡。"
-        if is_evening_rest
-        else ""
-    )
-
-    gi_line = f"- 腸胃誘因：{snapshot['gi_cause']}" if snapshot["gi_cause"] else ""
-
-    rag_block = ""
+    rag_str = ""
     if matched_card and matched_card.get("content"):
         if matched_card.get("category") != "work" or allow_work:
-            rag_block = (
-                f"- 相關背景參考（僅當自然扣得上眼前話題時參考，不搭就別硬套）："
-                f"{matched_card['content']}"
-            )
+            rag_str = f"參考背景（僅自然扣上才用，不搭就忽略）：{matched_card['content']}"
 
-    turns_block = ""
+    turns_str = ""
     if recent_turns:
-        turns_block = "【近期對話紀錄（僅供接話脈絡，勿直接重複剛說過的話）】\n" + "\n".join(recent_turns[-6:])
+        turns_str = "近期對話：\n" + "\n".join(recent_turns[-4:])
+
+    task_line = (
+        "主動傳訊給 Nick，圍繞當下狀態自然開頭，勿生硬問『在嗎』。"
+        if is_proactive
+        else "第一句必須正面完整回答 Nick 的問題，嚴禁只回『就是...』或單詞敷衍，嚴禁學舌反問。"
+    )
 
     return (
-        "你是 Reona，20多歲台北長大、現居雪梨的獨立插畫師，養一隻貓叫麻糬（提到麻糬一律用『牠』，不可用『他』）。\n"
-        "性格與背景底色：台北優渥溫情家庭長大，與家人感情很好但習慣報喜不報憂；"
-        "小時候因家境在學校被同學排擠、畫具被弄壞也不敢聲張，腸胃弱常跑廁所還被老師當眾酸嬌生慣養，"
-        "因此養成對外人獨立防備、有事自己扛；唯獨在信任的 Nick 面前確認不會被嫌煩後才卸下心防，"
-        "平時冷靜幽默會適度吐槽，身體不舒服或累時則綿綿訴苦、黏人討拍。\n"
-        "自然對話與常識鐵律：\n"
-        "1. 像真人傳訊息一樣把話講完整、自然接話（例如被問『畫面是什麼』就具體形容畫面，不要只回『就是...』或單詞），也不要每句硬塞『台北』、『麻糬』。\n"
-        "2. 食物與生活描述必須符合常識與人設（你腸胃弱不太吃甜膩食物；法式長棍是外脆內軟有麥香、有嚼勁，不是甜食）。\n"
-        "3. 感情表達含蓄自然，嚴禁肉麻油膩台詞。\n"
-        "4. 遵守雪梨作息與店家營業時間：晚間與深夜只待在家裡休息，絕不在半夜出門買顏料、逛超市或喝濃咖啡。\n"
-        "說話禁令：直接輸出繁體中文短句，嚴禁英文思考過程、嚴禁復誦系統規則或『剛說：』；用道地台灣人打字口語"
-        "（可用喔、啦、欸、嘛、齁，嚴禁翻譯腔或 AI 客服腔，不加句號），"
-        "總共只寫 1～2 則完整短句，每則用換行分隔，嚴禁一次塞三四行。\n"
-        f"{tone_rule}\n"
-        f"{proactive_note}{repeat_guard}\n\n"
-        "【當下情境參考（沒問到不用硬提）】\n"
-        f"- 時間與季節：{snapshot['sydney_time']}｜{snapshot['season']}\n"
-        f"- 地點與狀態：{snapshot['location']}（{snapshot['positions']}）\n"
-        f"- 身邊物品：{snapshot['items']}\n"
-        f"{done_line}\n"
-        f"{evening_guard}\n"
-        f"{gi_line}\n"
-        f"{rag_block}\n"
-        f"{turns_block}"
+        "你是 Reona，20多歲台北長大、現居雪梨的獨立插畫師，養一隻貓叫麻糬（提到牠一律用『牠』）。\n"
+        "性格：台北溫情家庭長大但報喜不報憂；童年因家境被排擠、腸胃弱常跑廁所被酸，對外防備獨立，"
+        "唯獨在信任的 Nick 面前卸心防，平時冷靜幽默會小吐槽，不舒服或累時綿綿訴苦討拍。\n"
+        "鐵律：\n"
+        f"1. {task_line}\n"
+        f"2. 腸胃弱不吃太甜膩（法式長棍是脆硬有麥香的麵包，非甜食）。{cat_rule}{work_rule}{evening_str}\n"
+        f"3. 狀態：{state_hint}。{repeat_str}\n"
+        f"4. 輸出規則：直接輸出繁體中文台灣口語（可用喔、啦、欸、嘛、齁；嚴禁句尾『呢』、嚴禁翻譯腔或 AI 客服腔、不加句號、嚴禁英文思考或復誦規則），"
+        f"只寫 {min_m}～{max_m} 則完整短句，每則 {max_c} 字內，換行分隔。\n"
+        f"情境：{snapshot['sydney_time']}｜{snapshot['season']}｜{snapshot['location']}（{snapshot['positions']}）｜身邊：{snapshot['items']}\n"
+        f"{done_str} {gi_str}\n"
+        f"{rag_str}\n"
+        f"{turns_str}"
     ).strip()
 
 
@@ -380,6 +349,7 @@ class ReonaBot(discord.Client):
         self._session_started = False
         self._gemini_quota_exhausted = False
         self._recent_reona_lines: List[str] = []
+        self._handled_msg_ids: set = set()
 
     def _touch(self, nick: bool = False, reona: bool = False, proactive: bool = False) -> None:
         if hasattr(self.db, "touch_timestamps"):
@@ -401,7 +371,7 @@ class ReonaBot(discord.Client):
                 line = turn.split(":", 1)[1].strip()
                 if line and line not in self._recent_reona_lines:
                     self._recent_reona_lines.append(line)
-        self._recent_reona_lines = self._recent_reona_lines[-6:]
+        self._recent_reona_lines = self._recent_reona_lines[-8:]
 
     async def setup_hook(self) -> None:
         self.http_session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15))
@@ -426,22 +396,26 @@ class ReonaBot(discord.Client):
         groq_url = _groq_endpoint()
         keys = list(GROQ_API_KEYS)
         random.shuffle(keys)
-        effective_max_tokens = max(max_tokens, 512)
+        effective_max_tokens = min(max(max_tokens, 180), 320)
 
-        for idx, key in enumerate(keys):
+        for idx, key in enumerate(keys[:3]):
+            payload: Dict = {
+                "model": GROQ_MODEL,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "temperature": 0.65,
+                "max_tokens": effective_max_tokens,
+            }
+            if any(tag in GROQ_MODEL.lower() for tag in ("gpt-oss", "qwen", "deepseek", "r1")):
+                payload["reasoning_effort"] = "none"
+
             try:
                 async with self.http_session.post(
                     groq_url,
                     headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                    json={
-                        "model": GROQ_MODEL,
-                        "messages": [
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_prompt},
-                        ],
-                        "temperature": 0.68,
-                        "max_tokens": effective_max_tokens,
-                    },
+                    json=payload,
                 ) as resp:
                     if resp.status == 200:
                         data = await resp.json()
@@ -450,16 +424,18 @@ class ReonaBot(discord.Client):
                         print(f"[LLM Groq ({GROQ_MODEL}) #{idx} OK] raw={content!r}", flush=True)
                         if content:
                             return content
-                        print(f"[LLM Groq Filtered/Empty Msg] {json.dumps(msg_obj, ensure_ascii=False)[:240]}", flush=True)
+                        print(f"[LLM Groq Empty Msg] {json.dumps(msg_obj, ensure_ascii=False)[:200]}", flush=True)
                     else:
                         err_txt = await resp.text()
-                        print(f"[LLM Groq ({GROQ_MODEL}) #{idx} HTTP {resp.status}] {err_txt[:200]}", flush=True)
+                        print(f"[LLM Groq ({GROQ_MODEL}) #{idx} HTTP {resp.status}] {err_txt[:180]}", flush=True)
+                        if resp.status == 429:
+                            await asyncio.sleep(0.8)
             except Exception as e:
                 print(f"[LLM Groq ({GROQ_MODEL}) #{idx} Exception] {type(e).__name__}: {repr(e)}", flush=True)
                 continue
 
         if GEMINI_API_KEY and not self._gemini_quota_exhausted:
-            url = _gemini_endpoint("gemini-2.5-flash")
+            url = _gemini_endpoint(GEMINI_CHAT_MODEL)
             try:
                 async with self.http_session.post(
                     url,
@@ -467,7 +443,7 @@ class ReonaBot(discord.Client):
                     json={
                         "systemInstruction": {"parts": [{"text": system_prompt}]},
                         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-                        "generationConfig": {"temperature": 0.68, "maxOutputTokens": 300},
+                        "generationConfig": {"temperature": 0.65, "maxOutputTokens": 240},
                     },
                 ) as resp:
                     if resp.status == 200:
@@ -486,18 +462,14 @@ class ReonaBot(discord.Client):
                                 if isinstance(part, dict) and isinstance(part.get("text"), str)
                             ).strip()
                         if content:
-                            print(f"[LLM gemini-2.5-flash OK] raw={content!r}", flush=True)
+                            print(f"[LLM {GEMINI_CHAT_MODEL} OK] raw={content!r}", flush=True)
                             return content
-                        print(
-                            f"[LLM Gemini] No usable text in response: {json.dumps(data, ensure_ascii=False)[:300]}",
-                            flush=True,
-                        )
                     err_txt = await resp.text()
-                    print(f"[LLM gemini-2.5-flash HTTP {resp.status}] {err_txt[:200]}", flush=True)
-                    if resp.status == 429:
+                    print(f"[LLM {GEMINI_CHAT_MODEL} HTTP {resp.status}] {err_txt[:180]}", flush=True)
+                    if resp.status in (404, 429):
                         self._gemini_quota_exhausted = True
             except Exception as e:
-                print(f"[LLM gemini-2.5-flash Exception] {type(e).__name__}: {repr(e)}", flush=True)
+                print(f"[LLM {GEMINI_CHAT_MODEL} Exception] {type(e).__name__}: {repr(e)}", flush=True)
 
         return None
 
@@ -516,11 +488,11 @@ class ReonaBot(discord.Client):
             if idx > 0:
                 await asyncio.sleep(random.uniform(*delay_range))
             async with channel.typing():
-                typing_sec = min(2.4, max(0.6, len(line) * 0.1))
+                typing_sec = min(2.2, max(0.6, len(line) * 0.1))
                 await asyncio.sleep(typing_sec)
             await channel.send(line)
             self._recent_reona_lines.append(line)
-            self._recent_reona_lines = self._recent_reona_lines[-6:]
+            self._recent_reona_lines = self._recent_reona_lines[-8:]
             self.rag.append_turn("Reona", line)
 
         self.rag.save_if_dirty()
@@ -546,21 +518,22 @@ class ReonaBot(discord.Client):
         if snap["already_mentioned_slot"] and snap["gi_status"] == "normal" and snap.get("illness_status") == "normal":
             return False
 
-        recent_turns = self.rag.get_recent_turns(limit=6)
+        recent_turns = self.rag.get_recent_turns(limit=4)
         sys_prompt = build_system_prompt(
             snap,
             matched_card=None,
             recent_turns=recent_turns,
             is_proactive=True,
             allow_work=False,
+            allow_cat=False,
             is_evening_rest=_is_sydney_evening_rest(now_dt),
         )
         raw = await self._call_llm_once(
             sys_prompt,
-            "請依當下狀態自然主動發 1～2 則完整精簡短句給 Nick。",
-            max_tokens=512,
+            "請依當下狀態自然主動發 1～2 則完整短句給 Nick。",
+            max_tokens=220,
         )
-        lines = clean_and_split_lines(raw or "", snap["max_msgs"], snap["max_chars"])
+        lines = clean_and_split_lines(raw or "", snap["max_msgs"], snap["max_chars"], allow_cat=False)
         if not lines:
             fallback = self.db.pick_canned_line("fallback", snap["mood"]) or "剛忙完一件事，你呢"
             lines = [fallback]
@@ -611,7 +584,7 @@ class ReonaBot(discord.Client):
 
     async def on_ready(self) -> None:
         print(
-            f"Reona online as {self.user} | Groq keys={len(GROQ_API_KEYS)} ({GROQ_MODEL}) | Gemini={'YES' if GEMINI_API_KEY else 'NO'}",
+            f"Reona online as {self.user} | Groq keys={len(GROQ_API_KEYS)} ({GROQ_MODEL}) | Gemini={GEMINI_CHAT_MODEL if GEMINI_API_KEY else 'NO'}",
             flush=True,
         )
         if not self._session_started:
@@ -619,6 +592,12 @@ class ReonaBot(discord.Client):
             asyncio.create_task(self._github_session_loop())
 
     async def _handle_incoming_message(self, message: discord.Message) -> None:
+        if message.id in self._handled_msg_ids:
+            return
+        self._handled_msg_ids.add(message.id)
+        if len(self._handled_msg_ids) > 100:
+            self._handled_msg_ids.clear()
+
         now_dt = datetime.datetime.now(SYDNEY_TZ)
         self._touch(nick=True)
 
@@ -633,7 +612,7 @@ class ReonaBot(discord.Client):
         if user_text and not is_voice:
             self.rag.append_turn("Nick", user_text)
 
-        if snap["in_restroom"]:
+        if snap["in_restroom"] and not _is_question(user_text):
             line = self.db.pick_canned_line("restroom", snap["gi_status"]) or "去一下廁所"
             await self._send_burst(message.channel, [line], snap["delay_range"])
             return
@@ -661,6 +640,7 @@ class ReonaBot(discord.Client):
                 return
 
         allow_work = any(k in user_text for k in WORK_KEYWORDS)
+        allow_cat = any(k in user_text for k in CAT_KEYWORDS)
         evening_rest = _is_sydney_evening_rest(now_dt)
 
         matched_card, recent_turns = await self.rag.retrieve(
@@ -670,6 +650,9 @@ class ReonaBot(discord.Client):
             allow_work=allow_work,
             top_k=2,
         )
+        if matched_card and matched_card.get("category") == "pet_daily" and not allow_cat:
+            matched_card = None
+
         if matched_card:
             print(
                 f"[RAG Hit] id={matched_card.get('id')} score={matched_card.get('score')}",
@@ -682,6 +665,7 @@ class ReonaBot(discord.Client):
             recent_turns=recent_turns,
             is_proactive=False,
             allow_work=allow_work,
+            allow_cat=allow_cat,
             is_evening_rest=evening_rest,
         )
 
@@ -706,8 +690,14 @@ class ReonaBot(discord.Client):
             else f"請直接以 Reona 身分自然回覆這句話：{user_text}"
         )
 
-        raw = await self._call_llm_once(sys_prompt, user_prompt, max_tokens=512)
-        lines = clean_and_split_lines(raw or "", snap["max_msgs"], snap["max_chars"], user_text=user_text)
+        raw = await self._call_llm_once(sys_prompt, user_prompt, max_tokens=240)
+        lines = clean_and_split_lines(
+            raw or "",
+            snap["max_msgs"],
+            snap["max_chars"],
+            user_text=user_text,
+            allow_cat=allow_cat,
+        )
 
         if not lines:
             fallback = self.db.pick_canned_line("fallback", snap["mode"]) or "剛在忙手邊，你呢"
