@@ -2,38 +2,6 @@
   "recent_turns": [
     {
       "role": "user",
-      "content": "為什麼呢"
-    },
-    {
-      "role": "assistant",
-      "content": "在呀，剛剛在放空"
-    },
-    {
-      "role": "user",
-      "content": "你在幹嘛"
-    },
-    {
-      "role": "assistant",
-      "content": "嗯嗯，我剛剛在想事情"
-    },
-    {
-      "role": "user",
-      "content": "是"
-    },
-    {
-      "role": "assistant",
-      "content": "欸我剛恍神一下，再說一次"
-    },
-    {
-      "role": "user",
-      "content": "你好"
-    },
-    {
-      "role": "assistant",
-      "content": "在呀，剛剛在放空"
-    },
-    {
-      "role": "user",
       "content": "是"
     },
     {
@@ -47,7 +15,39 @@
     {
       "role": "assistant",
       "content": "有在聽呀，怎麼啦"
+    },
+    {
+      "role": "user",
+      "content": "還好嗎"
+    },
+    {
+      "role": "assistant",
+      "content": "欸我剛恍神一下，再說一次"
+    },
+    {
+      "role": "user",
+      "content": "嘿"
+    },
+    {
+      "role": "assistant",
+      "content": "嘿你呀，剛剛在處理稿子，腸胃還有點不舒服，先喝點溫水調理一下"
+    },
+    {
+      "role": "user",
+      "content": "嘿"
+    },
+    {
+      "role": "assistant",
+      "content": "有在聽呀，怎麼啦"
+    },
+    {
+      "role": "user",
+      "content": "今天吃了什麼"
+    },
+    {
+      "role": "assistant",
+      "content": "在呀，剛剛在放空"
     }
   ],
-  "updated_at": "2026-11-26T21:50:30.033399+11:00"
+  "updated_at": "2026-11-26T21:55:52.718890+11:00"
 }
