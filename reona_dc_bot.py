@@ -3,6 +3,7 @@ import json
 import os
 import random
 import re
+import shutil
 import tempfile
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -164,48 +165,70 @@ async def send_with_optional_voice(
                 pass
 
 
-def _network_fallback(last_bot: str) -> str:
+def _network_fallback(last_bot: str = "", recent_asst: list[str] | None = None) -> str:
     options = [
-        "剛剛網路卡了一下沒傳出去，你再說一次",
-        "欸我這邊訊號剛跳掉一下，沒看清楚",
-        "等我一下剛剛轉圈圈了，你說什麼",
+        "嗯？我剛剛走神了一下",
+        "在呀，怎麼突然這樣",
+        "剛剛在想事情，你再說一次",
+        "欸我剛恍神了，什麼事",
+        "在呢，剛剛在發呆",
     ]
-    filtered = [o for o in options if o != last_bot] or options
+    avoid = {last_bot} if last_bot else set()
+    if recent_asst:
+        avoid.update(recent_asst[-2:])
+
+    filtered = [o for o in options if o not in avoid] or options
     return random.choice(filtered)
 
 
-def load_recent_turns() -> list[dict]:
-    if not MEMORY_JSON_PATH.exists():
-        return []
-    try:
-        data = json.loads(MEMORY_JSON_PATH.read_text(encoding="utf-8"))
-        raw_turns = data.get("recent_turns", [])
-        if not isinstance(raw_turns, list):
-            return []
+def _parse_turns_file(path: Path) -> list[dict]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    raw_turns = data.get("recent_turns", [])
+    if not isinstance(raw_turns, list):
+        raise ValueError("recent_turns is not a list")
 
-        normalized: list[dict] = []
-        for item in raw_turns[-12:]:
-            if isinstance(item, dict) and "role" in item and "content" in item:
-                normalized.append({
-                    "role": str(item["role"]),
-                    "content": str(item["content"]),
-                })
-            elif isinstance(item, str) and item.strip():
-                text = item.strip()
-                if text.startswith(("Reona:", "Reona：", "Assistant:", "assistant:")):
-                    role = "assistant"
-                    content = text.split(":", 1)[1].split("：", 1)[-1].strip()
-                else:
-                    role = "user"
-                    content = (
-                        text.split(":", 1)[1].split("：", 1)[-1].strip()
-                        if (":" in text or "：" in text)
-                        else text
-                    )
-                normalized.append({"role": role, "content": content})
-        return normalized
-    except Exception:
-        return []
+    normalized: list[dict] = []
+    for item in raw_turns[-12:]:
+        if isinstance(item, dict) and "role" in item and "content" in item:
+            normalized.append({
+                "role": str(item["role"]),
+                "content": str(item["content"]),
+            })
+        elif isinstance(item, str) and item.strip():
+            text = item.strip()
+            if text.startswith(("Reona:", "Reona：", "Assistant:", "assistant:")):
+                role = "assistant"
+                content = text.split(":", 1)[1].split("：", 1)[-1].strip()
+            else:
+                role = "user"
+                content = (
+                    text.split(":", 1)[1].split("：", 1)[-1].strip()
+                    if (":" in text or "：" in text)
+                    else text
+                )
+            normalized.append({"role": role, "content": content})
+    return normalized
+
+
+def load_recent_turns() -> list[dict]:
+    bak_path = MEMORY_JSON_PATH.with_suffix(".json.bak")
+
+    if MEMORY_JSON_PATH.exists():
+        try:
+            return _parse_turns_file(MEMORY_JSON_PATH)
+        except Exception as exc:
+            print(f"[Memory] Primary JSON corrupted ({exc}), trying backup...")
+
+    if bak_path.exists():
+        try:
+            turns = _parse_turns_file(bak_path)
+            shutil.copy2(bak_path, MEMORY_JSON_PATH)
+            print("[Memory] Restored recent_turns from .bak successfully.")
+            return turns
+        except Exception as exc:
+            print(f"[Memory] Backup JSON also unreadable ({exc}).")
+
+    return []
 
 
 def save_recent_turns_atomic(turns: list[dict]) -> None:
@@ -215,6 +238,15 @@ def save_recent_turns_atomic(turns: list[dict]) -> None:
         if isinstance(t, dict) and "role" in t and "content" in t
     ]
     payload = {"recent_turns": clean_turns, "updated_at": now_sydney().isoformat()}
+
+    if MEMORY_JSON_PATH.exists():
+        try:
+            json.loads(MEMORY_JSON_PATH.read_text(encoding="utf-8"))
+            bak_path = MEMORY_JSON_PATH.with_suffix(".json.bak")
+            shutil.copy2(MEMORY_JSON_PATH, bak_path)
+        except Exception:
+            pass
+
     tmp_path = MEMORY_JSON_PATH.with_suffix(".json.tmp")
     tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(tmp_path, MEMORY_JSON_PATH)
@@ -327,6 +359,7 @@ def light_clean_reply(reply: str, hour: int) -> str:
 
 def _call_gemini_chat(messages: list[dict], temp: float = 0.78) -> str:
     if not GEMINI_API_KEY:
+        print("[Gemini Primary] GEMINI_API_KEY is empty.")
         return ""
 
     system_parts = [m["content"] for m in messages if m.get("role") == "system" and m.get("content")]
@@ -374,9 +407,15 @@ def _call_gemini_chat(messages: list[dict], temp: float = 0.78) -> str:
         data = resp.json()
         candidates = data.get("candidates") or []
         if not candidates:
+            print(f"[Gemini Primary] Empty candidates: {str(data)[:200]}")
             return ""
-        parts = candidates[0].get("content", {}).get("parts") or []
-        return "".join(p.get("text", "") for p in parts if isinstance(p, dict)).strip()
+        cand0 = candidates[0]
+        finish_reason = cand0.get("finishReason", "")
+        parts = cand0.get("content", {}).get("parts") or []
+        text_out = "".join(p.get("text", "") for p in parts if isinstance(p, dict)).strip()
+        if not text_out:
+            print(f"[Gemini Primary] Empty text (finishReason={finish_reason}): {str(cand0)[:200]}")
+        return text_out
     except Exception as exc:
         print(f"[Gemini Primary] Error: {exc}")
         return ""
@@ -384,6 +423,7 @@ def _call_gemini_chat(messages: list[dict], temp: float = 0.78) -> str:
 
 def _call_groq_chat(messages: list[dict], temp: float = 0.75) -> str:
     if not groq_client:
+        print("[Groq Fallback] GROQ_API_KEY is empty.")
         return ""
     last_exc: Exception | None = None
 
@@ -413,6 +453,7 @@ def _call_groq_chat(messages: list[dict], temp: float = 0.75) -> str:
         content = (resp.choices[0].message.content or "").strip()
         if content:
             return content
+        print(f"[Groq Fallback] Model {model_name} returned empty content.")
 
     if last_exc:
         print(f"[Groq Fallback] All models failed: {last_exc}")
@@ -457,7 +498,7 @@ def generate_reona_reply(user_text: str, was_sulking: bool, shared_story: bool) 
 
     if not final_reply:
         last_bot = recent_asst[-1] if recent_asst else ""
-        final_reply = _network_fallback(last_bot)
+        final_reply = _network_fallback(last_bot=last_bot, recent_asst=recent_asst)
 
     if any(k in final_reply for k in ["肚子痛", "腸胃", "拉肚子", "吃太辣", "吃太油"]):
         set_physical_state("腸胃有點不舒服", hours=4.0)
