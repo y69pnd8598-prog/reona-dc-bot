@@ -32,7 +32,7 @@ GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or "").strip()
 TARGET_CHANNEL_ID = _env_int("TARGET_CHANNEL_ID", 0)
 
 MEMORY_JSON_PATH = Path(os.getenv("REONA_JSON_PATH", "reona_memory.json"))
-GROQ_MODEL = (os.getenv("GROQ_MODEL") or "llama-3.3-70b-versatile").strip()
+GROQ_MODEL = (os.getenv("GROQ_MODEL") or "openai/gpt-oss-120b").strip()
 
 groq_client = Groq(api_key=GROQ_API_KEY)
 
@@ -204,7 +204,7 @@ def generate_reona_reply(user_text: str, was_sulking: bool, shared_story: bool) 
         frequency_penalty=0.65,
         presence_penalty=0.55,
     )
-    raw_reply = resp.choices[0].message.content.strip()
+    raw_reply = (resp.choices[0].message.content or "").strip()
     final_reply = post_process_reply(raw_reply, user_text, recent_turns)
 
     # Record Reona's own notable events / decision hooks
