@@ -738,7 +738,12 @@ class ReonaBGDB:
             if proactive and "last_proactive_ts" in cols:
                 conn.execute("UPDATE runtime_state SET last_proactive_ts = ? WHERE id = 1", (now,))
 
-    def evaluate_causal_events(self, user_text: str = "", now_dt: Optional[datetime.datetime] = None) -> Optional[str]:
+    def evaluate_causal_events(
+        self,
+        user_text: str = "",
+        now_dt: Optional[datetime.datetime] = None,
+        allow_random_gi: bool = True,
+    ) -> Optional[str]:
         dt = now_dt or datetime.datetime.now(SYDNEY_TZ)
         now = dt.timestamp()
         slot = self._time_slot(dt)
@@ -770,30 +775,31 @@ class ReonaBGDB:
                 if any(k in txt for k in ("厲害", "好棒", "喜歡", "好看", "麻糬", "好吃", "辛苦了", "抱抱")):
                     if gi_status == "normal" and now >= mood_until:
                         self.set_state(mood="happy", mood_duration_sec=2700)
-                elif any(k in txt for k in ("喝冰", "冰咖啡", "吃辣", "熬夜", "別睡")):
-                    if gi_triggered_today == 0 and random.random() < 0.45:
+                elif allow_random_gi and any(k in txt for k in ("喝冰", "冰咖啡", "吃辣", "熬夜", "別睡")):
+                    if gi_triggered_today == 0 and random.random() < 0.20:
                         self.set_state(
                             gi_status="upset",
-                            gi_duration_sec=3000,
+                            gi_duration_sec=2400,
                             recovery_sec=5400,
-                            restroom_sec=random.randint(180, 320),
+                            restroom_sec=random.randint(90, 180),
                         )
 
-            gi_risk = float(ml.get("gi_risk") or 0.25)
-            if slot in ("afternoon", "evening") and gi_triggered_today == 0 and gi_status == "normal":
-                step_prob = gi_risk * 0.18
-                if random.random() < step_prob:
-                    self.set_state(
-                        gi_status="upset",
-                        gi_duration_sec=random.randint(2400, 4200),
-                        recovery_sec=5400,
-                        restroom_sec=random.randint(180, 360),
-                        gi_cause=ml.get("gi_cause_hint") or "",
-                    )
+            if allow_random_gi:
+                gi_risk = float(ml.get("gi_risk") or 0.25)
+                if slot in ("afternoon", "evening") and gi_triggered_today == 0 and gi_status == "normal":
+                    step_prob = gi_risk * 0.08
+                    if random.random() < step_prob:
+                        self.set_state(
+                            gi_status="upset",
+                            gi_duration_sec=random.randint(2400, 3600),
+                            recovery_sec=5400,
+                            restroom_sec=random.randint(90, 180),
+                            gi_cause=ml.get("gi_cause_hint") or "",
+                        )
 
-            if gi_status == "upset" and now > restroom_until + 900:
-                if random.random() < 0.25:
-                    self.set_state(restroom_sec=random.randint(150, 300))
+                if gi_status == "upset" and now > restroom_until + 2700:
+                    if random.random() < 0.08:
+                        self.set_state(restroom_sec=random.randint(90, 150))
 
         return None
 
