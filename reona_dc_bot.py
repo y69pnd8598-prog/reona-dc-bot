@@ -66,13 +66,42 @@ def load_recent_turns() -> list[dict]:
         return []
     try:
         data = json.loads(MEMORY_JSON_PATH.read_text(encoding="utf-8"))
-        return data.get("recent_turns", [])[-12:]
+        raw_turns = data.get("recent_turns", [])
+        if not isinstance(raw_turns, list):
+            return []
+
+        normalized: list[dict] = []
+        for item in raw_turns[-12:]:
+            if isinstance(item, dict) and "role" in item and "content" in item:
+                normalized.append({
+                    "role": str(item["role"]),
+                    "content": str(item["content"]),
+                })
+            elif isinstance(item, str) and item.strip():
+                text = item.strip()
+                if text.startswith(("Reona:", "Reona：", "Assistant:", "assistant:")):
+                    role = "assistant"
+                    content = text.split(":", 1)[1].split("：", 1)[-1].strip()
+                else:
+                    role = "user"
+                    content = (
+                        text.split(":", 1)[1].split("：", 1)[-1].strip()
+                        if (":" in text or "：" in text)
+                        else text
+                    )
+                normalized.append({"role": role, "content": content})
+        return normalized
     except Exception:
         return []
 
 
 def save_recent_turns_atomic(turns: list[dict]) -> None:
-    payload = {"recent_turns": turns[-12:], "updated_at": now_sydney().isoformat()}
+    clean_turns = [
+        {"role": str(t["role"]), "content": str(t["content"])}
+        for t in turns[-12:]
+        if isinstance(t, dict) and "role" in t and "content" in t
+    ]
+    payload = {"recent_turns": clean_turns, "updated_at": now_sydney().isoformat()}
     tmp_path = MEMORY_JSON_PATH.with_suffix(".json.tmp")
     tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(tmp_path, MEMORY_JSON_PATH)
@@ -130,8 +159,8 @@ def post_process_reply(reply: str, user_text: str, recent_turns: list[dict]) -> 
         reply = reply.replace(bad, good)
 
     # 3. Reduce repetitive emoji spam if previous assistant turn already had an emoji
-    if recent_turns and recent_turns[-1]["role"] == "assistant":
-        if any(e in recent_turns[-1]["content"] for e in ["😅", "😂", "🥺", "✨", "😭"]):
+    if recent_turns and isinstance(recent_turns[-1], dict) and recent_turns[-1].get("role") == "assistant":
+        if any(e in recent_turns[-1].get("content", "") for e in ["😅", "😂", "🥺", "✨", "😭"]):
             reply = re.sub(r"[😅😂🥺✨😭😊]", "", reply).strip()
 
     return reply
@@ -143,7 +172,9 @@ def generate_reona_reply(user_text: str, was_sulking: bool, shared_story: bool) 
 
     # Check repeated words in last 2 assistant turns to inject anti-loop hint
     recent_assistant_text = " ".join(
-        t["content"] for t in recent_turns[-4:] if t["role"] == "assistant"
+        t.get("content", "")
+        for t in recent_turns[-4:]
+        if isinstance(t, dict) and t.get("role") == "assistant"
     )
     anti_loop_note = ""
     for word in ["餅乾", "畫桌", "雞湯", "廁所"]:
@@ -250,7 +281,12 @@ class ReonaBot(discord.Client):
         state = record_proactive_ping()
         recent_turns = load_recent_turns()
         last_bot_msg = next(
-            (t["content"] for t in reversed(recent_turns) if t["role"] == "assistant"), ""
+            (
+                t.get("content", "")
+                for t in reversed(recent_turns)
+                if isinstance(t, dict) and t.get("role") == "assistant"
+            ),
+            "",
         )
 
         if state["unanswered_pings"] == 3:
