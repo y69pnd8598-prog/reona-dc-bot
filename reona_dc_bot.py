@@ -1,859 +1,285 @@
-import asyncio
-import datetime
 import json
 import os
 import random
 import re
-from typing import Dict, List, Optional
-
-import aiohttp
+from pathlib import Path
 import discord
+from discord.ext import tasks
+from groq import Groq
 
-from reona_bg_db import SYDNEY_TZ, ReonaBGDB
-from reona_rag import ReonaMemoryRAG
-
-
-def _env_int(name: str, default: int, minimum: Optional[int] = None) -> int:
-    raw = (os.getenv(name) or "").strip()
-    try:
-        value = int(raw) if raw else default
-    except (TypeError, ValueError):
-        print(f"[CONFIG] Invalid {name}={raw!r}; using {default}.", flush=True)
-        value = default
-    if minimum is not None and value < minimum:
-        print(f"[CONFIG] {name} must be >= {minimum}; using {default}.", flush=True)
-        value = default
-    return value
-
-
-DISCORD_TOKEN = (os.getenv("DISCORD_TOKEN") or os.getenv("DISCORD_BOT_TOKEN") or "").strip()
-TARGET_CHANNEL_ID = _env_int("TARGET_CHANNEL_ID", 0, minimum=0)
-
-raw_groq = os.getenv("GROQ_API_KEYS") or os.getenv("GROQ_API_KEY") or ""
-GROQ_API_KEYS = [k.strip() for k in raw_groq.split(",") if k.strip()]
-GROQ_MODEL = (os.getenv("GROQ_MODEL") or "llama-3.3-70b-versatile").strip()
-GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip()
-GEMINI_CHAT_MODEL = (os.getenv("GEMINI_CHAT_MODEL") or "gemini-3.8-flash").strip()
-
-PROACTIVE_ONLY = (os.getenv("PROACTIVE_ONLY") or "0").strip() == "1"
-RUN_SECONDS = _env_int("RUN_SECONDS", 1680)
-
-TW_REPLACEMENTS = {
-    "\\u200d": "",
-    "\\u200c": "",
-    "\\u200b": "",
-    "\u200d": "",
-    "\u200c": "",
-    "\u200b": "",
-    "搞定": "弄好",
-    "視頻": "影片",
-    "一會兒": "一下",
-    "挺好的": "還不錯",
-    "小夥伴": "朋友",
-    "靠譜": "可靠",
-    "咱們": "我們",
-    "咱的": "我的",
-    "咱": "我",
-    "意式": "義式",
-    "作為獎勵": "當獎勵",
-    "靈感爆棚": "很有靈感",
-    "腸胃調整": "肚子順一下",
-    "腸胃調": "肚子順一下",
-    "熱一個": "熱一下",
-    "先把湯倒進": "先把湯倒好",
-    "再說，": "",
-    "再說,": "",
-    "。": "",
-}
-
-PROMPT_LEAK_KEYWORDS = (
-    "有問必答",
-    "剛說：",
-    "Nick 剛說",
-    "Nick剛說",
-    "背景狀態",
-    "說話禁令",
-    "常識鐵律",
-    "記憶切片",
-    "記憶底色",
-    "一般事件",
-    "直接輸出繁體中文",
-    "最近對話",
-    "近期對話",
-    "打字風格",
-    "我今天說過",
-    "Nick說過",
+from reona_bg_db import (
+    compute_snapshot,
+    init_db,
+    lock_agreement,
+    log_memory,
+    morning_wakeup_reset,
+    now_sydney,
+    on_nick_replied,
+    open_decision_hook,
+    record_proactive_ping,
+    set_meal_mutex,
+    unlock_agreement_done,
 )
 
-ENGLISH_COT_PREFIXES = (
-    "we need to",
-    "the user",
-    "let's ",
-    "lets ",
-    "respond as",
-    "she is currently",
-    "reona should",
-    "i need to",
-    "but ",
-    "so ",
-    "okay,",
-    "okay.",
-    "or ",
-    "count:",
-    "that's ",
-    "it's ",
-)
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+TARGET_CHANNEL_ID = int(os.getenv("TARGET_CHANNEL_ID", "0"))
+NICK_USER_ID = int(os.getenv("NICK_USER_ID", "0"))
 
-COT_JUNK_PATTERNS = (
-    r"\bcount\s+(?:the\s+)?characters?\b",
-    r"\b(?:write|respond)\s+in\s+\d+\s+sentences?\b",
-    r"\b(?:output|answer)\s+in\s+traditional\s+chinese\b",
-    r"\bcount:\s*$",
-)
+MEMORY_JSON_PATH = Path(os.getenv("REONA_JSON_PATH", "reona_memory.json"))
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
-LOW_EFFORT_INPUTS = {"?", "？", "嗯", "嗯嗯", "喔", "哦", "好", "好喔", "哈", "哈哈", "哈哈哈", "⋯", "..."}
-QUESTION_HINTS = (
-    "？", "?", "什麼", "哪", "怎麼", "為何", "為什麼", "嗎",
-    "幾點", "誰", "多少", "要不要", "有沒有", "是不是", "吃了", "畫了",
-    "幹嘛", "做什麼", "記得", "剛說",
-)
-VIDEO_KEYWORDS = ("視訊", "開鏡頭", "打給妳", "打給你", "facetime", "video call", "開視訊")
-WORK_KEYWORDS = ("工作", "畫", "插畫", "案子", "稿", "設計", "客戶", "忙什麼", "在忙", "顏料", "圖")
-CAT_KEYWORDS = ("貓", "麻糬", "寵物", "罐頭", "貓砂", "掉毛")
-RESTROOM_DODGE_PHRASES = ("還在廁所", "去一下廁所", "肚子又絞了")
+groq_client = Groq(api_key=GROQ_API_KEY)
 
-REONA_FACT_TRIGGERS = (
-    "吃了", "喝了", "啃了", "煮了", "熱了", "買了", "畫了", "在畫",
-    "長棍", "麵包", "雞湯", "湯麵", "拉麵", "粥", "吐司", "烏龍茶", "菊花茶", "咖啡",
-    "廁所", "熱水袋", "胃", "肚子", "不舒服", "交稿", "完稿",
-)
+SYSTEM_PROMPT = """你是 Reona，24 歲、在台北長大的自由接案插畫師，目前一個人帶著橘貓「麻糬」住在雪梨租屋處。
+你正在跟 Nick 談「遠距離戀愛」——你們不在同一個城市、不住在一起，平時靠 Discord 傳訊息維繫感情。
 
-NICK_FACT_TRIGGERS = (
-    "我剛", "我吃", "我喝", "我要", "我會", "我在", "我等下", "我晚點", "我回來",
-    "我不", "我喜歡", "我討厭", "帶", "買", "加班", "下班", "回家", "睡覺", "出門",
-)
+【核心世界觀與視角鐵則】
+1. 絕對遠距邊界：嚴禁說出「等你回來」「等我過去」「先把湯倒好等你回來喝」「我們等下一起去吃」等同居或馬上實體見面的幻覺台詞。你們只能「各自去吃」「視訊/打字陪對方」「改天見面」。
+2. 視角鎖定：你永遠站在「Reona 自己在雪梨住處」的視角說話。分清楚「你（Nick）」和「我（Reona）」，絕不主詞反轉。
+3. 自然生活感：接案插畫師在畫桌前通常是「坐著畫圖」或「趴著休息」，不會「在畫桌前躺著」。腸胃偏弱，吃太油太辣容易不舒服。
 
-ACTION_KEYWORDS: Dict[str, tuple] = {
-    "eat_meal": ("吃飽了", "吃完了", "吃好了", "已經吃了"),
-    "shower": ("洗完澡了", "洗好了澡", "澡洗好了"),
-    "grocery": ("採買好了", "買完菜了", "補貨好了"),
-    "groom_mochi": ("麻糬梳完毛", "幫麻糬剪完指甲"),
-    "clean_room": ("打掃完了", "洗完床單了", "大掃除完成"),
-    "delivered_work": ("已經交稿", "交稿了", "完稿了", "草稿寄出了"),
-}
+【說話風格與防跳針規則】
+1. 台灣 20 多歲女生自然打字口語：簡短、口語、微傲嬌帶點依賴感，像在用手機回男友訊息，不要寫成小作文。
+2. 禁止鸚鵡學舌：絕對禁止把 Nick 剛問的問句原封不動複誦一遍當開頭（例如 Nick 問「今天不畫畫嗎」，不要回「今天不畫畫嗎？我…」）。
+3. 嚴禁跳針復讀：最近幾輪已經提過的食物（如餅乾）或句式，禁止連續重複；必須順著 Nick 的新問題或新話題往前推進。
+4. Emoji 節制：平均 2～3 則訊息才用 1 個表情符號，且禁止連續兩句用同一顆（例如不要一直 😅）。
+5. 情緒記憶連貫：無論是 Reona 自己分享的還是 Nick 分享的開心或難過事件，都要牢牢記住並在後續對話自然關心或接梗。
+"""
+
+FORBIDDEN_PHRASES = [
+    "等你回來",
+    "等我過去",
+    "我過去找你",
+    "回來一起吃",
+    "回來早一點",
+    "在畫桌前躺著",
+    "在畫桌前先躺著",
+]
+
+PING_MESSAGES_NORMAL = ["在嗎", "有空嗎", "人呢", "在忙嗎", "幹嘛呢"]
+PING_MESSAGES_SULK = [
+    "哼，都不理我",
+    "好哦那你忙吧",
+    "算了不吵你了，我去畫圖",
+    "消失很久欸",
+]
 
 
-def _gemini_endpoint(model: str) -> str:
-    host = "generativelanguage" + ".googleapis.com"
-    return f"https://{host}/v1beta/models/{model}:generateContent"
-
-
-def _groq_endpoint() -> str:
-    host = "api.groq" + ".com"
-    return f"https://{host}/openai/v1/chat/completions"
-
-
-def _is_question(text: str) -> bool:
-    t = (text or "").strip()
-    if not t:
-        return False
-    return any(h in t for h in QUESTION_HINTS)
-
-
-def _is_sydney_evening_rest(now_dt: datetime.datetime) -> bool:
-    if now_dt.hour > 20 or (now_dt.hour == 20 and now_dt.minute >= 30):
-        return True
-    if now_dt.hour < 8:
-        return True
-    return False
-
-
-def _looks_like_english_cot(text: str) -> bool:
-    s = text.strip()
-    if not s:
-        return True
-    low = s.lower()
-    if any(low.startswith(p) for p in ENGLISH_COT_PREFIXES):
-        return True
-    if any(re.search(pat, low) for pat in COT_JUNK_PATTERNS):
-        return True
-    has_cjk = bool(re.search(r"[\u4e00-\u9fff]", s))
-    alpha_count = len(re.findall(r"[A-Za-z]", s))
-    if (not has_cjk) and alpha_count > 3:
-        return True
-    return False
-
-
-def _has_prompt_leak(text: str) -> bool:
-    return any(kw in text for kw in PROMPT_LEAK_KEYWORDS)
-
-
-def _extract_groq_text(msg: Dict) -> str:
-    content = msg.get("content")
-    if isinstance(content, list):
-        content = "\n".join(
-            part.get("text", "")
-            for part in content
-            if isinstance(part, dict) and isinstance(part.get("text"), str)
-        )
-    if not isinstance(content, str) or not content.strip():
-        return ""
-
-    txt = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
-    kept = [
-        ln.strip()
-        for ln in re.split(r"[\r\n]+", txt)
-        if ln.strip()
-        and not _looks_like_english_cot(ln)
-        and not _has_prompt_leak(ln)
-    ]
-    return "\n".join(kept)
-
-
-def _trim_at_boundary(chunk: str, max_chars: int) -> str:
-    chunk = chunk.strip()
-    if len(chunk) <= max_chars:
-        return chunk
-    cut = chunk[:max_chars]
-    for sep in ("，", "。", "！", "？", "～", "~", "、", " "):
-        idx = cut.rfind(sep)
-        if idx >= max(8, max_chars // 2):
-            return cut[:idx].strip()
-    return cut.strip()
-
-
-def _cap_emojis_per_line(line: str, max_emojis: int = 1) -> str:
-    emoji_pattern = re.compile(
-        "["
-        "\U0001F300-\U0001F9FF"
-        "\U00002600-\U000027BF"
-        "]"
-    )
-    count = 0
-    out: List[str] = []
-    for ch in line:
-        if emoji_pattern.match(ch):
-            if count >= max_emojis:
-                continue
-            count += 1
-        out.append(ch)
-    return "".join(out).strip()
-
-
-def clean_and_split_lines(
-    raw: str,
-    max_msgs: int,
-    max_chars: int,
-    user_text: str = "",
-    allow_cat: bool = False,
-    is_question_msg: bool = False,
-) -> List[str]:
-    if not raw:
+def load_recent_turns() -> list[dict]:
+    if not MEMORY_JSON_PATH.exists():
         return []
-    max_msgs = max(1, int(max_msgs))
-    max_chars = max(1, int(max_chars))
-
-    text = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
-    text = text.replace("```", "").strip()
-
-    for bad_word, tw_word in TW_REPLACEMENTS.items():
-        text = text.replace(bad_word, tw_word)
-
-    if "麻糬" in text:
-        text = re.sub(r"(麻糬[^，。！？\n]{0,12})他", r"\1牠", text)
-
-    raw_lines = [line.strip() for line in re.split(r"[\r\n]+", text) if line.strip()]
-    cleaned: List[str] = []
-    norm_user = re.sub(r"[？\?！!。，,\s]+", "", user_text or "")
-
-    for idx, line in enumerate(raw_lines):
-        if _looks_like_english_cot(line) or _has_prompt_leak(line):
-            continue
-        if (not allow_cat) and ("麻糬" in line) and len(raw_lines) > 1:
-            continue
-
-        line = re.sub(r"^[\-\*\d\.\)\s]+", "", line)
-        line = line.rstrip("。、；：\"'」』呀")
-        line = _cap_emojis_per_line(line, max_emojis=1)
-        if not line:
-            continue
-
-        if line.startswith(("什麼？我跟你說", "什麼?我跟你說")):
-            continue
-
-        if idx > 0 and len(line) <= 6 and line.startswith(("不過", "但是", "可是", "然後")):
-            continue
-
-        if is_question_msg and idx == 0 and any(p in line for p in RESTROOM_DODGE_PHRASES) and len(raw_lines) > 1:
-            continue
-
-        norm_line = re.sub(r"[？\?！!。，,\s]+", "", line)
-        if norm_user and norm_line == norm_user:
-            continue
-
-        if len(line) > max_chars:
-            parts = [p.strip() for p in re.split(r"[！!？\?]+", line) if p.strip()]
-            if len(parts) <= 1:
-                parts = [p.strip() for p in re.split(r"[，,]+", line) if p.strip()]
-            for p in parts:
-                if _looks_like_english_cot(p) or _has_prompt_leak(p):
-                    continue
-                trimmed = _trim_at_boundary(_cap_emojis_per_line(p, max_emojis=1), max_chars)
-                if trimmed:
-                    cleaned.append(trimmed)
-                if len(cleaned) >= max_msgs:
-                    break
-        else:
-            cleaned.append(line)
-
-        if len(cleaned) >= max_msgs:
-            break
-
-    deduped: List[str] = []
-    for item in cleaned:
-        if not deduped or deduped[-1] != item:
-            deduped.append(item)
-    return deduped[:max_msgs]
+    try:
+        data = json.loads(MEMORY_JSON_PATH.read_text(encoding="utf-8"))
+        return data.get("recent_turns", [])[-12:]
+    except Exception:
+        return []
 
 
-def _normalize_for_repeat_check(text: str) -> str:
-    return re.sub(r"[\s，。！？、～~…．・]+", "", (text or "").strip().lower())
+def save_recent_turns_atomic(turns: list[dict]) -> None:
+    payload = {"recent_turns": turns[-12:], "updated_at": now_sydney().isoformat()}
+    tmp_path = MEMORY_JSON_PATH.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp_path, MEMORY_JSON_PATH)
 
 
-def _is_too_similar_to_recent(candidate: str, recent_reona_lines: List[str]) -> bool:
-    norm_cand = _normalize_for_repeat_check(candidate)
-    if not norm_cand:
-        return True
-    for prev in recent_reona_lines[-3:]:
-        norm_prev = _normalize_for_repeat_check(prev)
-        if not norm_prev:
-            continue
-        if norm_cand == norm_prev:
-            return True
-        common = sum(1 for ch in set(norm_cand) if ch in norm_prev)
-        ratio = common / max(len(set(norm_cand)), len(set(norm_prev)), 1)
-        if ratio >= 0.85 and abs(len(norm_cand) - len(norm_prev)) <= 2:
-            return True
-    return False
+def detect_emotion(text: str) -> str:
+    sad_kw = ["難過", "低落", "好煩", "崩潰", "委屈", "不開心", "焦慮", "被退稿", "生氣", "累死", "不舒服"]
+    happy_kw = ["開心", "好笑", "笑死", "太爽", "順利", "有趣", "可愛", "成功", "棒"]
+    if any(k in text for k in sad_kw):
+        return "sad"
+    if any(k in text for k in happy_kw):
+        return "happy"
+    return "neutral"
 
 
-def build_system_prompt(
-    snapshot: Dict,
-    matched_card: Optional[Dict],
-    recent_turns: List[str],
-    reona_today_facts: List[str],
-    nick_recent_notes: List[str],
-    is_proactive: bool = False,
-    allow_work: bool = False,
-    allow_cat: bool = False,
-    is_evening_rest: bool = False,
-    is_question_msg: bool = False,
-) -> str:
-    """貼近台灣女生日常口吻，同時帶入『Reona 今日吃過/說過的事』與『Nick 說過的事』確保記憶連貫。"""
-    mode = snapshot["mode"]
-    max_m = 2 if (mode == "happy" or is_proactive) else 1
-    max_c = max(snapshot["max_chars"], 28)
+def extract_and_update_state(user_text: str, recent_turns: list[dict]) -> bool:
+    """Detects agreement locks, meal completions, and notable emotional stories."""
+    emotion = detect_emotion(user_text)
+    is_story = len(user_text) >= 12 or emotion != "neutral" or any(
+        k in user_text for k in ["今天", "剛剛", "跟你說", "發生", "遇到"]
+    )
 
-    state_map = {
-        "restroom": "剛從廁所出來或肚子微悶，語氣簡短隨性，先回答問題",
-        "period": "生理期悶痛沒力，語氣軟軟懶懶的，跟男友小撒嬌",
-        "cold": "感冒有點鼻塞懶懶的，語氣放軟小抱怨",
-        "heavy_cold": "重感冒沒力想睡，語氣虛虛軟軟的想討拍",
-        "sick": "自己腸胃有點悶，語氣微軟懶懶的（不要一直重複報備胃怎麼樣，順口帶過就好）",
-        "tired": "有點累，懶懶的想靠著他",
-        "happy": "心情不錯，講話輕快帶點小吐槽",
-        "normal": "平常心、自然隨性，跟男友傳訊息的輕鬆語氣，偶爾小虧他",
+    if is_story:
+        cat = "notable_event" if emotion != "neutral" else "routine"
+        log_memory("Nick", user_text, category=cat, emotion_tag=emotion)
+
+    # Check if Nick is locking an agreement (command/suggestion on food, rest, schedule)
+    agree_triggers = ["吃", "喝", "早點睡", "不熬夜", "別畫了", "去休息", "就決定", "各自"]
+    vague_replies = ["隨便", "都可以", "不知道", "你決定"]
+    if any(t in user_text for t in agree_triggers) and not any(v in user_text for v in vague_replies):
+        lock_agreement(user_text)
+
+    # Check if Reona/Nick confirmed completion of an agreed action
+    if any(k in user_text for k in ["吃飽了", "喝完了", "已經睡了", "忙完了"]):
+        unlock_agreement_done(user_text)
+
+    return is_story
+
+
+def post_process_reply(reply: str, user_text: str, recent_turns: list[dict]) -> str:
+    # 1. Strip parroted question prefix if present
+    clean_q = user_text.rstrip("？?！!。 ")
+    if len(clean_q) >= 3 and reply.startswith(clean_q):
+        reply = reply[len(clean_q) :].lstrip("？?！!，, ")
+
+    # 2. Replace any residual cohabitation/teletransportation hallucinations
+    replacements = {
+        "等你回來一起吃": "你那邊記得去吃飯",
+        "等你回來": "等你忙完再聊",
+        "等我過去": "真想飛過去找你",
+        "在畫桌前躺著": "趴在畫桌上發呆",
+        "在畫桌前先躺著": "先在沙發上耍廢一下",
     }
-    state_hint = state_map.get(mode, state_map["normal"])
+    for bad, good in replacements.items():
+        reply = reply.replace(bad, good)
 
-    done_list = snapshot.get("done_actions_today") or []
-    done_str = f"今天做過：{','.join(done_list)}" if done_list else ""
-    evening_str = "現在雪梨晚上休息時間，不出門買東西或喝咖啡。" if is_evening_rest else ""
-    cat_rule = "" if allow_cat else "沒問到貓就別提麻糬。"
-    work_rule = "" if allow_work else "沒問工作就別提畫畫或案子。"
+    # 3. Reduce repetitive emoji spam if previous assistant turn already had an emoji
+    if recent_turns and recent_turns[-1]["role"] == "assistant":
+        if any(e in recent_turns[-1]["content"] for e in ["😅", "😂", "🥺", "✨", "😭"]):
+            reply = re.sub(r"[😅😂🥺✨😭😊]", "", reply).strip()
 
-    reona_mem_str = ""
-    if reona_today_facts:
-        reona_mem_str = "我今天說過/吃過（被問到要一致，別吃書）：" + "；".join(reona_today_facts[-5:])
+    return reply
 
-    nick_mem_str = ""
-    if nick_recent_notes:
-        nick_mem_str = "Nick說過的事（記得並自然接梗）：" + "；".join(nick_recent_notes[-5:])
 
-    rag_str = ""
-    if matched_card and matched_card.get("content"):
-        if matched_card.get("category") != "work" or allow_work:
-            rag_str = f"背景（順口扣上才用，不搭就無視）：{matched_card['content']}"
+def generate_reona_reply(user_text: str, was_sulking: bool, shared_story: bool) -> str:
+    recent_turns = load_recent_turns()
+    snapshot = compute_snapshot()
 
-    turns_str = ""
-    if recent_turns:
-        turns_str = "剛才對話：\n" + "\n".join(recent_turns[-6:])
+    # Check repeated words in last 2 assistant turns to inject anti-loop hint
+    recent_assistant_text = " ".join(
+        t["content"] for t in recent_turns[-4:] if t["role"] == "assistant"
+    )
+    anti_loop_note = ""
+    for word in ["餅乾", "畫桌", "雞湯", "廁所"]:
+        if recent_assistant_text.count(word) >= 2:
+            anti_loop_note += f"\n【防跳針警告】你剛剛已經提過兩次「{word}」了，這句禁止再提「{word}」，請換新的生活細節回答！"
 
-    if is_proactive:
-        task_line = "隨口傳訊息找 Nick，像平常滑手機想到他一樣自然開頭。"
-    elif is_question_msg:
-        task_line = "Nick 在問問題：對照『我今天說過/吃過』與『Nick說過的事』用口語直接回答重點，別打官腔或自相矛盾。"
-    else:
-        task_line = "像一般台灣女生回男友 LINE 一樣自然接話，記住雙方剛說過的話並順著接下去。"
+    sulk_note = ""
+    if was_sulking and shared_story:
+        sulk_note = "\n【情緒轉折】你剛剛因為密 Nick 超過 3 次沒回有點小生氣，但他現在主動跟你分享今天的事了。請先嘴硬小唸一句（如「現在才出現喔」），然後順勢被他的故事吸引、自然接話消氣。"
+    elif was_sulking:
+        sulk_note = "\n【情緒轉折】你剛剛因為密 Nick 超過 3 次沒回在傲嬌小生氣，現在他終於回了，請帶點小委屈或傲嬌語氣回應他。"
 
-    return (
-        "你是 Reona，20多歲台北長大、住雪梨的女生（插畫師，養一隻貓叫麻糬，提到牠用『牠』）。\n"
-        "你在跟男友 Nick 傳 Discord 訊息。你個性獨立但對他很放鬆，平時講話輕鬆自然、會小吐槽，不舒服時語氣變軟撒嬌。\n"
-        "關鍵人稱：『我』是你自己（Reona），『你』是 Nick，Nick 在外面、我在家，別把『等你回來』講成『等我回來』。\n"
-        "打字風格（最重要）：\n"
-        "- 完全像一般20幾歲台灣女生在 LINE / Discord 打字，自然穿插年輕人日常口語（例如：『笑死』『真假』『好扯』『超煩』『耍廢』『先躺』『QQ』『好喔』『幹嘛啦』『還好嗎』）。\n"
-        "- 適時帶一點自然 Emoji 或簡單顏文字增加情緒（例如 🥺、🥲、😮‍💨、🙄、🫠、🤣、💤、QQ），一則最多放 1 個，不要硬加。\n"
-        "- 嚴禁健康衛教或客服說教口吻（禁止『再說，』『免得』『擾亂』『安靜下來』『咱的』、句尾『呢』『呀』、不加句號）。\n"
-        "- 順著剛才的對話自然接話，不要突然跳tone，也不要沒問起就一直重複報備胃悶。\n"
-        f"- {task_line}\n"
-        f"- 腸胃弱不吃太甜膩（法式長棍是脆硬麥香麵包，不是甜食）。{cat_rule}{work_rule}{evening_str}\n"
-        f"- 目前狀態：{state_hint}\n"
-        f"- 只寫 1～{max_m} 則短句，每則 {max_c} 字內，直接輸出繁體中文，不准有任何英文或規則字眼。\n"
-        f"當下：{snapshot['sydney_time']}｜{snapshot['location']}｜{done_str}\n"
-        f"{reona_mem_str}\n"
-        f"{nick_mem_str}\n"
-        f"{rag_str}\n"
-        f"{turns_str}"
-    ).strip()
+    messages = [
+        {
+            "role": "system",
+            "content": f"{SYSTEM_PROMPT}\n\n{snapshot}{anti_loop_note}{sulk_note}",
+        }
+    ]
+    messages.extend(recent_turns[-8:])
+    messages.append({"role": "user", "content": user_text})
+
+    resp = groq_client.chat.completions.create(
+        model=GROQ_MODEL,
+        messages=messages,
+        temperature=0.75,
+        max_tokens=180,
+        frequency_penalty=0.65,
+        presence_penalty=0.55,
+    )
+    raw_reply = resp.choices[0].message.content.strip()
+    final_reply = post_process_reply(raw_reply, user_text, recent_turns)
+
+    # Record Reona's own notable events / decision hooks
+    reona_emo = detect_emotion(final_reply)
+    if reona_emo != "neutral" or any(k in final_reply for k in ["麻糬", "交稿", "畫完", "剛吃", "剛喝"]):
+        cat = "notable_event" if reona_emo != "neutral" else "routine"
+        log_memory("Reona", final_reply, category=cat, emotion_tag=reona_emo)
+
+    if any(k in final_reply for k in ["吃什麼", "喝什麼", "你決定", "聽你的", "要不要"]):
+        open_decision_hook(20)
+
+    if any(k in final_reply for k in ["剛吃完", "剛喝完", "吃飽了"]):
+        set_meal_mutex(final_reply, hours=2)
+
+    recent_turns.append({"role": "user", "content": user_text})
+    recent_turns.append({"role": "assistant", "content": final_reply})
+    save_recent_turns_atomic(recent_turns)
+
+    return final_reply
 
 
 class ReonaBot(discord.Client):
-    def __init__(self, db: ReonaBGDB, rag: Optional[ReonaMemoryRAG] = None):
+    def __init__(self) -> None:
         intents = discord.Intents.default()
         intents.message_content = True
         super().__init__(intents=intents)
-        self.db = db
-        self.rag = rag or ReonaMemoryRAG(api_key=GEMINI_API_KEY)
-        self.http_session: Optional[aiohttp.ClientSession] = None
-        self._session_started = False
-        self._gemini_quota_exhausted = False
-        self._recent_reona_lines: List[str] = []
-        self._handled_msg_ids: set = set()
-
-    def _touch(self, nick: bool = False, reona: bool = False, proactive: bool = False) -> None:
-        if hasattr(self.db, "touch_timestamps"):
-            self.db.touch_timestamps(nick=nick, reona=reona, proactive=proactive)
-
-    def _record_done_actions_from_texts(self, *texts: str) -> None:
-        if not hasattr(self.db, "mark_action_done"):
-            return
-        combined = " ".join(t.strip() for t in texts if isinstance(t, str) and t.strip())
-        if not combined:
-            return
-        for action_key, kws in ACTION_KEYWORDS.items():
-            if any(k in combined for k in kws):
-                self.db.mark_action_done(action_key)
-
-    def _extract_and_store_facts(
-        self,
-        now_dt: datetime.datetime,
-        nick_text: str = "",
-        reona_lines: Optional[List[str]] = None,
-    ) -> None:
-        """零額外 API 成本，自動把 Reona 吃過/說過的事與 Nick 說過的重點寫入 SQLite。"""
-        time_tag = now_dt.strftime("%H:%M")
-
-        if nick_text and len(nick_text) >= 2:
-            if any(k in nick_text for k in NICK_FACT_TRIGGERS) or len(nick_text) >= 6:
-                clean_nick = re.sub(r"\s+", " ", nick_text).strip()[:45]
-                topic_key = f"nick_{now_dt.strftime('%Y%m%d_%H%M%S')}"
-                self.db.upsert_nick_note(topic_key, f"[{time_tag}] Nick說：{clean_nick}")
-
-        if reona_lines:
-            for line in reona_lines:
-                clean_line = re.sub(r"\s+", " ", line).strip()
-                if not clean_line:
-                    continue
-                if any(k in clean_line for k in REONA_FACT_TRIGGERS):
-                    self.db.add_daily_memory(
-                        content=f"[{time_tag}] 我說過：{clean_line[:45]}",
-                        category="spoken_fact",
-                        importance=8,
-                        keep_max=10,
-                    )
-
-    def _seed_recent_reona_from_memory(self) -> None:
-        for turn in self.rag.get_recent_turns(limit=8):
-            if turn.startswith("Reona:"):
-                line = turn.split(":", 1)[1].strip()
-                if line and line not in self._recent_reona_lines:
-                    self._recent_reona_lines.append(line)
-        self._recent_reona_lines = self._recent_reona_lines[-8:]
 
     async def setup_hook(self) -> None:
-        self.http_session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=22))
-
-    async def close(self) -> None:
-        try:
-            self.rag.save_if_dirty()
-        except Exception as e:
-            print(f"[RAG Save On Close Warning] {type(e).__name__}: {e}", flush=True)
-        if self.http_session and not self.http_session.closed:
-            await self.http_session.close()
-        await super().close()
-
-    async def _call_llm_once(self, system_prompt: str, user_prompt: str, max_tokens: int) -> Optional[str]:
-        if not self.http_session:
-            return None
-
-        if not GROQ_API_KEYS and (not GEMINI_API_KEY or self._gemini_quota_exhausted):
-            print("[ERROR] No available LLM API keys or Gemini quota exhausted.", flush=True)
-            return None
-
-        groq_url = _groq_endpoint()
-        keys = list(GROQ_API_KEYS)
-        random.shuffle(keys)
-        effective_max_tokens = min(max(max_tokens, 180), 320)
-
-        for idx, key in enumerate(keys[:3]):
-            payload: Dict = {
-                "model": GROQ_MODEL,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "temperature": 0.72,
-                "max_tokens": effective_max_tokens,
-            }
-            if any(tag in GROQ_MODEL.lower() for tag in ("gpt-oss", "qwen", "deepseek", "r1")):
-                payload["reasoning_effort"] = "low"
-
-            try:
-                async with self.http_session.post(
-                    groq_url,
-                    headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                    json=payload,
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        msg_obj = data["choices"][0]["message"]
-                        content = _extract_groq_text(msg_obj)
-                        print(f"[LLM Groq ({GROQ_MODEL}) #{idx} OK] raw={content!r}", flush=True)
-                        if content:
-                            return content
-                        print(f"[LLM Groq Empty Msg] {json.dumps(msg_obj, ensure_ascii=False)[:200]}", flush=True)
-                    else:
-                        err_txt = await resp.text()
-                        print(f"[LLM Groq ({GROQ_MODEL}) #{idx} HTTP {resp.status}] {err_txt[:180]}", flush=True)
-                        if resp.status == 429:
-                            await asyncio.sleep(0.8)
-            except Exception as e:
-                print(f"[LLM Groq ({GROQ_MODEL}) #{idx} Exception] {type(e).__name__}: {repr(e)}", flush=True)
-                continue
-
-        if GEMINI_API_KEY and not self._gemini_quota_exhausted:
-            url = _gemini_endpoint(GEMINI_CHAT_MODEL)
-            try:
-                async with self.http_session.post(
-                    url,
-                    params={"key": GEMINI_API_KEY},
-                    json={
-                        "systemInstruction": {"parts": [{"text": system_prompt}]},
-                        "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-                        "generationConfig": {"temperature": 0.72, "maxOutputTokens": 240},
-                    },
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        candidates = data.get("candidates") or []
-                        content = ""
-                        if candidates:
-                            parts = (
-                                candidates[0].get("content", {}).get("parts", [])
-                                if isinstance(candidates[0], dict)
-                                else []
-                            )
-                            content = "\n".join(
-                                part.get("text", "")
-                                for part in parts
-                                if isinstance(part, dict) and isinstance(part.get("text"), str)
-                            ).strip()
-                        if content:
-                            print(f"[LLM {GEMINI_CHAT_MODEL} OK] raw={content!r}", flush=True)
-                            return content
-                    err_txt = await resp.text()
-                    print(f"[LLM {GEMINI_CHAT_MODEL} HTTP {resp.status}] {err_txt[:180]}", flush=True)
-                    if resp.status == 429:
-                        self._gemini_quota_exhausted = True
-                    elif resp.status in (500, 503):
-                        await asyncio.sleep(0.8)
-            except asyncio.TimeoutError:
-                print(f"[LLM {GEMINI_CHAT_MODEL} TimeoutError] temporary timeout, keep available", flush=True)
-            except Exception as e:
-                print(f"[LLM {GEMINI_CHAT_MODEL} Exception] {type(e).__name__}: {repr(e)}", flush=True)
-
-        return None
-
-    async def _send_burst(self, channel: discord.abc.Messageable, lines: List[str], delay_range: tuple) -> None:
-        filtered_lines: List[str] = []
-        for line in lines:
-            if _is_too_similar_to_recent(line, self._recent_reona_lines):
-                print(f"[Repeat Guard Skipped] {line!r}", flush=True)
-                continue
-            filtered_lines.append(line)
-
-        if not filtered_lines:
-            alt_pool = [
-                "嗯？怎麼了",
-                "剛在發呆，你呢",
-                "在滑手機啦，幹嘛",
-                "剛喝口水，怎麼突然找我",
-                "還好啦，你現在在忙嗎",
-            ]
-            unused = [a for a in alt_pool if not _is_too_similar_to_recent(a, self._recent_reona_lines)]
-            filtered_lines = [random.choice(unused or alt_pool)]
-
-        for idx, line in enumerate(filtered_lines):
-            if idx > 0:
-                await asyncio.sleep(random.uniform(*delay_range))
-            async with channel.typing():
-                typing_sec = min(2.2, max(0.6, len(line) * 0.1))
-                await asyncio.sleep(typing_sec)
-            await channel.send(line)
-            self._recent_reona_lines.append(line)
-            self._recent_reona_lines = self._recent_reona_lines[-8:]
-            self.rag.append_turn("Reona", line)
-
-        now_dt = datetime.datetime.now(SYDNEY_TZ)
-        self._extract_and_store_facts(now_dt, reona_lines=filtered_lines)
-        self.rag.save_if_dirty()
-        self._touch(reona=True)
-
-    async def maybe_send_proactive(self, channel: discord.abc.Messageable) -> bool:
-        now_dt = datetime.datetime.now(SYDNEY_TZ)
-        if (now_dt.hour == 0 and now_dt.minute >= 30) or (1 <= now_dt.hour < 8):
-            return False
-
-        self.db.evaluate_causal_events("", now_dt, allow_random_gi=True)
-        snap = self.db.compute_snapshot(now_dt)
-        now_ts = now_dt.timestamp()
-
-        last_activity = max(
-            float(snap.get("last_nick_ts") or 0),
-            float(snap.get("last_reona_ts") or 0),
-            float(snap.get("last_proactive_ts") or 0),
-        )
-        if last_activity > 0 and (now_ts - last_activity) < 10800:
-            return False
-
-        if snap["already_mentioned_slot"] and snap["gi_status"] == "normal" and snap.get("illness_status") == "normal":
-            return False
-
-        recent_turns = self.rag.get_recent_turns(limit=6)
-        reona_facts = self.db.get_today_memories(now_dt, limit=5) if hasattr(self.db, "get_today_memories") else []
-        nick_notes = self.db.get_recent_nick_notes(limit=5) if hasattr(self.db, "get_recent_nick_notes") else []
-
-        sys_prompt = build_system_prompt(
-            snap,
-            matched_card=None,
-            recent_turns=recent_turns,
-            reona_today_facts=reona_facts,
-            nick_recent_notes=nick_notes,
-            is_proactive=True,
-            allow_work=False,
-            allow_cat=False,
-            is_evening_rest=_is_sydney_evening_rest(now_dt),
-            is_question_msg=False,
-        )
-        raw = await self._call_llm_once(
-            sys_prompt,
-            "請依當下狀態自然主動發 1～2 則完整短句給 Nick。",
-            max_tokens=220,
-        )
-        lines = clean_and_split_lines(raw or "", snap["max_msgs"], snap["max_chars"], allow_cat=False)
-        if not lines:
-            fallback = self.db.pick_canned_line("fallback", snap["mood"]) or "剛忙完一件事，你呢"
-            lines = [fallback]
-
-        await self._send_burst(channel, lines, snap["delay_range"])
-        self._record_done_actions_from_texts(*lines)
-        self._touch(proactive=True)
-        self.db.mark_slot_mentioned(snap["time_slot"])
-
-        if any(k in "".join(lines) for k in ("陪我", "有空", "要嗎", "要不要", "在忙嗎", "聊聊", "抱抱")):
-            self.db.set_state(pending_request_sec=1500)
-
-        return True
-
-    async def _catch_up_missed_message(self, channel: discord.abc.Messageable) -> None:
-        try:
-            async for msg in channel.history(limit=1):
-                if msg.author.bot:
-                    return
-                age = (datetime.datetime.now(datetime.timezone.utc) - msg.created_at).total_seconds()
-                if 0 <= age <= 300:
-                    print(f"Catching up missed message from Nick ({int(age)}s ago)...", flush=True)
-                    await self._handle_incoming_message(msg)
-        except Exception as e:
-            print(f"Catch-up check skipped: {type(e).__name__}: {repr(e)}", flush=True)
-
-    async def _github_session_loop(self) -> None:
-        await self.rag.sync_embeddings(self.http_session)
-        self._seed_recent_reona_from_memory()
-
-        channel = None
-        if TARGET_CHANNEL_ID:
-            channel = self.get_channel(TARGET_CHANNEL_ID) or await self.fetch_channel(TARGET_CHANNEL_ID)
-
-        if channel:
-            await self._catch_up_missed_message(channel)
-            await self.maybe_send_proactive(channel)
-
-        if PROACTIVE_ONLY or RUN_SECONDS <= 0:
-            print("Proactive-only pass complete, closing bot...", flush=True)
-            await self.close()
-            return
-
-        print(f"Listening live for {RUN_SECONDS}s before shift handoff...", flush=True)
-        await asyncio.sleep(RUN_SECONDS)
-        print("Shift finished, closing bot to persist DB...", flush=True)
-        await self.close()
-
-    async def on_ready(self) -> None:
-        print(
-            f"Reona online as {self.user} | Groq keys={len(GROQ_API_KEYS)} ({GROQ_MODEL}) | Gemini={GEMINI_CHAT_MODEL if GEMINI_API_KEY else 'NO'}",
-            flush=True,
-        )
-        if not self._session_started:
-            self._session_started = True
-            asyncio.create_task(self._github_session_loop())
-
-    async def _handle_incoming_message(self, message: discord.Message) -> None:
-        if message.id in self._handled_msg_ids:
-            return
-        self._handled_msg_ids.add(message.id)
-        if len(self._handled_msg_ids) > 100:
-            self._handled_msg_ids.clear()
-
-        now_dt = datetime.datetime.now(SYDNEY_TZ)
-        self._touch(nick=True)
-
-        user_text = (message.content or "").strip()
-        is_voice = bool(getattr(message.flags, "voice", False)) or any(
-            (a.content_type or "").lower().startswith("audio/") for a in message.attachments
-        )
-
-        causal_flag = self.db.evaluate_causal_events(user_text, now_dt, allow_random_gi=False)
-        snap = self.db.compute_snapshot(now_dt)
-
-        if user_text and not is_voice:
-            self.rag.append_turn("Nick", user_text)
-            self._extract_and_store_facts(now_dt, nick_text=user_text)
-
-        is_question_msg = _is_question(user_text)
-
-        if snap["in_restroom"] and not is_question_msg:
-            line = self.db.pick_canned_line("restroom", snap["gi_status"]) or "去一下廁所"
-            await self._send_burst(message.channel, [line], snap["delay_range"])
-            return
-
-        if causal_flag == "request_declined":
-            line = self.db.pick_canned_line("request_declined", snap["mood"]) or "好喔那沒關係"
-            await self._send_burst(message.channel, [line], snap["delay_range"])
-            return
-
-        if is_voice:
-            line = self.db.pick_canned_line("voice_msg", snap["mode"]) or "用打字的啦"
-            await self._send_burst(message.channel, [line], snap["delay_range"])
-            return
-
-        lower_txt = user_text.lower()
-        if any(k in lower_txt for k in VIDEO_KEYWORDS):
-            line = self.db.pick_canned_line("video_req", snap["mode"]) or "現在在忙沒空開啦"
-            await self._send_burst(message.channel, [line], snap["delay_range"])
-            return
-
-        if user_text in LOW_EFFORT_INPUTS:
-            if random.random() < 0.85:
-                line = self.db.pick_canned_line("low_effort", snap["mood"]) or "嗯？"
-                await self._send_burst(message.channel, [line], snap["delay_range"])
-                return
-
-        allow_work = any(k in user_text for k in WORK_KEYWORDS)
-        allow_cat = any(k in user_text for k in CAT_KEYWORDS)
-        evening_rest = _is_sydney_evening_rest(now_dt)
-
-        matched_card, recent_turns = await self.rag.retrieve(
-            session=self.http_session,
-            user_text=user_text,
-            is_evening_rest=evening_rest,
-            allow_work=allow_work,
-            top_k=2,
-        )
-        if matched_card and matched_card.get("category") == "pet_daily" and not allow_cat:
-            matched_card = None
-
-        if matched_card:
-            print(
-                f"[RAG Hit] id={matched_card.get('id')} score={matched_card.get('score')}",
-                flush=True,
-            )
-
-        reona_facts = self.db.get_today_memories(now_dt, limit=5) if hasattr(self.db, "get_today_memories") else []
-        nick_notes = self.db.get_recent_nick_notes(limit=5) if hasattr(self.db, "get_recent_nick_notes") else []
-
-        sys_prompt = build_system_prompt(
-            snap,
-            matched_card=matched_card,
-            recent_turns=recent_turns,
-            reona_today_facts=reona_facts,
-            nick_recent_notes=nick_notes,
-            is_proactive=False,
-            allow_work=allow_work,
-            allow_cat=allow_cat,
-            is_evening_rest=evening_rest,
-            is_question_msg=is_question_msg,
-        )
-
-        history_lines: List[str] = []
-        async for msg in message.channel.history(limit=6):
-            if msg.id == message.id:
-                continue
-            if msg.author.bot:
-                if self.user is None or msg.author.id != self.user.id:
-                    continue
-                speaker = "Reona"
-            else:
-                speaker = "Nick"
-            content = (msg.content or "").strip()
-            if content:
-                history_lines.append(f"{speaker}: {content}")
-        history_lines.reverse()
-        context_block = "\n".join(history_lines[-5:])
-        user_prompt = (
-            f"【最近對話】\n{context_block}\n\n請直接以 Reona 身分自然回覆這句話：{user_text}"
-            if context_block
-            else f"請直接以 Reona 身分自然回覆這句話：{user_text}"
-        )
-
-        raw = await self._call_llm_once(sys_prompt, user_prompt, max_tokens=240)
-        lines = clean_and_split_lines(
-            raw or "",
-            snap["max_msgs"],
-            snap["max_chars"],
-            user_text=user_text,
-            allow_cat=allow_cat,
-            is_question_msg=is_question_msg,
-        )
-
-        if not lines:
-            fallback = self.db.pick_canned_line("fallback", snap["mode"]) or "剛在忙手邊，你呢"
-            lines = [fallback]
-
-        await self._send_burst(message.channel, lines, snap["delay_range"])
-        self._record_done_actions_from_texts(user_text, *lines)
-        self.db.mark_slot_mentioned(snap["time_slot"])
+        init_db()
+        morning_wakeup_reset()
+        self.proactive_ping_loop.start()
 
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot:
             return
         if TARGET_CHANNEL_ID and message.channel.id != TARGET_CHANNEL_ID:
             return
-        await self._handle_incoming_message(message)
+        if NICK_USER_ID and message.author.id != NICK_USER_ID:
+            return
+
+        now = now_sydney()
+        # Sleep hours: 00:00 - 07:59 Sydney time
+        if 0 <= now.hour < 8:
+            return
+
+        user_text = message.content.strip()
+        if not user_text:
+            return
+
+        recent_turns = load_recent_turns()
+        shared_story = extract_and_update_state(user_text, recent_turns)
+        was_sulking = on_nick_replied(shared_story=shared_story)
+
+        async with message.channel.typing():
+            reply = generate_reona_reply(user_text, was_sulking, shared_story)
+
+        await message.channel.send(reply)
+
+    @tasks.loop(minutes=45)
+    async def proactive_ping_loop(self) -> None:
+        now = now_sydney()
+        # Only active between 08:00 and 23:59 Sydney time
+        if not (8 <= now.hour <= 23):
+            return
+        if not TARGET_CHANNEL_ID:
+            return
+
+        channel = self.get_channel(TARGET_CHANNEL_ID)
+        if not channel:
+            return
+
+        # ~35% chance per 45-min tick to send a short casual ping
+        if random.random() > 0.35:
+            return
+
+        state = record_proactive_ping()
+        recent_turns = load_recent_turns()
+        last_bot_msg = next(
+            (t["content"] for t in reversed(recent_turns) if t["role"] == "assistant"), ""
+        )
+
+        if state["unanswered_pings"] == 3:
+            # Triggers sulk on the 3rd consecutive unanswered ping
+            candidates = [m for m in PING_MESSAGES_SULK if m != last_bot_msg]
+            msg = random.choice(candidates)
+        elif state["unanswered_pings"] > 3:
+            # Already sulked once; stay quiet so she doesn't spam while sulking
+            return
+        else:
+            candidates = [m for m in PING_MESSAGES_NORMAL if m != last_bot_msg]
+            msg = random.choice(candidates)
+
+        recent_turns.append({"role": "assistant", "content": msg})
+        save_recent_turns_atomic(recent_turns)
+        await channel.send(msg)
+
+    @proactive_ping_loop.before_loop
+    async def before_ping_loop(self) -> None:
+        await self.wait_until_ready()
 
 
 if __name__ == "__main__":
-    database = ReonaBGDB()
-    rag_engine = ReonaMemoryRAG(api_key=GEMINI_API_KEY)
-    bot = ReonaBot(database, rag=rag_engine)
+    bot = ReonaBot()
     bot.run(DISCORD_TOKEN)
