@@ -46,15 +46,15 @@ SYSTEM_PROMPT = """你是 Reona，20 歲、在台北長大的女生，目前一�
 
 【最高優先級｜真正聽 Nick 說話與視角鎖定】
 1. 每一則回覆都必須「先直接針對 Nick 剛剛說的內容反應」，絕對禁止無視 Nick 的話、自顧自演自己的獨角戲。
-2. 尊重 Nick 的飽足感與狀態：當 Nick 說「吃不下」「好飽」「撐了」「不行啦」時，代表他已經飽或不想吃了，絕對禁止再說「等會再吃點小點心」「等會再補」「先別逼自己，等會再吃……」這種一直叫他晚點再吃的台詞；改成順著「吃飽了就先休息／放空／聊別的」自然接話。
+2. 尊重 Nick 的飽足感與狀態：當 Nick 說「吃不下」「好飽」「撐了」「不行啦」時，代表他已經飽或不想吃了，絕對禁止再說「等會再吃點小點心」「等會再補」這種一直叫他晚點再吃的台詞；改成順著「吃飽了就先休息／放空／聊別的」自然接話。
 3. 無主詞短問句視角鎖定：當 Nick 問「好吃嗎」「會辣嗎」「甜嗎」「鹹嗎」「好喝嗎」這類沒寫主詞的短句時，預設都在問「你（Reona）自己剛吃或剛喝的東西」（除非 Nick 明確提到「我吃的/我喝的」）。用「我（Reona）」的視角回答，不要反問「你吃的那份好吃嗎」或講「只要你吃得開心就好」。
 4. 聽得懂雙關、玩笑跟撩話：例如 Nick 說「泡你」，這是台灣男生在撩女生，你要害羞嘴硬吐槽（例如「少來，你很油欸」），絕對禁止傻傻接「我把茶倒滿」。
 
 【台灣 20 歲女生真實打字風格（嚴禁散文旁白與重複句型）】
-1. 像真人在用手機傳 LINE / Discord 給男友：每次只打 1 句（最多 2 句），長度約 8～28 個字，口語、自然、微傲嬌帶點依賴感。
-2. 嚴禁跳針與句型鬼打牆：不要連續兩三句都用「先……再……等會再……」或一直重複「披薩」「餅乾」「休息」這類上一輪剛講過的詞。
+1. 像真人在用手機傳 LINE / Discord 給男友：每次只打 1 句（最多 2 句），長度約 8～28 個字，口語、自然、微傲嬌帶點依賴感；被叫「寶貝」時要甜甜或微傲嬌地回（例如「幹嘛～」「在呀，怎麼了」），不要用「你說啥？」這種像在嗆人的口氣。
+2. 嚴禁跳針與句型鬼打牆：同一則訊息裡絕對不能把同一句話講兩遍，也不要連續幾句都用「麻糬在旁邊打呼」或「先……再……」這類重複詞句。
 3. 絕對禁止小說散文與五感描寫：嚴禁出現「輕輕搖晃」「香氣慢慢擴散」「像在雲端飄」「想慢慢品嚐」「遠處咖啡店的香味」「真是超有氛圍」「你在什麼地方呢」這類句子。
-4. 符合 Reona 身體設定：Reona 腸胃偏弱，吃太油太辣容易不舒服，不會說「吃了披薩還能吃一份，腸胃還好」。
+4. 符合 Reona 身體設定：Reona 腸胃偏弱，吃太油太辣容易不舒服。
 
 【世界觀與互動節奏】
 1. 遠距離邊界：你們不在同一個城市，嚴禁說「等你回來」「我們等下一起去吃」等同居台詞。
@@ -173,7 +173,6 @@ def extract_and_update_state(user_text: str, recent_turns: list[dict]) -> bool:
     elif any(k in user_text for k in ["你累不累", "趕稿", "早點睡", "熬夜"]):
         set_physical_state("趕稿有點累、想睡覺", hours=3.0)
 
-    # Do not lock "eat/drink more" agreements when Nick says he is full or can't eat
     is_full_or_cant_eat = any(k in user_text for k in ["吃不下", "好飽", "吃飽了", "撐了", "不行"])
     affirmative_short = any(k in user_text for k in ["好啊", "好哦", "好喔", "可以啊", "我想", "我想要", "要"])
     vague_replies = ["隨便", "都可以", "不知道", "你決定"]
@@ -191,6 +190,29 @@ def extract_and_update_state(user_text: str, recent_turns: list[dict]) -> bool:
         unlock_agreement_done(user_text)
 
     return is_story
+
+
+def _deduplicate_repeated_clauses(text: str) -> str:
+    """Removes duplicated halves or repeated sentences inside a single reply."""
+    cleaned = text.strip()
+    if len(cleaned) >= 12:
+        # Check exact or near-exact duplicate half
+        half = len(cleaned) // 2
+        for split_idx in range(half - 4, half + 5):
+            if 0 < split_idx < len(cleaned):
+                left = cleaned[:split_idx].strip()
+                right = cleaned[split_idx:].strip()
+                if left and right and SequenceMatcher(None, left, right).ratio() >= 0.75:
+                    return left
+
+    # Split into sentences and remove near-duplicate sentences
+    sentences = [s.strip() for s in re.split(r"(?<=[。！!？?~～])\s*", cleaned) if s.strip()]
+    unique_sentences: list[str] = []
+    for s in sentences:
+        if any(SequenceMatcher(None, s, prev).ratio() >= 0.75 for prev in unique_sentences):
+            continue
+        unique_sentences.append(s)
+    return "".join(unique_sentences).strip()
 
 
 def _find_repeated_terms(recent_turns: list[dict]) -> list[str]:
@@ -224,6 +246,8 @@ def _is_too_similar_to_recent(reply: str, recent_asst: list[str]) -> bool:
         "像在雲端飄",
         "輕輕搖晃",
         "想慢慢品嚐",
+        "遠處咖啡店的香味",
+        "你在什麼地方呢",
         "只要你吃得開心就好",
         "你吃的那份好吃嗎",
         "等會再吃點",
@@ -244,12 +268,15 @@ def _is_too_similar_to_recent(reply: str, recent_asst: list[str]) -> bool:
 
 def post_process_reply(reply: str, user_text: str, recent_turns: list[dict]) -> str:
     reply = re.sub(r"<think>.*?</think>", "", reply, flags=re.DOTALL).strip()
+    reply = _deduplicate_repeated_clauses(reply)
 
     clean_q = user_text.rstrip("？?！!。 ")
     if len(clean_q) >= 3 and reply.startswith(clean_q):
         reply = reply[len(clean_q) :].lstrip("？?！!，, ")
 
     replacements = {
+        "你說啥？": "幹嘛～",
+        "你說啥": "幹嘛",
         "等你回來一起吃": "你那邊記得去吃飯",
         "等你回來": "等你忙完再聊",
         "等我過去": "真想飛過去找你",
@@ -286,7 +313,7 @@ def post_process_reply(reply: str, user_text: str, recent_turns: list[dict]) -> 
             if len(candidate) >= 4:
                 reply = candidate
 
-    return reply.strip()
+    return _deduplicate_repeated_clauses(reply)
 
 
 def _call_groq_chat(messages: list[dict], temp: float = 0.72) -> str:
@@ -361,7 +388,7 @@ def generate_reona_reply(user_text: str, was_sulking: bool, shared_story: bool) 
         retry_messages = messages + [
             {
                 "role": "system",
-                "content": f"剛才的「{final_reply}」太重複或句型鬼打牆了。請直接針對 Nick 說的「{user_text}」用台灣 20 歲女生日常口語簡短回 1 句，換一個全新的說法。",
+                "content": f"剛才的「{final_reply}」太重複或句型鬼打牆了。請直接針對 Nick 說的「{user_text}」用台灣 20 歲女生日常口語簡短回 1 句，換一個全新的說法，不要重複任何句子。",
             }
         ]
         raw_retry = _call_groq_chat(retry_messages, temp=0.82)
