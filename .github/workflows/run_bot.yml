@@ -1,15 +1,10 @@
-name: Reona Discord Companion
+name: Run Reona Bot
 
 on:
-  schedule:
-    # Runs every 30 mins during Sydney 08:00–23:30 (UTC 21:00–12:30 during AEDT, adjust +1h in AEST)
-    - cron: "0,30 21-23 * * *"
-    - cron: "0,30 0-12 * * *"
   workflow_dispatch:
-
-concurrency:
-  group: reona-bot-singleton
-  cancel-in-progress: false
+  schedule:
+    # Active only during Sydney waking hours (~08:00–23:59 AEDT/AEST); sleeps 00:00–07:59 Sydney
+    - cron: "*/30 21-23,0-13 * * *"
 
 permissions:
   contents: write
@@ -17,42 +12,44 @@ permissions:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 32
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install discord.py groq tzdata
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            pip install discord.py groq
+          fi
 
       - name: Run Reona Bot (28-min shift)
         env:
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           TARGET_CHANNEL_ID: ${{ secrets.TARGET_CHANNEL_ID }}
-          NICK_USER_ID: ${{ secrets.NICK_USER_ID }}
+          GROQ_MODEL: ${{ secrets.GROQ_MODEL }}
+          REONA_JSON_PATH: reona_memory.json
+          REONA_DB_PATH: reona_bg.db
         run: |
           timeout -s SIGINT 1680 python reona_dc_bot.py || true
 
       - name: Commit and push memory safely
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add reona_bg.db reona_memory.json
-          if ! git diff --cached --quiet; then
-            git commit -m "chore(memory): sync Reona state and memories"
-            for i in 1 2 3; do
-              git pull --rebase origin main && git push origin main && break
-              sleep 3
-            done
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add reona_memory.json reona_bg.db* || true
+          if ! git diff --staged --quiet; then
+            git pull --rebase origin HEAD || true
+            git commit -m "chore: update Reona memory & state [skip ci]"
+            git push
           fi
