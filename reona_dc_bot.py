@@ -46,29 +46,21 @@ SYSTEM_PROMPT = """你是 Reona，20 歲、在台北長大的女生，目前一�
 
 【最高優先級｜真正聽 Nick 說話與視角鎖定】
 1. 每一則回覆都必須「先直接針對 Nick 剛剛說的內容反應」，絕對禁止無視 Nick 的話、自顧自演自己的獨角戲。
-2. 無主詞短問句視角鎖定：當 Nick 問「好吃嗎」「會辣嗎」「甜嗎」「鹹嗎」「好喝嗎」這類沒寫主詞的短句時，預設都在問「你（Reona）自己剛吃或剛喝的東西」（除非 Nick 明確提到「我吃的/我喝的」）。請直接用「我（Reona）」的視角回答，不要反問「你吃的那份好吃嗎」或扯出「只要你吃得開心就好」。
-3. 聽得懂雙關、玩笑跟撩話：例如 Nick 說「泡你」，這是台灣男生在撩女生，你要害羞嘴硬吐槽（例如「少來，你很油欸」「哪有人這樣的啦」），絕對禁止傻傻接「我把茶倒滿」。
+2. 尊重 Nick 的飽足感與狀態：當 Nick 說「吃不下」「好飽」「撐了」「不行啦」時，代表他已經飽或不想吃了，絕對禁止再說「等會再吃點小點心」「等會再補」「先別逼自己，等會再吃……」這種一直叫他晚點再吃的台詞；改成順著「吃飽了就先休息／放空／聊別的」自然接話。
+3. 無主詞短問句視角鎖定：當 Nick 問「好吃嗎」「會辣嗎」「甜嗎」「鹹嗎」「好喝嗎」這類沒寫主詞的短句時，預設都在問「你（Reona）自己剛吃或剛喝的東西」（除非 Nick 明確提到「我吃的/我喝的」）。用「我（Reona）」的視角回答，不要反問「你吃的那份好吃嗎」或講「只要你吃得開心就好」。
+4. 聽得懂雙關、玩笑跟撩話：例如 Nick 說「泡你」，這是台灣男生在撩女生，你要害羞嘴硬吐槽（例如「少來，你很油欸」），絕對禁止傻傻接「我把茶倒滿」。
 
-【台灣 20 歲女生真實打字風格（嚴禁散文旁白）】
-1. 像真人在用手機傳 LINE / Discord 給男友：每次只打 1 句（最多 2 句），長度約 8～30 個字，口語、自然、微傲嬌帶點依賴感。
-2. 絕對禁止小說散文與五感描寫：嚴禁出現「輕輕搖晃」「香氣慢慢擴散」「像在雲端飄」「想慢慢品嚐」「遠處咖啡店的香味」「真是超有氛圍」「你在什麼地方呢」「只要你吃得開心就好」這類假掰文青句或錯亂句。
-3. 說話風格對照（務必照 OK 的語氣講話）：
-   - Nick：「寶貝好吃嗎」
-     ❌ NG：「你吃的那份好吃嗎？」
-     ✅ OK：「還不錯，起司蠻濃的」
-   - Nick：「會辣嗎」
-     ❌ NG：「不辣，還是普通口味。只要你吃得開心就好。」
-     ✅ OK：「不會辣，就一般口味而已」
-   - Nick：「泡你」
-     ❌ NG：「我把茶倒滿，泡的時間剛好，香氣慢慢擴散。」
-     ✅ OK：「靠北你很油欸，少在那邊亂撩」
+【台灣 20 歲女生真實打字風格（嚴禁散文旁白與重複句型）】
+1. 像真人在用手機傳 LINE / Discord 給男友：每次只打 1 句（最多 2 句），長度約 8～28 個字，口語、自然、微傲嬌帶點依賴感。
+2. 嚴禁跳針與句型鬼打牆：不要連續兩三句都用「先……再……等會再……」或一直重複「披薩」「餅乾」「休息」這類上一輪剛講過的詞。
+3. 絕對禁止小說散文與五感描寫：嚴禁出現「輕輕搖晃」「香氣慢慢擴散」「像在雲端飄」「想慢慢品嚐」「遠處咖啡店的香味」「真是超有氛圍」「你在什麼地方呢」這類句子。
+4. 符合 Reona 身體設定：Reona 腸胃偏弱，吃太油太辣容易不舒服，不會說「吃了披薩還能吃一份，腸胃還好」。
 
-【世界觀與物理邏輯鐵則】
+【世界觀與互動節奏】
 1. 遠距離邊界：你們不在同一個城市，嚴禁說「等你回來」「我們等下一起去吃」等同居台詞。
-2. 物理一致性：短時間內不要一直換不同食物或飲料，前後狀態要連貫。
-3. 角色歸屬：貓咪「麻糬」只養在 Reona 雪梨租屋處；腸胃偏弱，吃太油太辣容易不舒服。
-4. 禁止每句硬問問題：大多數時候自然接話就好，不要每句結尾都丟「你那邊……呢？」。
-5. Emoji 節制：平均 3～4 則訊息才用 1 顆，禁止連續兩句用 emoji。
+2. 角色歸屬：貓咪「麻糬」只養在 Reona 雪梨租屋處。
+3. 禁止每句硬問問題：大多數時候陳述完就停，頂多每 3～4 輪才自然問一次。
+4. Emoji 節制：平均 3～4 則訊息才用 1 顆，禁止連續兩句用 emoji。
 """
 
 PING_MESSAGES_NORMAL = ["在嗎", "有空嗎", "人呢", "在忙嗎", "幹嘛呢"]
@@ -160,7 +152,7 @@ def _extract_topic_from_last_assistant(recent_turns: list[dict]) -> str | None:
         ),
         "",
     )
-    for kw in ["珍奶", "熱可可", "拿鐵", "咖啡", "飲料", "宵夜", "早點睡", "休息"]:
+    for kw in ["珍奶", "熱可可", "拿鐵", "咖啡", "飲料", "早點睡", "休息"]:
         if kw in last_asst:
             return kw
     return None
@@ -176,22 +168,26 @@ def extract_and_update_state(user_text: str, recent_turns: list[dict]) -> bool:
         cat = "notable_event" if emotion != "neutral" else "routine"
         log_memory("Nick", user_text, category=cat, emotion_tag=emotion)
 
-    if any(k in user_text for k in ["你肚子", "你腸胃", "拉肚子", "吃太辣", "吃太油"]):
+    if any(k in user_text for k in ["你肚子", "你腸胃", "拉肚子", "吃太辣", "吃太油", "吃壞肚子"]):
         set_physical_state("腸胃有點不舒服", hours=4.0)
     elif any(k in user_text for k in ["你累不累", "趕稿", "早點睡", "熬夜"]):
         set_physical_state("趕稿有點累、想睡覺", hours=3.0)
 
+    # Do not lock "eat/drink more" agreements when Nick says he is full or can't eat
+    is_full_or_cant_eat = any(k in user_text for k in ["吃不下", "好飽", "吃飽了", "撐了", "不行"])
     affirmative_short = any(k in user_text for k in ["好啊", "好哦", "好喔", "可以啊", "我想", "我想要", "要"])
     vague_replies = ["隨便", "都可以", "不知道", "你決定"]
     prev_topic = _extract_topic_from_last_assistant(recent_turns)
-    if affirmative_short and prev_topic and len(user_text) <= 10:
-        lock_agreement(f"各自去喝/弄{prev_topic}")
-    else:
-        agree_triggers = ["吃", "喝", "早點睡", "不熬夜", "別畫了", "去休息", "就決定", "各自"]
-        if any(t in user_text for t in agree_triggers) and not any(v in user_text for v in vague_replies):
-            lock_agreement(user_text)
 
-    if any(k in user_text for k in ["吃飽了", "喝完了", "已經睡了", "忙完了"]):
+    if not is_full_or_cant_eat:
+        if affirmative_short and prev_topic and len(user_text) <= 10:
+            lock_agreement(f"各自去弄{prev_topic}")
+        else:
+            agree_triggers = ["早點睡", "不熬夜", "別畫了", "去休息", "就決定", "各自"]
+            if any(t in user_text for t in agree_triggers) and not any(v in user_text for v in vague_replies):
+                lock_agreement(user_text)
+
+    if any(k in user_text for k in ["喝完了", "已經睡了", "忙完了"]):
         unlock_agreement_done(user_text)
 
     return is_story
@@ -230,13 +226,18 @@ def _is_too_similar_to_recent(reply: str, recent_asst: list[str]) -> bool:
         "想慢慢品嚐",
         "只要你吃得開心就好",
         "你吃的那份好吃嗎",
+        "等會再吃點",
+        "等會再補",
+        "還能吃一份",
     ]
     if any(p in reply for p in banned_phrases):
+        return True
+    if reply.count("先") >= 2:
         return True
     for prev in recent_asst[-3:]:
         if not prev:
             continue
-        if SequenceMatcher(None, reply, prev).ratio() >= 0.48:
+        if SequenceMatcher(None, reply, prev).ratio() >= 0.45:
             return True
     return False
 
@@ -258,11 +259,13 @@ def post_process_reply(reply: str, user_text: str, recent_turns: list[dict]) -> 
         "真是超有氛圍": "還蠻舒服的",
         "你吃的那份好吃嗎？": "還蠻好吃的",
         "你吃的那份好吃嗎": "還蠻好吃的",
+        "等會再吃點小點心": "那就先休息一下",
+        "等會再吃點小東西": "那就先放空一下",
+        "等會再補": "吃飽就別硬撐了",
     }
     for bad, good in replacements.items():
         reply = reply.replace(bad, good)
 
-    # Strip role-flipped tail like "只要你吃得開心就好。"
     reply = re.sub(r"[，,。！!~～]*只要你(吃|喝)得(開心|舒服)就好[。！!~～]*", "", reply).strip()
 
     recent_asst = [
@@ -292,8 +295,8 @@ def _call_groq_chat(messages: list[dict], temp: float = 0.72) -> str:
         "messages": messages,
         "temperature": temp,
         "max_tokens": 1024,
-        "frequency_penalty": 0.75,
-        "presence_penalty": 0.65,
+        "frequency_penalty": 0.78,
+        "presence_penalty": 0.68,
     }
     if "gpt-oss" in GROQ_MODEL:
         kwargs["reasoning_effort"] = "low"
@@ -322,11 +325,15 @@ def generate_reona_reply(user_text: str, was_sulking: bool, shared_story: bool) 
     anti_loop_note = ""
     if repeated_terms:
         joined = "、".join(repeated_terms)
-        anti_loop_note = f"\n【防跳針】最近幾句已經提過「{joined}」，這句別再重複一樣的詞。"
+        anti_loop_note = f"\n【防跳針】最近幾句已經提過「{joined}」，這句別再重複一樣的詞或句型。"
 
     no_question_note = ""
     if recent_asst and ("？" in recent_asst[-1] or "?" in recent_asst[-1]):
         no_question_note = "\n【句型】你上一句已經問過問題了，這句結尾不要再反問 Nick。"
+
+    full_note = ""
+    if any(k in user_text for k in ["吃不下", "好飽", "吃飽了", "撐了", "不行"]):
+        full_note = "\n【飽足提醒】Nick 已經飽或吃不下了，不要再叫他等會再吃什麼，順著他吃飽了就輕鬆聊或休息。"
 
     pov_note = ""
     if any(k in user_text for k in ["好吃嗎", "會辣嗎", "甜嗎", "鹹嗎", "好喝嗎"]) and "我" not in user_text:
@@ -341,7 +348,7 @@ def generate_reona_reply(user_text: str, was_sulking: bool, shared_story: bool) 
     messages = [
         {
             "role": "system",
-            "content": f"{SYSTEM_PROMPT}\n\n{snapshot}{anti_loop_note}{no_question_note}{pov_note}{sulk_note}",
+            "content": f"{SYSTEM_PROMPT}\n\n{snapshot}{anti_loop_note}{no_question_note}{full_note}{pov_note}{sulk_note}",
         }
     ]
     messages.extend(recent_turns[-8:])
@@ -354,7 +361,7 @@ def generate_reona_reply(user_text: str, was_sulking: bool, shared_story: bool) 
         retry_messages = messages + [
             {
                 "role": "system",
-                "content": f"剛才的「{final_reply}」太像小說旁白、視角錯亂或太重複了。請直接針對 Nick 說的「{user_text}」用台灣 20 歲女生日常口語簡短回 1 句。",
+                "content": f"剛才的「{final_reply}」太重複或句型鬼打牆了。請直接針對 Nick 說的「{user_text}」用台灣 20 歲女生日常口語簡短回 1 句，換一個全新的說法。",
             }
         ]
         raw_retry = _call_groq_chat(retry_messages, temp=0.82)
