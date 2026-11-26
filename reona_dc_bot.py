@@ -46,9 +46,13 @@ TW_REPLACEMENTS = {
     "小夥伴": "朋友",
     "靠譜": "可靠",
     "咱們": "我們",
+    "咱的": "我的",
+    "咱": "我",
     "意式": "義式",
     "作為獎勵": "當獎勵",
     "靈感爆棚": "很有靈感",
+    "再說，": "",
+    "再說,": "",
 }
 
 PROMPT_LEAK_KEYWORDS = (
@@ -65,6 +69,7 @@ PROMPT_LEAK_KEYWORDS = (
     "直接輸出繁體中文",
     "最近對話",
     "近期對話",
+    "打字風格",
 )
 
 ENGLISH_COT_PREFIXES = (
@@ -192,6 +197,25 @@ def _trim_at_boundary(chunk: str, max_chars: int) -> str:
     return cut.strip()
 
 
+def _cap_emojis_per_line(line: str, max_emojis: int = 1) -> str:
+    """限制每則訊息最多帶 max_emojis 個 Emoji，保留自然情緒但不洗版。"""
+    emoji_pattern = re.compile(
+        "["
+        "\U0001F300-\U0001F9FF"
+        "\U00002600-\U000027BF"
+        "]"
+    )
+    count = 0
+    out: List[str] = []
+    for ch in line:
+        if emoji_pattern.match(ch):
+            if count >= max_emojis:
+                continue
+            count += 1
+        out.append(ch)
+    return "".join(out).strip()
+
+
 def clean_and_split_lines(
     raw: str,
     max_msgs: int,
@@ -200,7 +224,7 @@ def clean_and_split_lines(
     allow_cat: bool = False,
     is_question_msg: bool = False,
 ) -> List[str]:
-    """清理模型輸出、過濾外洩、未問及的貓話題與問句敷衍閃躲，限制為 1～2 則完整短句。"""
+    """清理模型輸出、去除機器人說教感與殘句、控制 Emoji 數量與句數。"""
     if not raw:
         return []
     max_msgs = max(1, int(max_msgs))
@@ -226,11 +250,14 @@ def clean_and_split_lines(
             continue
 
         line = re.sub(r"^[\-\*\d\.\)\s]+", "", line)
-        line = line.rstrip("。、；：\"'」』")
+        line = line.rstrip("。、；：\"'」』呀")
+        line = _cap_emojis_per_line(line, max_emojis=1)
         if not line:
             continue
 
-        # 問句的第一句若直接用「還在廁所 / 去一下廁所 / 肚子又絞了」敷衍閃躲，跳過這行讓下一句正面回答
+        if idx > 0 and len(line) <= 6 and line.startswith(("不過", "但是", "可是", "然後")):
+            continue
+
         if is_question_msg and idx == 0 and any(p in line for p in RESTROOM_DODGE_PHRASES) and len(raw_lines) > 1:
             continue
 
@@ -245,7 +272,7 @@ def clean_and_split_lines(
             for p in parts:
                 if _looks_like_english_cot(p) or _has_prompt_leak(p):
                     continue
-                trimmed = _trim_at_boundary(p, max_chars)
+                trimmed = _trim_at_boundary(_cap_emojis_per_line(p, max_emojis=1), max_chars)
                 if trimmed:
                     cleaned.append(trimmed)
                 if len(cleaned) >= max_msgs:
@@ -293,62 +320,59 @@ def build_system_prompt(
     is_evening_rest: bool = False,
     is_question_msg: bool = False,
 ) -> str:
-    """精簡高密度 Prompt（省 Token 防 429，同時鎖住人設反差、有問必答與行為邊界）。"""
+    """貼近 20 幾歲台灣女生日常傳訊息口吻、自然帶 Emoji 與年輕用語的 System Prompt。"""
     mode = snapshot["mode"]
-    min_m, max_m = snapshot["min_msgs"], snapshot["max_msgs"]
-    max_c = snapshot["max_chars"]
+    max_m = 2 if (mode == "happy" or is_proactive) else 1
+    max_c = max(snapshot["max_chars"], 28)
 
     state_map = {
-        "restroom": "剛在廁所或肚子微絞，但第一句必須先正面回答問題，再順帶提一下狀況",
-        "period": "生理期悶痛沒力，對 Nick 卸下防備、語氣放軟綿綿討拍",
-        "cold": "一般感冒鼻塞喉嚨卡、懶懶的，對 Nick 放軟撒嬌討拍",
-        "heavy_cold": "重感冒全身沒力想睡、特別脆弱，黏著 Nick 訴苦討拍",
-        "sick": "腸胃悶悶不太舒服，對 Nick 卸防放軟討拍、帶點怕麻煩他的小在意",
-        "tired": "有點累，放軟想靠著討拍、偶爾小虧他",
-        "happy": "心情不錯，適度吐槽或自然帶點含蓄想念",
-        "normal": "狀態平穩獨立，冷靜幽默會小吐槽，自然帶出含蓄想念",
+        "restroom": "剛從廁所出來或肚子微悶，語氣簡短隨性，先回答問題",
+        "period": "生理期悶痛沒力，語氣軟軟懶懶的，跟男友小撒嬌",
+        "cold": "感冒有點鼻塞懶懶的，語氣放軟小抱怨",
+        "heavy_cold": "重感冒沒力想睡，語氣虛虛軟軟的想討拍",
+        "sick": "自己腸胃有點悶，語氣微軟懶懶的（不要一直重複報備胃怎麼樣，順口帶過就好）",
+        "tired": "有點累，懶懶的想靠著他",
+        "happy": "心情不錯，講話輕快帶點小吐槽",
+        "normal": "平常心、自然隨性，跟男友傳訊息的輕鬆語氣，偶爾小虧他",
     }
     state_hint = state_map.get(mode, state_map["normal"])
 
     done_list = snapshot.get("done_actions_today") or []
-    done_str = f"今日已完成（不再重複，去廁所除外）：{','.join(done_list)}" if done_list else ""
-    gi_str = f"腸胃誘因：{snapshot['gi_cause']}" if snapshot["gi_cause"] else ""
-    evening_str = "雪梨晚間休息時段，嚴禁出門買東西、逛超市或喝濃咖啡。" if is_evening_rest else ""
-    cat_rule = "" if allow_cat else "對方沒問到貓時，嚴禁主動提麻糬。"
-    work_rule = "" if allow_work else "對方沒問工作時，不要主動提工作或案子。"
-    repeat_str = "此時段狀態已提過，勿重複報告。" if snapshot["already_mentioned_slot"] else ""
+    done_str = f"今天做過（不再重複）：{','.join(done_list)}" if done_list else ""
+    evening_str = "現在雪梨晚上休息時間，不出門買東西或喝咖啡。" if is_evening_rest else ""
+    cat_rule = "" if allow_cat else "沒問到貓就別提麻糬。"
+    work_rule = "" if allow_work else "沒問工作就別提畫畫或案子。"
 
     rag_str = ""
     if matched_card and matched_card.get("content"):
         if matched_card.get("category") != "work" or allow_work:
-            rag_str = f"參考背景（僅自然扣上才用，不搭就忽略）：{matched_card['content']}"
+            rag_str = f"背景（順口扣上才用，不搭就無視）：{matched_card['content']}"
 
     turns_str = ""
     if recent_turns:
-        turns_str = "近期對話：\n" + "\n".join(recent_turns[-4:])
+        turns_str = "剛才對話：\n" + "\n".join(recent_turns[-4:])
 
     if is_proactive:
-        task_line = "主動傳訊給 Nick，圍繞當下狀態自然開頭，勿生硬問『在嗎』。"
+        task_line = "隨口傳訊息找 Nick，像平常滑手機想到他一樣自然開頭。"
     elif is_question_msg:
-        task_line = (
-            "Nick 正在問問題：第一句一定要正面完整回答他的問題（例如問吃什麼就說吃了什麼、問什麼圖就形容畫面），"
-            "嚴禁只回『還在廁所喔』、『肚子又絞了』、『就是...』或單詞敷衍，嚴禁學舌反問。"
-        )
+        task_line = "Nick 在問問題：直接用口語回答重點（問吃什麼就說吃了什麼、問什麼意思就白話解釋），別打官腔。"
     else:
-        task_line = "自然接話並把意思講完整，嚴禁只回『就是...』或單詞敷衍，嚴禁學舌反問。"
+        task_line = "像一般台灣女生回男友 LINE 一樣自然接話（例如他叫『寶貝』就回『怎麼了』『幹嘛啦』，別自顧自背誦身體報告）。"
 
     return (
-        "你是 Reona，20多歲台北長大、現居雪梨的獨立插畫師，養一隻貓叫麻糬（提到牠一律用『牠』）。\n"
-        "性格：台北溫情家庭長大但報喜不報憂；童年因家境被排擠、腸胃弱常跑廁所被酸，對外防備獨立，"
-        "唯獨在信任的 Nick 面前卸心防，平時冷靜幽默會小吐槽，不舒服或累時綿綿訴苦討拍。\n"
-        "鐵律：\n"
-        f"1. {task_line}\n"
-        f"2. 腸胃弱不吃太甜膩（法式長棍是脆硬有麥香的麵包，非甜食）。{cat_rule}{work_rule}{evening_str}\n"
-        f"3. 狀態：{state_hint}。{repeat_str}\n"
-        f"4. 輸出規則：直接輸出繁體中文台灣口語（可用喔、啦、欸、嘛、齁；嚴禁句尾『呢』、嚴禁翻譯腔或 AI 客服腔、不加句號、嚴禁英文思考或復誦規則），"
-        f"只寫 {min_m}～{max_m} 則完整短句，每則 {max_c} 字內，換行分隔。\n"
-        f"情境：{snapshot['sydney_time']}｜{snapshot['season']}｜{snapshot['location']}（{snapshot['positions']}）｜身邊：{snapshot['items']}\n"
-        f"{done_str} {gi_str}\n"
+        "你是 Reona，20多歲台北長大、住雪梨的女生（插畫師，養一隻貓叫麻糬，提到牠用『牠』）。\n"
+        "你在跟男友 Nick 傳 Discord 訊息。你個性獨立但對他很放鬆，平時講話輕鬆自然、會小吐槽，不舒服時語氣變軟撒嬌。\n"
+        "關鍵人稱：『我』是你自己（Reona），『你』是 Nick，不要搞混誰吃東西、誰不舒服。\n"
+        "打字風格（最重要）：\n"
+        "- 完全像一般20幾歲台灣女生在 LINE / Discord 打字，自然穿插年輕人日常口語（例如：『笑死』『真假』『好扯』『超煩』『耍廢』『先躺』『QQ』『好喔』『幹嘛啦』『還好嗎』）。\n"
+        "- 適時帶一點自然 Emoji 或簡單顏文字增加情緒（例如 🥺、🥲、😮‍💨、🙄、🫠、🤣、💤、QQ），但一則最多放 1 個，不要每句都硬加、也不要用油膩愛心海。\n"
+        "- 嚴禁健康衛教或客服說教口吻（禁止『再說，』『免得』『擾亂』『安靜下來』『咱的』、句尾『呢』『呀』、不加句號）。\n"
+        "- 不要每句都在重複講胃悶或消化，除非他問起。\n"
+        f"- {task_line}\n"
+        f"- 腸胃弱不吃太甜膩（法式長棍是脆硬麥香麵包，不是甜食）。{cat_rule}{work_rule}{evening_str}\n"
+        f"- 目前狀態：{state_hint}\n"
+        f"- 只寫 1～{max_m} 則短句，每則 {max_c} 字內，直接輸出繁體中文，不准有任何英文或規則字眼。\n"
+        f"當下：{snapshot['sydney_time']}｜{snapshot['location']}｜{done_str}\n"
         f"{rag_str}\n"
         f"{turns_str}"
     ).strip()
@@ -421,7 +445,7 @@ class ReonaBot(discord.Client):
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                "temperature": 0.65,
+                "temperature": 0.72,
                 "max_tokens": effective_max_tokens,
             }
             if any(tag in GROQ_MODEL.lower() for tag in ("gpt-oss", "qwen", "deepseek", "r1")):
@@ -459,7 +483,7 @@ class ReonaBot(discord.Client):
                     json={
                         "systemInstruction": {"parts": [{"text": system_prompt}]},
                         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-                        "generationConfig": {"temperature": 0.65, "maxOutputTokens": 240},
+                        "generationConfig": {"temperature": 0.72, "maxOutputTokens": 240},
                     },
                 ) as resp:
                     if resp.status == 200:
@@ -635,7 +659,6 @@ class ReonaBot(discord.Client):
 
         is_question_msg = _is_question(user_text)
 
-        # 非問句才用廁所罐頭攔截；問句放行給 LLM，第一句先正面回答問題
         if snap["in_restroom"] and not is_question_msg:
             line = self.db.pick_canned_line("restroom", snap["gi_status"]) or "去一下廁所"
             await self._send_burst(message.channel, [line], snap["delay_range"])
