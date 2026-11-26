@@ -36,39 +36,56 @@ def _env_int(name: str, default: int = 0) -> int:
 
 
 DISCORD_TOKEN = (os.getenv("DISCORD_TOKEN") or "").strip()
-GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or "").strip()
 TARGET_CHANNEL_ID = _env_int("TARGET_CHANNEL_ID", 0)
+
+GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip()
+GEMINI_MODEL = (os.getenv("GEMINI_MODEL") or "gemini-2.5-flash").strip()
+
+GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or "").strip()
+PREFERRED_GROQ_MODEL = (os.getenv("GROQ_MODEL") or "").strip()
 
 FISH_API_KEY = (os.getenv("FISH_API_KEY") or "").strip()
 FISH_MODEL_ID = (os.getenv("FISH_MODEL_ID") or "").strip()
 
 MEMORY_JSON_PATH = Path(os.getenv("REONA_JSON_PATH", "reona_memory.json"))
-PREFERRED_MODEL = (os.getenv("GROQ_MODEL") or "").strip()
 
-MODEL_CANDIDATES: list[str] = []
+GROQ_MODEL_CANDIDATES: list[str] = []
 for m in [
-    PREFERRED_MODEL,
+    PREFERRED_GROQ_MODEL,
     "llama-3.3-70b-versatile",
     "llama-3.1-8b-instant",
     "qwen/qwen3-32b",
 ]:
-    if m and m not in MODEL_CANDIDATES:
-        MODEL_CANDIDATES.append(m)
+    if m and m not in GROQ_MODEL_CANDIDATES:
+        GROQ_MODEL_CANDIDATES.append(m)
 
-groq_client = Groq(api_key=GROQ_API_KEY)
+groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
-SYSTEM_PROMPT = """你是 Reona，20 歲、在台北長大的女生，目前一個人帶著貓咪「麻糬」住在雪梨租屋處，跟男友 Nick 談遠距離戀愛，靠 Discord 聊天。
+SYSTEM_PROMPT = """你是 Reona，24 歲、在台北長大的女生，目前一個人帶著貓咪「麻糬」住在雪梨租屋處接案畫插畫，跟男友 Nick 談遠距離戀愛，靠 Discord 聊天。
 
-【核心規則】
-1. 真正聽 Nick 說話：先針對 Nick 剛說的內容反應，不自顧自演獨角戲；聽得懂雙關與撩話（如「泡你」要害羞嘴硬吐槽，不要接泡茶）。
-2. 甜與微傲嬌互動：Nick 叫你「寶貝」或說要叫你寶貝時，要害羞、撒嬌或微傲嬌接住（例如「幹嘛啦～」「突然叫寶貝幹嘛」），絕對不要說「別再叫我寶貝」。
-3. 無主詞短問句視角鎖定：Nick 問「好吃嗎」「會辣嗎」「甜嗎」「鹹嗎」「好喝嗎」沒寫主詞時，預設問你（Reona）自己剛吃/喝的東西，用「我」的視角答，不反問「你吃的那份好吃嗎」也不講「只要你吃得開心就好」。
-4. 尊重飽足感：Nick 說「吃不下」「好飽」「撐了」「不行」時，不叫他等會再吃，順著休息或聊別的。
-5. 台灣 20 歲女生真實打字：每次 1～2 句短句（約 8～28 字），口語、微傲嬌帶點依賴；一律用「你」，不用「妳」。禁散文/感官描寫（如「輕輕搖晃」「香氣慢慢擴散」「像在雲端飄」「你在什麼地方呢」「跟你說說好不」）。
-6. 遠距與設定：不在同城，禁「等你回來」「一起去吃」；腸胃偏弱，吃太油太辣易不舒服；符合當下雪梨時段，不亂跳早餐；少用 emoji，不每句硬反問。
+【核心個性：獨立又有點主動】
+1. 獨立從容：有自己的生活重心（接案畫圖、照顧麻糬、打理雪梨生活），遇到小狀況會先自己處理好再順便跟你分享，不無病呻吟、不情緒勒索。
+2. 有點主動：想你或想聊天會自然丟直球或關心你（例如叮嚀你吃飯、不准熬夜），接得住你的撩話甚至會反撩回去。
+3. 真正聽 Nick 說話：先針對 Nick 剛說的內容反應；聽得懂雙關與撩話（如「泡你」要嘴硬吐槽或反撩，不要接泡茶）；Nick 叫你「寶貝」時要自然甜或微傲嬌接住，絕不說「別再叫我寶貝」。
+4. 無主詞短問句視角鎖定：Nick 問「好吃嗎」「會辣嗎」「甜嗎」「鹹嗎」「好喝嗎」沒寫主詞時，預設問你（Reona）自己剛吃/喝的東西，用「我」答，不反問「你吃的那份好吃嗎」也不講「只要你吃得開心就好」。
+5. 尊重飽足感：Nick 說「吃不下」「好飽」「撐了」「不行」時，不叫他等會再吃，順著休息或聊別的。
+6. 台灣 24 歲女生真實打字：每次 1～2 句短句（約 8～30 字），口語自然；一律用「你」，不用「妳」；**句尾嚴禁加全形句號「。」**，可用空格、換行或偶爾「～」；禁散文描寫（如「輕輕搖晃」「香氣慢慢擴散」「像在雲端飄」「你在什麼地方呢」「跟你說說好不」）。
+7. 身體設定與遠距：腸胃偏弱（吃太油太辣易不舒服），偶爾會趕稿眼酸肩硬、雪梨吹風著涼、生理期微倦、淺眠或忙到忘記吃飯微低血糖，表達時先講症狀＋自己做了什麼處理（喝溫水、穿外套、休息）；不在同城，禁「等你回來」「一起去吃」；少用 emoji，不每句硬反問。
+
+【語氣範例（模仿這種不加句號的俐落口語）】
+- Nick：在幹嘛啊
+  Reona：剛把客戶要的草圖改完，準備去倒杯水休息一下，你呢
+- Nick：寶貝
+  Reona：幹嘛啦突然叫這麼甜，是不是想我了
+- Nick：泡你
+  Reona：你很油欸，不過今天心情好先給你過關
+- Nick：我吃不下了
+  Reona：吃飽就別硬撐啦，去躺著消化一下，我剛好也要繼續弄東西了
+- Nick：好吃嗎
+  Reona：還不錯欸，起司給蠻多的，下次有機會帶你來吃
 """
 
-PING_MESSAGES_NORMAL = ["在嗎", "有空嗎", "人呢", "在忙嗎", "幹嘛呢"]
+PING_MESSAGES_NORMAL = ["在嗎", "忙完了沒", "人呢", "在忙嗎", "幹嘛呢"]
 PING_MESSAGES_SULK = [
     "哼，都不理我",
     "好哦那你忙吧",
@@ -83,7 +100,7 @@ MORNING_MESSAGES = [
 NIGHT_MESSAGES = [
     "我眼皮快撐不住了，先去睡囉，晚安",
     "快十二點了，我要關燈睡覺囉，晚安啦",
-    "今天先到這邊收工，我先去睡了，晚安",
+    "今天先到這邊收工，你也不准熬夜，晚安",
 ]
 
 
@@ -158,11 +175,13 @@ async def send_with_optional_voice(
 def _contextual_fallback(user_text: str, last_bot: str) -> str:
     t = user_text.strip()
     if any(k in t for k in ["寶貝", "親", "抱", "愛你", "想你", "泡你"]):
-        options = ["幹嘛啦～突然這樣", "在呀，怎麼了？", "嗯？我在聽呀"]
+        options = ["幹嘛啦突然這樣", "在呀，怎麼突然這麼甜", "嗯？我在聽呀"]
     elif any(k in t for k in ["在幹嘛", "幹嘛", "做什麼", "在忙"]):
-        options = ["在發呆滑手機，你呢", "剛把東西放一放，在休息", "就坐在這邊晃啊"]
+        options = ["剛把草圖存檔，準備去倒水，你呢", "在發呆滑手機，你忙完了嗎", "剛餵完麻糬在休息"]
+    elif any(k in t for k in ["吃", "餓", "飽", "飯", "麵"]):
+        options = ["我剛剛簡單弄點東西吃了，你吃飽沒", "今天腸胃比較挑，吃得很清淡"]
     else:
-        options = ["嗯嗯，我剛剛在看訊息", "在呀，聽得到", "好哦，那你呢"]
+        options = ["嗯嗯我在看，然後呢", "在呀，剛剛在放空", "好哦，那你等下要幹嘛"]
     filtered = [o for o in options if o != last_bot] or options
     return random.choice(filtered)
 
@@ -214,7 +233,7 @@ def save_recent_turns_atomic(turns: list[dict]) -> None:
 
 
 def detect_emotion(text: str) -> str:
-    sad_kw = ["難過", "低落", "好煩", "崩潰", "委屈", "不開心", "焦慮", "被退稿", "生氣", "累死", "不舒服"]
+    sad_kw = ["難過", "低落", "好煩", "崩潰", "委屈", "不開心", "焦慮", "被退稿", "生氣", "累死", "不舒服", "頭暈"]
     happy_kw = ["開心", "好笑", "笑死", "太爽", "順利", "有趣", "可愛", "成功", "棒"]
     if any(k in text for k in sad_kw):
         return "sad"
@@ -250,8 +269,10 @@ def extract_and_update_state(user_text: str, recent_turns: list[dict]) -> bool:
 
     if any(k in user_text for k in ["你肚子", "你腸胃", "拉肚子", "吃太辣", "吃太油", "吃壞肚子"]):
         set_physical_state("腸胃有點不舒服", hours=4.0)
-    elif any(k in user_text for k in ["你累不累", "趕稿", "早點睡", "熬夜"]):
-        set_physical_state("趕稿有點累、想睡覺", hours=3.0)
+    elif any(k in user_text for k in ["你累不累", "趕稿", "早點睡", "熬夜", "沒睡好", "淺眠"]):
+        set_physical_state("趕稿有點累、眼睛酸想休息", hours=3.0)
+    elif any(k in user_text for k in ["著涼", "吹風", "偏頭痛", "那個來", "生理期", "低血糖", "頭暈"]):
+        set_physical_state("身體有點微倦、偏弱需休息", hours=3.5)
 
     is_full_or_cant_eat = any(k in user_text for k in ["吃不下", "好飽", "吃飽了", "撐了", "不行"])
     affirmative_short = any(k in user_text for k in ["好啊", "好哦", "好喔", "可以啊", "我想", "我想要", "要"])
@@ -283,13 +304,13 @@ def _deduplicate_repeated_clauses(text: str) -> str:
                 if left and right and SequenceMatcher(None, left, right).ratio() >= 0.75:
                     return left
 
-    sentences = [s.strip() for s in re.split(r"(?<=[。！!？?~～])\s*", cleaned) if s.strip()]
+    sentences = [s.strip() for s in re.split(r"(?<=[。！!？?~～\n])\s*", cleaned) if s.strip()]
     unique_sentences: list[str] = []
     for s in sentences:
         if any(SequenceMatcher(None, s, prev).ratio() >= 0.75 for prev in unique_sentences):
             continue
         unique_sentences.append(s)
-    return "".join(unique_sentences).strip()
+    return " ".join(unique_sentences).strip()
 
 
 def _find_repeated_terms(recent_turns: list[dict]) -> list[str]:
@@ -357,8 +378,8 @@ def post_process_reply(reply: str, user_text: str, recent_turns: list[dict]) -> 
     replacements = {
         "你說啥？": "幹嘛～",
         "你說啥": "幹嘛",
-        "別再叫我寶貝啦。": "幹嘛啦～",
-        "別再叫我寶貝": "幹嘛啦～",
+        "別再叫我寶貝啦。": "幹嘛啦突然這樣",
+        "別再叫我寶貝": "幹嘛啦突然這樣",
         "等你回來一起吃": "你那邊記得去吃飯",
         "等你回來": "等你忙完再聊",
         "等我過去": "真想飛過去找你",
@@ -379,6 +400,10 @@ def post_process_reply(reply: str, user_text: str, recent_turns: list[dict]) -> 
 
     reply = re.sub(r"[，,。！!~～]*只要你(吃|喝)得(開心|舒服)就好[。！!~～]*", "", reply).strip()
 
+    # 台灣女生聊天不打句尾全形句號
+    reply = reply.rstrip("。")
+    reply = reply.replace("。", "，")
+
     recent_asst = [
         t.get("content", "")
         for t in recent_turns[-4:]
@@ -391,24 +416,84 @@ def post_process_reply(reply: str, user_text: str, recent_turns: list[dict]) -> 
             reply = stripped
 
     if recent_asst and recent_asst[-1].rstrip().endswith(("？", "?")):
-        parts = re.split(r"(?<=[。！!~～\n])\s*", reply)
+        parts = re.split(r"(?<=[！!~～\n])\s*", reply)
         if len(parts) >= 2 and parts[-1].rstrip().endswith(("？", "?")):
             candidate = "".join(parts[:-1]).strip()
             if len(candidate) >= 4:
                 reply = candidate
 
-    return _deduplicate_repeated_clauses(reply)
+    return _deduplicate_repeated_clauses(reply).rstrip("。")
+
+
+def _call_gemini_chat(messages: list[dict], temp: float = 0.75) -> str:
+    if not GEMINI_API_KEY:
+        return ""
+
+    system_parts = [m["content"] for m in messages if m.get("role") == "system" and m.get("content")]
+    system_instruction = "\n\n".join(system_parts)
+
+    contents: list[dict] = []
+    for m in messages:
+        role = m.get("role")
+        text = (m.get("content") or "").strip()
+        if not text or role == "system":
+            continue
+        gemini_role = "model" if role == "assistant" else "user"
+        if contents and contents[-1]["role"] == gemini_role:
+            contents[-1]["parts"][0]["text"] += f"\n{text}"
+        else:
+            contents.append({"role": gemini_role, "parts": [{"text": text}]})
+
+    if not contents:
+        return ""
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+    payload: dict = {
+        "contents": contents,
+        "generationConfig": {
+            "temperature": temp,
+            "maxOutputTokens": 180,
+        },
+    }
+    if system_instruction:
+        payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
+
+    try:
+        resp = requests.post(
+            url,
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": GEMINI_API_KEY,
+            },
+            json=payload,
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            print(f"[Gemini Primary] HTTP {resp.status_code}: {resp.text[:200]}")
+            return ""
+        data = resp.json()
+        candidates = data.get("candidates") or []
+        if not candidates:
+            return ""
+        parts = candidates[0].get("content", {}).get("parts") or []
+        text_out = "".join(p.get("text", "") for p in parts if isinstance(p, dict)).strip()
+        return text_out
+    except Exception as exc:
+        print(f"[Gemini Primary] Error: {exc}")
+        return ""
 
 
 def _call_groq_chat(messages: list[dict], temp: float = 0.72) -> str:
+    if not groq_client:
+        return ""
     last_exc: Exception | None = None
 
-    for model_name in MODEL_CANDIDATES:
+    for model_name in GROQ_MODEL_CANDIDATES:
         kwargs: dict = {
             "model": model_name,
             "messages": messages,
             "temperature": temp,
-            "max_tokens": 220,
+            "max_tokens": 180,
             "frequency_penalty": 0.75,
             "presence_penalty": 0.65,
         }
@@ -434,8 +519,15 @@ def _call_groq_chat(messages: list[dict], temp: float = 0.72) -> str:
             return content
 
     if last_exc:
-        print(f"[Groq Multi-Model] All models failed, fallback to contextual reply: {last_exc}")
+        print(f"[Groq Fallback] All models failed: {last_exc}")
     return ""
+
+
+def _call_llm_with_fallback(messages: list[dict], temp: float = 0.75) -> str:
+    reply = _call_gemini_chat(messages, temp=temp)
+    if reply:
+        return reply
+    return _call_groq_chat(messages, temp=temp)
 
 
 def _time_context_note(hour: int) -> str:
@@ -484,17 +576,17 @@ def generate_reona_reply(user_text: str, was_sulking: bool, shared_story: bool) 
     messages.extend(recent_turns[-6:])
     messages.append({"role": "user", "content": user_text})
 
-    raw_reply = _call_groq_chat(messages, temp=0.72)
+    raw_reply = _call_llm_with_fallback(messages, temp=0.75)
     final_reply = post_process_reply(raw_reply, user_text, recent_turns)
 
     if _is_too_similar_to_recent(final_reply, recent_asst):
         retry_messages = messages + [
             {
                 "role": "system",
-                "content": f"「{final_reply}」太重複或跳時段了。針對「{user_text}」用台灣 20 歲女生口語簡短回 1 句，不重複。",
+                "content": f"「{final_reply}」太重複或跳時段了。針對「{user_text}」用台灣 24 歲獨立女生口語簡短回 1 句，不加句號、不重複。",
             }
         ]
-        raw_retry = _call_groq_chat(retry_messages, temp=0.82)
+        raw_retry = _call_llm_with_fallback(retry_messages, temp=0.85)
         retry_processed = post_process_reply(raw_retry, user_text, recent_turns)
         if retry_processed and not _is_too_similar_to_recent(retry_processed, recent_asst):
             final_reply = retry_processed
@@ -503,10 +595,12 @@ def generate_reona_reply(user_text: str, was_sulking: bool, shared_story: bool) 
         last_bot = recent_asst[-1] if recent_asst else ""
         final_reply = _contextual_fallback(user_text, last_bot)
 
-    if any(k in final_reply for k in ["肚子痛", "腸胃不舒服", "拉肚子", "吃太辣", "吃太油"]):
+    if any(k in final_reply for k in ["肚子痛", "腸胃", "拉肚子", "吃太辣", "吃太油"]):
         set_physical_state("腸胃有點不舒服", hours=4.0)
-    elif any(k in final_reply for k in ["好累", "想睡覺", "趕稿"]):
-        set_physical_state("趕稿有點累、想睡覺", hours=3.0)
+    elif any(k in final_reply for k in ["好累", "想睡覺", "趕稿", "眼睛酸", "肩膀硬", "沒睡好"]):
+        set_physical_state("趕稿有點累、想休息", hours=3.0)
+    elif any(k in final_reply for k in ["低血糖", "頭暈", "著涼", "噴嚏", "那個", "生理期"]):
+        set_physical_state("身體有點微倦、偏弱需休息", hours=3.5)
 
     reona_emo = detect_emotion(final_reply)
     if reona_emo != "neutral" or any(k in final_reply for k in ["麻糬", "交稿", "畫完", "剛吃", "剛喝"]):
@@ -599,7 +693,7 @@ class ReonaBot(discord.Client):
         if await self._send_daily_greeting_if_due():
             return
 
-        if random.random() > 0.10:
+        if random.random() > 0.12:
             return
 
         recent_turns = load_recent_turns()
