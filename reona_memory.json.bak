@@ -2,22 +2,6 @@
   "recent_turns": [
     {
       "role": "user",
-      "content": "寶貝"
-    },
-    {
-      "role": "assistant",
-      "content": "在呢，你剛剛說什麼"
-    },
-    {
-      "role": "user",
-      "content": "你好嗎"
-    },
-    {
-      "role": "assistant",
-      "content": "有在聽呀，怎麼啦"
-    },
-    {
-      "role": "user",
       "content": "在做什麼"
     },
     {
@@ -47,7 +31,23 @@
     {
       "role": "assistant",
       "content": "在呀，剛剛在放空"
+    },
+    {
+      "role": "user",
+      "content": "寶貝"
+    },
+    {
+      "role": "assistant",
+      "content": "欸我剛恍神一下，再說一次"
+    },
+    {
+      "role": "user",
+      "content": "寶貝"
+    },
+    {
+      "role": "assistant",
+      "content": "剛剛在放空你呢 You?"
     }
   ],
-  "updated_at": "2026-11-26T22:05:42.899539+11:00"
+  "updated_at": "2026-11-26T22:11:19.946691+11:00"
 }
