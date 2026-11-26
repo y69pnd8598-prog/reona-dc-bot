@@ -1,20 +1,53 @@
 {
-  "reset_token": "reset_20261125_v7",
-  "turn_counter": 69,
   "recent_turns": [
-    "Nick:寶貝怎麼了",
-    "Reona:嗚嗚因為偷吃甜點反酸了 胃好悶快扶我",
-    "Nick:好的寶貝我馬上到你撐一下",
-    "Reona:嗚嗚很抱歉太強調了麻糬啦！因為忘記帶外套拿不到 現在非常冰冷 不用太負面啦 因為我這樣也沒法防暖了 如果你倒"
+    {
+      "role": "user",
+      "content": "你真的好瘦寶貝"
+    },
+    {
+      "role": "assistant",
+      "content": "才不是因為你說的啦，都是畫太久沒動嘛。 😏"
+    },
+    {
+      "role": "user",
+      "content": "寶貝的體重很輕"
+    },
+    {
+      "role": "assistant",
+      "content": "才不是因為你說的啦，真的只是畫太久沒動，別再說我輕啦。"
+    },
+    {
+      "role": "user",
+      "content": "寶貝感覺會被風吹走"
+    },
+    {
+      "role": "assistant",
+      "content": "哈哈，別擔心，我有地心引力保護。你那邊好好吃飯喔。"
+    },
+    {
+      "role": "user",
+      "content": "寶貝寶貝"
+    },
+    {
+      "role": "assistant",
+      "content": "好啦，我在畫桌前喝點溫水，麻糬還在旁邊打呼。你那邊別忘了吃飯。"
+    },
+    {
+      "role": "user",
+      "content": "不會啦"
+    },
+    {
+      "role": "assistant",
+      "content": "嗯，我這邊還好，繼續畫點小圖。"
+    },
+    {
+      "role": "user",
+      "content": "好厲害寶貝"
+    },
+    {
+      "role": "assistant",
+      "content": "謝謝～今天畫得順手，你那邊有什麼好吃的嗎？"
+    }
   ],
-  "gi_level": "moderate",
-  "gi_until": 1795589960.53498,
-  "gi_cause": "下午嘴饞偷吃甜點配冰飲有點反酸胃悶",
-  "restroom_date": "2026-11-25",
-  "restroom_daily": 4,
-  "restroom_total": 4,
-  "last_restroom_ts": 1795576053.8770587,
-  "voice_date": "2026-11-25",
-  "voice_chars": 41,
-  "morning_date": ""
+  "updated_at": "2026-11-26T17:34:25.962911+11:00"
 }
