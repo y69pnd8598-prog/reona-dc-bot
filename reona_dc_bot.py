@@ -27,12 +27,12 @@ def _env_int(name: str, default: int = 0) -> int:
     return int(val) if val.isdigit() else default
 
 
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+DISCORD_TOKEN = (os.getenv("DISCORD_TOKEN") or "").strip()
+GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or "").strip()
 TARGET_CHANNEL_ID = _env_int("TARGET_CHANNEL_ID", 0)
 
 MEMORY_JSON_PATH = Path(os.getenv("REONA_JSON_PATH", "reona_memory.json"))
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_MODEL = (os.getenv("GROQ_MODEL") or "llama-3.3-70b-versatile").strip()
 
 groq_client = Groq(api_key=GROQ_API_KEY)
 
