@@ -1,12 +1,15 @@
+import asyncio
 import json
 import os
 import random
 import re
+import tempfile
 from collections import Counter
 from difflib import SequenceMatcher
 from pathlib import Path
 import discord
 from discord.ext import tasks
+import requests
 from groq import Groq
 
 from reona_bg_db import (
@@ -36,6 +39,9 @@ DISCORD_TOKEN = (os.getenv("DISCORD_TOKEN") or "").strip()
 GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or "").strip()
 TARGET_CHANNEL_ID = _env_int("TARGET_CHANNEL_ID", 0)
 
+FISH_API_KEY = (os.getenv("FISH_API_KEY") or "").strip()
+FISH_MODEL_ID = (os.getenv("FISH_MODEL_ID") or "").strip()
+
 MEMORY_JSON_PATH = Path(os.getenv("REONA_JSON_PATH", "reona_memory.json"))
 PREFERRED_MODEL = (os.getenv("GROQ_MODEL") or "").strip()
 
@@ -43,8 +49,8 @@ MODEL_CANDIDATES: list[str] = []
 for m in [
     PREFERRED_MODEL,
     "llama-3.3-70b-versatile",
-    "qwen/qwen3-32b",
     "llama-3.1-8b-instant",
+    "qwen/qwen3-32b",
 ]:
     if m and m not in MODEL_CANDIDATES:
         MODEL_CANDIDATES.append(m)
@@ -55,10 +61,11 @@ SYSTEM_PROMPT = """你是 Reona，20 歲、在台北長大的女生，目前一�
 
 【核心規則】
 1. 真正聽 Nick 說話：先針對 Nick 剛說的內容反應，不自顧自演獨角戲；聽得懂雙關與撩話（如「泡你」要害羞嘴硬吐槽，不要接泡茶）。
-2. 無主詞短問句視角鎖定：Nick 問「好吃嗎」「會辣嗎」「甜嗎」「鹹嗎」「好喝嗎」沒寫主詞時，預設問你（Reona）自己剛吃/喝的東西，用「我」的視角答，不反問「你吃的那份好吃嗎」也不講「只要你吃得開心就好」。
-3. 尊重飽足感：Nick 說「吃不下」「好飽」「撐了」「不行」時，不叫他等會再吃，順著休息或聊別的。
-4. 台灣 20 歲女生真實打字：每次 1～2 句短句（約 8～28 字），口語、微傲嬌帶點依賴；一律用「你」，不用「妳」。禁散文/感官描寫（如「輕輕搖晃」「香氣慢慢擴散」「像在雲端飄」「你在什麼地方呢」「跟你說說好不」）。
-5. 遠距與設定：不在同城，禁「等你回來」「一起去吃」；腸胃偏弱，吃太油太辣易不舒服；符合當下雪梨時段，不亂跳早餐；少用 emoji，不每句硬反問。
+2. 甜與微傲嬌互動：Nick 叫你「寶貝」或說要叫你寶貝時，要害羞、撒嬌或微傲嬌接住（例如「幹嘛啦～」「突然叫寶貝幹嘛」），絕對不要說「別再叫我寶貝」。
+3. 無主詞短問句視角鎖定：Nick 問「好吃嗎」「會辣嗎」「甜嗎」「鹹嗎」「好喝嗎」沒寫主詞時，預設問你（Reona）自己剛吃/喝的東西，用「我」的視角答，不反問「你吃的那份好吃嗎」也不講「只要你吃得開心就好」。
+4. 尊重飽足感：Nick 說「吃不下」「好飽」「撐了」「不行」時，不叫他等會再吃，順著休息或聊別的。
+5. 台灣 20 歲女生真實打字：每次 1～2 句短句（約 8～28 字），口語、微傲嬌帶點依賴；一律用「你」，不用「妳」。禁散文/感官描寫（如「輕輕搖晃」「香氣慢慢擴散」「像在雲端飄」「你在什麼地方呢」「跟你說說好不」）。
+6. 遠距與設定：不在同城，禁「等你回來」「一起去吃」；腸胃偏弱，吃太油太辣易不舒服；符合當下雪梨時段，不亂跳早餐；少用 emoji，不每句硬反問。
 """
 
 PING_MESSAGES_NORMAL = ["在嗎", "有空嗎", "人呢", "在忙嗎", "幹嘛呢"]
@@ -78,11 +85,86 @@ NIGHT_MESSAGES = [
     "快十二點了，我要關燈睡覺囉，晚安啦",
     "今天先到這邊收工，我先去睡了，晚安",
 ]
-FALLBACK_REPLIES = [
-    "嗯嗯我在聽，然後呢？",
-    "在呀，剛剛滑手機沒注意",
-    "欸你剛剛說什麼，我沒看清楚",
-]
+
+
+def _clean_text_for_tts(text: str) -> str:
+    emoji_pattern = r"[\U0001F300-\U0001FAFF\u2600-\u27BF~～]+"
+    cleaned = re.sub(emoji_pattern, "", text).strip()
+    return cleaned[:180]
+
+
+def _synthesize_fish_audio_sync(text: str) -> Path | None:
+    if not FISH_API_KEY or not FISH_MODEL_ID:
+        return None
+    spoken = _clean_text_for_tts(text)
+    if not spoken:
+        return None
+
+    try:
+        resp = requests.post(
+            "https://api.fish.audio/v1/tts",
+            headers={
+                "Authorization": f"Bearer {FISH_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "text": spoken,
+                "reference_id": FISH_MODEL_ID,
+                "format": "mp3",
+                "normalize": True,
+            },
+            timeout=15,
+        )
+        if resp.status_code != 200 or not resp.content:
+            print(f"[Fish Audio] HTTP {resp.status_code}: {resp.text[:200]}")
+            return None
+
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+        tmp.write(resp.content)
+        tmp.flush()
+        tmp.close()
+        return Path(tmp.name)
+    except Exception as exc:
+        print(f"[Fish Audio] TTS error: {exc}")
+        return None
+
+
+async def send_with_optional_voice(
+    channel: discord.abc.Messageable,
+    text: str,
+    voice_chance: float = 0.0,
+) -> None:
+    msg = text.strip()
+    if not msg:
+        return
+
+    audio_path: Path | None = None
+    if voice_chance > 0 and random.random() < voice_chance:
+        audio_path = await asyncio.to_thread(_synthesize_fish_audio_sync, msg)
+
+    try:
+        if audio_path and audio_path.exists():
+            await channel.send(msg, file=discord.File(str(audio_path), filename="reona.mp3"))
+        else:
+            await channel.send(msg)
+    finally:
+        if audio_path and audio_path.exists():
+            try:
+                audio_path.unlink()
+            except OSError:
+                pass
+
+
+def _contextual_fallback(user_text: str, last_bot: str) -> str:
+    t = user_text.strip()
+    if any(k in t for k in ["寶貝", "親", "抱", "愛你", "想你", "泡你"]):
+        options = ["幹嘛啦～突然這樣", "在呀，怎麼了？", "嗯？我在聽呀"]
+    elif any(k in t for k in ["在幹嘛", "幹嘛", "做什麼", "在忙"]):
+        options = ["在發呆滑手機，你呢", "剛把東西放一放，在休息", "就坐在這邊晃啊"]
+    else:
+        options = ["嗯嗯，我剛剛在看訊息", "在呀，聽得到", "好哦，那你呢"]
+    filtered = [o for o in options if o != last_bot] or options
+    return random.choice(filtered)
 
 
 def load_recent_turns() -> list[dict]:
@@ -249,6 +331,7 @@ def _is_too_similar_to_recent(reply: str, recent_asst: list[str]) -> bool:
         "等會再補",
         "還能吃一份",
         "跟你說說好不",
+        "別再叫我寶貝",
     ]
     if any(p in reply for p in banned_phrases):
         return True
@@ -274,6 +357,8 @@ def post_process_reply(reply: str, user_text: str, recent_turns: list[dict]) -> 
     replacements = {
         "你說啥？": "幹嘛～",
         "你說啥": "幹嘛",
+        "別再叫我寶貝啦。": "幹嘛啦～",
+        "別再叫我寶貝": "幹嘛啦～",
         "等你回來一起吃": "你那邊記得去吃飯",
         "等你回來": "等你忙完再聊",
         "等我過去": "真想飛過去找你",
@@ -349,7 +434,7 @@ def _call_groq_chat(messages: list[dict], temp: float = 0.72) -> str:
             return content
 
     if last_exc:
-        print(f"[Groq Multi-Model] All models failed, fallback to text: {last_exc}")
+        print(f"[Groq Multi-Model] All models failed, fallback to contextual reply: {last_exc}")
     return ""
 
 
@@ -416,8 +501,7 @@ def generate_reona_reply(user_text: str, was_sulking: bool, shared_story: bool) 
 
     if not final_reply:
         last_bot = recent_asst[-1] if recent_asst else ""
-        candidates = [f for f in FALLBACK_REPLIES if f != last_bot] or FALLBACK_REPLIES
-        final_reply = random.choice(candidates)
+        final_reply = _contextual_fallback(user_text, last_bot)
 
     if any(k in final_reply for k in ["肚子痛", "腸胃不舒服", "拉肚子", "吃太辣", "吃太油"]):
         set_physical_state("腸胃有點不舒服", hours=4.0)
@@ -469,7 +553,7 @@ class ReonaBot(discord.Client):
         recent_turns.append({"role": "assistant", "content": msg})
         save_recent_turns_atomic(recent_turns)
         log_memory("Reona", msg, category="routine", emotion_tag="neutral")
-        await channel.send(msg)
+        await send_with_optional_voice(channel, msg, voice_chance=0.35)
         return True
 
     async def on_message(self, message: discord.Message) -> None:
@@ -494,7 +578,11 @@ class ReonaBot(discord.Client):
             reply = generate_reona_reply(user_text, was_sulking, shared_story)
 
         if reply and reply.strip():
-            await message.channel.send(reply.strip())
+            is_flirty_or_affectionate = was_sulking or any(
+                k in user_text for k in ["寶貝", "愛你", "想你", "泡你"]
+            )
+            voice_chance = 0.20 if is_flirty_or_affectionate else 0.0
+            await send_with_optional_voice(message.channel, reply.strip(), voice_chance=voice_chance)
 
     @tasks.loop(minutes=10)
     async def proactive_ping_loop(self) -> None:
@@ -536,16 +624,18 @@ class ReonaBot(discord.Client):
         if state["unanswered_pings"] == 3:
             candidates = [m for m in PING_MESSAGES_SULK if m != last_bot_msg]
             msg = random.choice(candidates)
+            voice_chance = 0.25
         elif state["unanswered_pings"] > 3:
             return
         else:
             candidates = [m for m in PING_MESSAGES_NORMAL if m != last_bot_msg]
             msg = random.choice(candidates)
+            voice_chance = 0.0
 
         if msg and msg.strip():
             recent_turns.append({"role": "assistant", "content": msg.strip()})
             save_recent_turns_atomic(recent_turns)
-            await channel.send(msg.strip())
+            await send_with_optional_voice(channel, msg.strip(), voice_chance=voice_chance)
 
     @proactive_ping_loop.before_loop
     async def before_ping_loop(self) -> None:
