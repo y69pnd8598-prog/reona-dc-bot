@@ -59,7 +59,12 @@ PING_MESSAGES_SULK = [
     "算了不吵你了，我去畫圖",
     "消失很久欸",
 ]
-FALLBACK_REPLIES = ["在呀，剛剛稍微放空了一下", "嗯嗯，我在聽", "欸？剛剛走神了一下"]
+FALLBACK_REPLIES = [
+    "剛剛在看麻糬發呆，你呢？",
+    "嗯嗯，我這邊剛忙完一小段",
+    "欸？你剛剛說什麼，我沒跟上",
+    "在呀，剛剛稍微走神了一下",
+]
 
 
 def load_recent_turns() -> list[dict]:
@@ -166,6 +171,28 @@ def post_process_reply(reply: str, user_text: str, recent_turns: list[dict]) -> 
     return reply.strip()
 
 
+def _call_groq_chat(messages: list[dict]) -> str:
+    kwargs = {
+        "model": GROQ_MODEL,
+        "messages": messages,
+        "temperature": 0.75,
+        "max_tokens": 1024,
+        "frequency_penalty": 0.65,
+        "presence_penalty": 0.55,
+    }
+    if "gpt-oss" in GROQ_MODEL:
+        kwargs["reasoning_effort"] = "low"
+
+    try:
+        resp = groq_client.chat.completions.create(**kwargs)
+    except TypeError:
+        kwargs.pop("reasoning_effort", None)
+        resp = groq_client.chat.completions.create(**kwargs)
+
+    msg_obj = resp.choices[0].message
+    return (msg_obj.content or "").strip()
+
+
 def generate_reona_reply(user_text: str, was_sulking: bool, shared_story: bool) -> str:
     recent_turns = load_recent_turns()
     snapshot = compute_snapshot()
@@ -195,20 +222,20 @@ def generate_reona_reply(user_text: str, was_sulking: bool, shared_story: bool) 
     messages.extend(recent_turns[-8:])
     messages.append({"role": "user", "content": user_text})
 
-    resp = groq_client.chat.completions.create(
-        model=GROQ_MODEL,
-        messages=messages,
-        temperature=0.75,
-        max_tokens=180,
-        frequency_penalty=0.65,
-        presence_penalty=0.55,
-    )
-    msg_obj = resp.choices[0].message
-    raw_reply = (msg_obj.content or "").strip()
+    raw_reply = _call_groq_chat(messages)
     final_reply = post_process_reply(raw_reply, user_text, recent_turns)
 
     if not final_reply:
-        final_reply = random.choice(FALLBACK_REPLIES)
+        last_bot = next(
+            (
+                t.get("content", "")
+                for t in reversed(recent_turns)
+                if isinstance(t, dict) and t.get("role") == "assistant"
+            ),
+            "",
+        )
+        candidates = [f for f in FALLBACK_REPLIES if f != last_bot] or FALLBACK_REPLIES
+        final_reply = random.choice(candidates)
 
     reona_emo = detect_emotion(final_reply)
     if reona_emo != "neutral" or any(k in final_reply for k in ["麻糬", "交稿", "畫完", "剛吃", "剛喝"]):
