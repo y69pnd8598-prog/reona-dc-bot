@@ -1,4 +1,6 @@
+import json
 import os
+import random
 import sqlite3
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -39,6 +41,7 @@ def init_db() -> None:
                 last_active_date TEXT,
                 location TEXT DEFAULT '雪梨住處畫桌前',
                 physical_state TEXT DEFAULT '正常',
+                physical_until TEXT,
                 emotional_state TEXT DEFAULT '平穩',
                 unanswered_pings INTEGER DEFAULT 0,
                 is_sulking INTEGER DEFAULT 0,
@@ -46,7 +49,10 @@ def init_db() -> None:
                 agreed_plan TEXT,
                 agreed_plan_slot TEXT,
                 last_meal_info TEXT,
-                last_meal_until TEXT
+                last_meal_until TEXT,
+                routine_tracker TEXT DEFAULT '{}',
+                away_reason TEXT,
+                away_until TEXT
             );
 
             INSERT OR IGNORE INTO runtime_state (id)
@@ -80,6 +86,7 @@ def init_db() -> None:
                 "last_active_date": "TEXT",
                 "location": "TEXT DEFAULT '雪梨住處畫桌前'",
                 "physical_state": "TEXT DEFAULT '正常'",
+                "physical_until": "TEXT",
                 "emotional_state": "TEXT DEFAULT '平穩'",
                 "unanswered_pings": "INTEGER DEFAULT 0",
                 "is_sulking": "INTEGER DEFAULT 0",
@@ -88,6 +95,9 @@ def init_db() -> None:
                 "agreed_plan_slot": "TEXT",
                 "last_meal_info": "TEXT",
                 "last_meal_until": "TEXT",
+                "routine_tracker": "TEXT DEFAULT '{}'",
+                "away_reason": "TEXT",
+                "away_until": "TEXT",
             },
         )
 
@@ -117,7 +127,7 @@ def init_db() -> None:
 def morning_wakeup_reset() -> dict:
     """
     Runs on startup/wake-up (08:00 Sydney time).
-    - Resets transient physical states & yesterday's routine clutter before 18:00.
+    - Resets transient physical states, daily routine counters & yesterday's clutter before 18:00.
     - Retains memories from 18:00–23:59 yesterday tagged as [昨晚], plus notable emotional events.
     """
     init_db()
@@ -161,17 +171,36 @@ def morning_wakeup_reset() -> dict:
                 SET last_active_date = ?,
                     location = '雪梨住處客廳',
                     physical_state = '剛睡醒、精神還不錯',
+                    physical_until = NULL,
                     pending_decision_until = NULL,
                     agreed_plan = NULL,
                     agreed_plan_slot = NULL,
                     last_meal_info = NULL,
-                    last_meal_until = NULL
+                    last_meal_until = NULL,
+                    routine_tracker = '{}',
+                    away_reason = NULL,
+                    away_until = NULL
                 WHERE id = 1
                 """,
                 (today_str,),
             )
 
         return dict(conn.execute("SELECT * FROM runtime_state WHERE id = 1").fetchone())
+
+
+def set_physical_state(state_desc: str, hours: float = 4.0) -> None:
+    init_db()
+    until = (now_sydney() + timedelta(hours=hours)).isoformat()
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE runtime_state
+            SET physical_state = ?,
+                physical_until = ?
+            WHERE id = 1
+            """,
+            (state_desc, until),
+        )
 
 
 def de_pronoun_text(speaker: str, raw_text: str) -> str:
@@ -276,6 +305,169 @@ def set_meal_mutex(meal_desc: str, hours: int = 2) -> None:
         )
 
 
+def _get_routine_limits(physical_state: str) -> dict:
+    """Returns cooldown (minutes) and daily max counts adjusted by Reona's physical condition."""
+    is_stomach_upset = any(k in physical_state for k in ["腸胃", "肚子", "拉肚子", "不舒服"])
+    is_tired = any(k in physical_state for k in ["累", "想睡", "趕稿", "熬夜"])
+
+    if is_stomach_upset:
+        return {
+            "toilet": {"cooldown_min": 45, "max_daily": 7},
+            "drink_water": {"cooldown_min": 60, "max_daily": 8},
+            "feed_cat": {"cooldown_min": 360, "max_daily": 2},
+        }
+    if is_tired:
+        return {
+            "toilet": {"cooldown_min": 150, "max_daily": 4},
+            "drink_water": {"cooldown_min": 60, "max_daily": 7},
+            "feed_cat": {"cooldown_min": 360, "max_daily": 2},
+        }
+    return {
+        "toilet": {"cooldown_min": 150, "max_daily": 4},
+        "drink_water": {"cooldown_min": 90, "max_daily": 6},
+        "feed_cat": {"cooldown_min": 360, "max_daily": 2},
+    }
+
+
+def _is_cat_feeding_window(now: datetime) -> bool:
+    minute_of_day = now.hour * 60 + now.minute
+    morning_ok = (8 * 60) <= minute_of_day <= (10 * 60 + 30)
+    evening_ok = (17 * 60 + 30) <= minute_of_day <= (20 * 60 + 30)
+    return morning_ok or evening_ok
+
+
+def get_eligible_routines() -> list[str]:
+    """Checks cooldowns, daily caps, meal mutex, and feeding windows."""
+    state = morning_wakeup_reset()
+    now = now_sydney()
+    phys = state.get("physical_state") or "正常"
+    limits = _get_routine_limits(phys)
+
+    try:
+        tracker = json.loads(state.get("routine_tracker") or "{}")
+    except Exception:
+        tracker = {}
+
+    eligible: list[str] = []
+    for action, rule in limits.items():
+        if action == "feed_cat" and not _is_cat_feeding_window(now):
+            continue
+        if action == "drink_water" and state.get("last_meal_info") and "喝" in state["last_meal_info"]:
+            continue
+
+        info = tracker.get(action, {"count": 0, "last_at": None})
+        if info.get("count", 0) >= rule["max_daily"]:
+            continue
+
+        last_at_str = info.get("last_at")
+        if last_at_str:
+            try:
+                last_at = datetime.fromisoformat(last_at_str)
+                if (now - last_at).total_seconds() < rule["cooldown_min"] * 60:
+                    continue
+            except Exception:
+                pass
+
+        eligible.append(action)
+
+    return eligible
+
+
+def trigger_routine_action(action: str | None = None) -> tuple[str | None, str | None]:
+    """
+    Executes an eligible routine action ('toilet', 'drink_water', 'feed_cat'),
+    updates daily counts/cooldowns, and returns (action_key, natural_message).
+    """
+    state = morning_wakeup_reset()
+    now = now_sydney()
+    phys = state.get("physical_state") or "正常"
+    is_stomach_upset = any(k in phys for k in ["腸胃", "肚子", "拉肚子", "不舒服"])
+    is_tired = any(k in phys for k in ["累", "想睡", "趕稿", "熬夜"])
+
+    eligible = get_eligible_routines()
+    if not eligible:
+        return None, None
+
+    chosen = action if (action and action in eligible) else random.choice(eligible)
+
+    try:
+        tracker = json.loads(state.get("routine_tracker") or "{}")
+    except Exception:
+        tracker = {}
+
+    prev = tracker.get(chosen, {"count": 0, "last_at": None})
+    tracker[chosen] = {
+        "count": prev.get("count", 0) + 1,
+        "last_at": now.isoformat(),
+    }
+
+    away_reason = None
+    away_until = None
+
+    if chosen == "toilet":
+        away_reason = "去上廁所"
+        away_until = (now + timedelta(minutes=5)).isoformat()
+        if is_stomach_upset:
+            msgs = [
+                "肚子又有點咕嚕叫，我先去跑個廁所喔",
+                "腸胃不太爭氣，我去一下廁所馬上回來",
+            ]
+        else:
+            msgs = [
+                "我先去上個廁所，等我一下",
+                "我去一下廁所喔，馬上回來",
+            ]
+        chosen_msg = random.choice(msgs)
+        loc = "雪梨住處浴室"
+
+    elif chosen == "drink_water":
+        away_reason = "去廚房倒水"
+        away_until = (now + timedelta(minutes=2)).isoformat()
+        if is_stomach_upset:
+            msgs = [
+                "我先去廚房倒杯溫水喝，順便讓肚子暖一下",
+                "嘴巴有點乾，去倒杯溫水，不敢喝冰的",
+            ]
+        elif is_tired:
+            msgs = [
+                "畫到眼睛有點酸，先去倒杯水走動一下",
+                "我去廚房倒杯水提個神，順便伸個懶腰",
+            ]
+        else:
+            msgs = [
+                "我先去廚房倒杯水喝喔",
+                "嘴巴有點乾，去倒個水順便看看麻糬在幹嘛",
+            ]
+        chosen_msg = random.choice(msgs)
+        loc = "雪梨住處廚房"
+
+    else:  # feed_cat
+        away_reason = "在餵麻糬吃飯"
+        away_until = (now + timedelta(minutes=4)).isoformat()
+        msgs = [
+            "麻糬一直在我腳邊喵喵叫討飯了，我先去餵牠",
+            "時間差不多了，我去幫麻糬倒飼料跟換水",
+        ]
+        chosen_msg = random.choice(msgs)
+        loc = "雪梨住處客廳"
+
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE runtime_state
+            SET routine_tracker = ?,
+                location = ?,
+                away_reason = ?,
+                away_until = ?
+            WHERE id = 1
+            """,
+            (json.dumps(tracker, ensure_ascii=False), loc, away_reason, away_until),
+        )
+
+    log_memory("Reona", chosen_msg, category="routine", emotion_tag="neutral")
+    return chosen, chosen_msg
+
+
 def record_proactive_ping() -> dict:
     init_db()
     with get_conn() as conn:
@@ -323,6 +515,12 @@ def compute_snapshot() -> str:
     now = now_sydney()
 
     with get_conn() as conn:
+        if state.get("physical_until") and state["physical_until"] < now.isoformat():
+            conn.execute(
+                "UPDATE runtime_state SET physical_state = '正常', physical_until = NULL WHERE id = 1"
+            )
+            state["physical_state"] = "正常"
+
         if state.get("last_meal_until") and state["last_meal_until"] < now.isoformat():
             conn.execute(
                 "UPDATE runtime_state SET last_meal_info = NULL, last_meal_until = NULL WHERE id = 1"
@@ -332,6 +530,14 @@ def compute_snapshot() -> str:
         if state.get("pending_decision_until") and state["pending_decision_until"] < now.isoformat():
             conn.execute("UPDATE runtime_state SET pending_decision_until = NULL WHERE id = 1")
             state["pending_decision_until"] = None
+
+        just_returned_note = ""
+        if state.get("away_reason"):
+            if state.get("away_until") and state["away_until"] >= now.isoformat():
+                just_returned_note = f"（剛剛才說「{state['away_reason']}」，現在剛好回來看到訊息，可自然順口提一句剛回來）"
+            conn.execute(
+                "UPDATE runtime_state SET away_reason = NULL, away_until = NULL, location = '雪梨住處畫桌前' WHERE id = 1"
+            )
 
         memories = conn.execute(
             """
@@ -350,7 +556,7 @@ def compute_snapshot() -> str:
 
     lines = [
         f"【雪梨當地時間】{now.strftime('%Y-%m-%d %H:%M')}（清醒時段 08:00–24:00）",
-        f"【Reona 當前位置與狀態】{state.get('location') or '雪梨住處畫桌前'}｜身體：{state.get('physical_state') or '正常'}｜情緒：{state.get('emotional_state') or '平穩'}",
+        f"【Reona 當前位置與狀態】{state.get('location') or '雪梨住處畫桌前'}｜身體：{state.get('physical_state') or '正常'}｜情緒：{state.get('emotional_state') or '平穩'}{just_returned_note}",
     ]
 
     if state.get("agreed_plan"):
