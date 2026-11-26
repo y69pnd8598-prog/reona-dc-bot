@@ -51,8 +51,11 @@ TW_REPLACEMENTS = {
     "意式": "義式",
     "作為獎勵": "當獎勵",
     "靈感爆棚": "很有靈感",
+    "腸胃調整": "肚子順一下",
+    "腸胃調": "肚子順一下",
     "再說，": "",
     "再說,": "",
+    "。": "",
 }
 
 PROMPT_LEAK_KEYWORDS = (
@@ -102,6 +105,7 @@ LOW_EFFORT_INPUTS = {"?", "？", "嗯", "嗯嗯", "喔", "哦", "好", "好喔",
 QUESTION_HINTS = (
     "？", "?", "什麼", "哪", "怎麼", "為何", "為什麼", "嗎",
     "幾點", "誰", "多少", "要不要", "有沒有", "是不是", "吃了", "畫了",
+    "幹嘛", "做什麼",
 )
 VIDEO_KEYWORDS = ("視訊", "開鏡頭", "打給妳", "打給你", "facetime", "video call", "開視訊")
 WORK_KEYWORDS = ("工作", "畫", "插畫", "案子", "稿", "設計", "客戶", "忙什麼", "在忙", "顏料", "圖")
@@ -255,6 +259,9 @@ def clean_and_split_lines(
         if not line:
             continue
 
+        if line.startswith(("什麼？我跟你說", "什麼?我跟你說")):
+            continue
+
         if idx > 0 and len(line) <= 6 and line.startswith(("不過", "但是", "可是", "然後")):
             continue
 
@@ -298,14 +305,15 @@ def _is_too_similar_to_recent(candidate: str, recent_reona_lines: List[str]) -> 
     norm_cand = _normalize_for_repeat_check(candidate)
     if not norm_cand:
         return True
-    for prev in recent_reona_lines[-6:]:
+    for prev in recent_reona_lines[-3:]:
         norm_prev = _normalize_for_repeat_check(prev)
         if not norm_prev:
             continue
         if norm_cand == norm_prev:
             return True
-        shorter, longer = (norm_cand, norm_prev) if len(norm_cand) <= len(norm_prev) else (norm_prev, norm_cand)
-        if len(shorter) >= 4 and shorter in longer:
+        common = sum(1 for ch in set(norm_cand) if ch in norm_prev)
+        ratio = common / max(len(set(norm_cand)), len(set(norm_prev)), 1)
+        if ratio >= 0.85 and abs(len(norm_cand) - len(norm_prev)) <= 2:
             return True
     return False
 
@@ -367,6 +375,7 @@ def build_system_prompt(
         "- 完全像一般20幾歲台灣女生在 LINE / Discord 打字，自然穿插年輕人日常口語（例如：『笑死』『真假』『好扯』『超煩』『耍廢』『先躺』『QQ』『好喔』『幹嘛啦』『還好嗎』）。\n"
         "- 適時帶一點自然 Emoji 或簡單顏文字增加情緒（例如 🥺、🥲、😮‍💨、🙄、🫠、🤣、💤、QQ），但一則最多放 1 個，不要每句都硬加、也不要用油膩愛心海。\n"
         "- 嚴禁健康衛教或客服說教口吻（禁止『再說，』『免得』『擾亂』『安靜下來』『咱的』、句尾『呢』『呀』、不加句號）。\n"
+        "- 順著剛才的對話自然接話，不要突然跳tone回『什麼？我跟你說……』，也不要硬塞不搭的 Emoji。\n"
         "- 不要每句都在重複講胃悶或消化，除非他問起。\n"
         f"- {task_line}\n"
         f"- 腸胃弱不吃太甜膩（法式長棍是脆硬麥香麵包，不是甜食）。{cat_rule}{work_rule}{evening_str}\n"
@@ -525,8 +534,16 @@ class ReonaBot(discord.Client):
                 continue
             filtered_lines.append(line)
 
-        if not filtered_lines and lines:
-            filtered_lines = [lines[0]]
+        if not filtered_lines:
+            alt_pool = [
+                "嗯？怎麼了",
+                "剛在發呆，你呢",
+                "在滑手機啦，幹嘛",
+                "剛喝口水，怎麼突然找我",
+                "還好啦，你現在在忙嗎",
+            ]
+            unused = [a for a in alt_pool if not _is_too_similar_to_recent(a, self._recent_reona_lines)]
+            filtered_lines = [random.choice(unused or alt_pool)]
 
         for idx, line in enumerate(filtered_lines):
             if idx > 0:
