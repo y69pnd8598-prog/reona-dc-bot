@@ -103,6 +103,14 @@ def init_db() -> None:
             },
         )
 
+        _ensure_columns(
+            conn,
+            "nick_notes",
+            {
+                "expires_at": "TEXT",
+            },
+        )
+
 
 def morning_wakeup_reset() -> dict:
     """
@@ -119,7 +127,6 @@ def morning_wakeup_reset() -> dict:
         state = dict(conn.execute("SELECT * FROM runtime_state WHERE id = 1").fetchone())
 
         if (state.get("last_active_date") or "") != today_str:
-            # 1. Delete routine chatter older than yesterday 18:00
             conn.execute(
                 """
                 DELETE FROM daily_memories
@@ -129,7 +136,6 @@ def morning_wakeup_reset() -> dict:
                 (yesterday_str, yesterday_str),
             )
 
-            # 2. Mark remaining yesterday memories (18:00+ or notable emotional events)
             conn.execute(
                 """
                 UPDATE daily_memories
@@ -139,13 +145,11 @@ def morning_wakeup_reset() -> dict:
                 (yesterday_str,),
             )
 
-            # 3. Clean expired nick notes
             conn.execute(
                 "DELETE FROM nick_notes WHERE expires_at IS NOT NULL AND expires_at < ?",
                 (now.isoformat(),),
             )
 
-            # 4. Reset daily physical/agreement flags while keeping ongoing sulk if unanswered
             conn.execute(
                 """
                 UPDATE runtime_state
