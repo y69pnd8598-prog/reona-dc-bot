@@ -2,30 +2,6 @@
   "recent_turns": [
     {
       "role": "user",
-      "content": "今天吃了什麼"
-    },
-    {
-      "role": "assistant",
-      "content": "在呀，剛剛在放空"
-    },
-    {
-      "role": "user",
-      "content": "今天吃了什麼"
-    },
-    {
-      "role": "assistant",
-      "content": "嗯嗯，我剛剛在想事情"
-    },
-    {
-      "role": "user",
-      "content": "寶貝"
-    },
-    {
-      "role": "assistant",
-      "content": "欸我剛恍神一下，再說一次"
-    },
-    {
-      "role": "user",
       "content": "寶貝"
     },
     {
@@ -47,7 +23,31 @@
     {
       "role": "assistant",
       "content": "嗯嗯，我剛剛在想事情"
+    },
+    {
+      "role": "user",
+      "content": "寶貝"
+    },
+    {
+      "role": "assistant",
+      "content": "你怎麼樣啊？"
+    },
+    {
+      "role": "user",
+      "content": "還好"
+    },
+    {
+      "role": "assistant",
+      "content": "在呢，你剛剛說什麼"
+    },
+    {
+      "role": "user",
+      "content": "是"
+    },
+    {
+      "role": "assistant",
+      "content": "在呀，剛剛在放空"
     }
   ],
-  "updated_at": "2026-11-26T22:00:16.777628+11:00"
+  "updated_at": "2026-11-26T22:05:42.899539+11:00"
 }
