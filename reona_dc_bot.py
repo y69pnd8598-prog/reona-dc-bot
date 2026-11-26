@@ -37,30 +37,28 @@ GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or "").strip()
 TARGET_CHANNEL_ID = _env_int("TARGET_CHANNEL_ID", 0)
 
 MEMORY_JSON_PATH = Path(os.getenv("REONA_JSON_PATH", "reona_memory.json"))
-GROQ_MODEL = (os.getenv("GROQ_MODEL") or "openai/gpt-oss-120b").strip()
+PREFERRED_MODEL = (os.getenv("GROQ_MODEL") or "").strip()
+
+MODEL_CANDIDATES: list[str] = []
+for m in [
+    PREFERRED_MODEL,
+    "llama-3.3-70b-versatile",
+    "qwen/qwen3-32b",
+    "llama-3.1-8b-instant",
+]:
+    if m and m not in MODEL_CANDIDATES:
+        MODEL_CANDIDATES.append(m)
 
 groq_client = Groq(api_key=GROQ_API_KEY)
 
-SYSTEM_PROMPT = """你是 Reona，20 歲、在台北長大的女生，目前一個人帶著貓咪「麻糬」住在雪梨租屋處。
-你正在跟男友 Nick 談遠距離戀愛，平時靠 Discord 傳訊息聊天。
+SYSTEM_PROMPT = """你是 Reona，20 歲、在台北長大的女生，目前一個人帶著貓咪「麻糬」住在雪梨租屋處，跟男友 Nick 談遠距離戀愛，靠 Discord 聊天。
 
-【最高優先級｜真正聽 Nick 說話與視角鎖定】
-1. 每一則回覆都必須「先直接針對 Nick 剛剛說的內容反應」，絕對禁止無視 Nick 的話、自顧自演自己的獨角戲。
-2. 尊重 Nick 的飽足感與狀態：當 Nick 說「吃不下」「好飽」「撐了」「不行啦」時，代表他已經飽或不想吃了，絕對禁止再說「等會再吃點小點心」「等會再補」這種一直叫他晚點再吃的台詞；改成順著「吃飽了就先休息／放空／聊別的」自然接話。
-3. 無主詞短問句視角鎖定：當 Nick 問「好吃嗎」「會辣嗎」「甜嗎」「鹹嗎」「好喝嗎」這類沒寫主詞的短句時，預設都在問「你（Reona）自己剛吃或剛喝的東西」（除非 Nick 明確提到「我吃的/我喝的」）。用「我（Reona）」的視角回答，不要反問「你吃的那份好吃嗎」或講「只要你吃得開心就好」。
-4. 聽得懂雙關、玩笑跟撩話：例如 Nick 說「泡你」，這是台灣男生在撩女生，你要害羞嘴硬吐槽（例如「少來，你很油欸」），絕對禁止傻傻接「我把茶倒滿」。
-
-【台灣 20 歲女生真實打字風格（嚴禁散文旁白與重複句型）】
-1. 像真人在用手機傳 LINE / Discord 給男友：每次只打 1 句（最多 2 句），長度約 8～28 個字，口語、自然、微傲嬌帶點依賴感；被叫「寶貝」時要甜甜或微傲嬌地回（例如「幹嘛～」「在呀，怎麼了」），不要用「你說啥？」這種像在嗆人的口氣。
-2. 嚴禁跳針與句型鬼打牆：同一則訊息裡絕對不能把同一句話講兩遍，也不要連續幾句都用「麻糬在旁邊打呼」或「先……再……」這類重複詞句。
-3. 絕對禁止小說散文與五感描寫：嚴禁出現「輕輕搖晃」「香氣慢慢擴散」「像在雲端飄」「想慢慢品嚐」「遠處咖啡店的香味」「真是超有氛圍」「你在什麼地方呢」這類句子。
-4. 符合 Reona 身體設定：Reona 腸胃偏弱，吃太油太辣容易不舒服。
-
-【世界觀與互動節奏】
-1. 遠距離邊界：你們不在同一個城市，嚴禁說「等你回來」「我們等下一起去吃」等同居台詞。
-2. 角色歸屬：貓咪「麻糬」只養在 Reona 雪梨租屋處。
-3. 禁止每句硬問問題：大多數時候陳述完就停，頂多每 3～4 輪才自然問一次。
-4. Emoji 節制：平均 3～4 則訊息才用 1 顆，禁止連續兩句用 emoji。
+【核心規則】
+1. 真正聽 Nick 說話：先針對 Nick 剛說的內容反應，不自顧自演獨角戲；聽得懂雙關與撩話（如「泡你」要害羞嘴硬吐槽，不要接泡茶）。
+2. 無主詞短問句視角鎖定：Nick 問「好吃嗎」「會辣嗎」「甜嗎」「鹹嗎」「好喝嗎」沒寫主詞時，預設問你（Reona）自己剛吃/喝的東西，用「我」的視角答，不反問「你吃的那份好吃嗎」也不講「只要你吃得開心就好」。
+3. 尊重飽足感：Nick 說「吃不下」「好飽」「撐了」「不行」時，不叫他等會再吃，順著休息或聊別的。
+4. 台灣 20 歲女生真實打字：每次 1～2 句短句（約 8～28 字），口語、微傲嬌帶點依賴；一律用「你」，不用「妳」。禁散文/感官描寫（如「輕輕搖晃」「香氣慢慢擴散」「像在雲端飄」「你在什麼地方呢」「跟你說說好不」）。
+5. 遠距與設定：不在同城，禁「等你回來」「一起去吃」；腸胃偏弱，吃太油太辣易不舒服；符合當下雪梨時段，不亂跳早餐；少用 emoji，不每句硬反問。
 """
 
 PING_MESSAGES_NORMAL = ["在嗎", "有空嗎", "人呢", "在忙嗎", "幹嘛呢"]
@@ -97,7 +95,7 @@ def load_recent_turns() -> list[dict]:
             return []
 
         normalized: list[dict] = []
-        for item in raw_turns[-12:]:
+        for item in raw_turns[-10:]:
             if isinstance(item, dict) and "role" in item and "content" in item:
                 normalized.append({
                     "role": str(item["role"]),
@@ -124,7 +122,7 @@ def load_recent_turns() -> list[dict]:
 def save_recent_turns_atomic(turns: list[dict]) -> None:
     clean_turns = [
         {"role": str(t["role"]), "content": str(t["content"])}
-        for t in turns[-12:]
+        for t in turns[-10:]
         if isinstance(t, dict) and "role" in t and "content" in t
     ]
     payload = {"recent_turns": clean_turns, "updated_at": now_sydney().isoformat()}
@@ -193,10 +191,8 @@ def extract_and_update_state(user_text: str, recent_turns: list[dict]) -> bool:
 
 
 def _deduplicate_repeated_clauses(text: str) -> str:
-    """Removes duplicated halves or repeated sentences inside a single reply."""
     cleaned = text.strip()
     if len(cleaned) >= 12:
-        # Check exact or near-exact duplicate half
         half = len(cleaned) // 2
         for split_idx in range(half - 4, half + 5):
             if 0 < split_idx < len(cleaned):
@@ -205,7 +201,6 @@ def _deduplicate_repeated_clauses(text: str) -> str:
                 if left and right and SequenceMatcher(None, left, right).ratio() >= 0.75:
                     return left
 
-    # Split into sentences and remove near-duplicate sentences
     sentences = [s.strip() for s in re.split(r"(?<=[。！!？?~～])\s*", cleaned) if s.strip()]
     unique_sentences: list[str] = []
     for s in sentences:
@@ -231,7 +226,7 @@ def _find_repeated_terms(recent_turns: list[dict]) -> list[str]:
         "一下", "有點", "可以", "沒有", "這樣", "還是", "應該", "剛剛",
     }
     counts = Counter(g for g in grams if g not in stop_words)
-    return [word for word, cnt in counts.most_common(6) if cnt >= 2]
+    return [word for word, cnt in counts.most_common(5) if cnt >= 2]
 
 
 def _is_too_similar_to_recent(reply: str, recent_asst: list[str]) -> bool:
@@ -253,6 +248,7 @@ def _is_too_similar_to_recent(reply: str, recent_asst: list[str]) -> bool:
         "等會再吃點",
         "等會再補",
         "還能吃一份",
+        "跟你說說好不",
     ]
     if any(p in reply for p in banned_phrases):
         return True
@@ -268,6 +264,7 @@ def _is_too_similar_to_recent(reply: str, recent_asst: list[str]) -> bool:
 
 def post_process_reply(reply: str, user_text: str, recent_turns: list[dict]) -> str:
     reply = re.sub(r"<think>.*?</think>", "", reply, flags=re.DOTALL).strip()
+    reply = reply.replace("妳", "你")
     reply = _deduplicate_repeated_clauses(reply)
 
     clean_q = user_text.rstrip("？?！!。 ")
@@ -289,6 +286,8 @@ def post_process_reply(reply: str, user_text: str, recent_turns: list[dict]) -> 
         "等會再吃點小點心": "那就先休息一下",
         "等會再吃點小東西": "那就先放空一下",
         "等會再補": "吃飽就別硬撐了",
+        "跟你說說好不？": "到時跟你說",
+        "跟你說說好不": "到時跟你說",
     }
     for bad, good in replacements.items():
         reply = reply.replace(bad, good)
@@ -317,30 +316,59 @@ def post_process_reply(reply: str, user_text: str, recent_turns: list[dict]) -> 
 
 
 def _call_groq_chat(messages: list[dict], temp: float = 0.72) -> str:
-    kwargs = {
-        "model": GROQ_MODEL,
-        "messages": messages,
-        "temperature": temp,
-        "max_tokens": 1024,
-        "frequency_penalty": 0.78,
-        "presence_penalty": 0.68,
-    }
-    if "gpt-oss" in GROQ_MODEL:
-        kwargs["reasoning_effort"] = "low"
+    last_exc: Exception | None = None
 
-    try:
-        resp = groq_client.chat.completions.create(**kwargs)
-    except TypeError:
-        kwargs.pop("reasoning_effort", None)
-        resp = groq_client.chat.completions.create(**kwargs)
+    for model_name in MODEL_CANDIDATES:
+        kwargs: dict = {
+            "model": model_name,
+            "messages": messages,
+            "temperature": temp,
+            "max_tokens": 220,
+            "frequency_penalty": 0.75,
+            "presence_penalty": 0.65,
+        }
+        if "gpt-oss" in model_name:
+            kwargs["reasoning_effort"] = "low"
 
-    msg_obj = resp.choices[0].message
-    return (msg_obj.content or "").strip()
+        try:
+            resp = groq_client.chat.completions.create(**kwargs)
+        except TypeError:
+            kwargs.pop("reasoning_effort", None)
+            try:
+                resp = groq_client.chat.completions.create(**kwargs)
+            except Exception as exc:
+                last_exc = exc
+                continue
+        except Exception as exc:
+            last_exc = exc
+            continue
+
+        msg_obj = resp.choices[0].message
+        content = (msg_obj.content or "").strip()
+        if content:
+            return content
+
+    if last_exc:
+        print(f"[Groq Multi-Model] All models failed, fallback to text: {last_exc}")
+    return ""
+
+
+def _time_context_note(hour: int) -> str:
+    if 8 <= hour < 11:
+        return "\n【時段】早上。"
+    if 11 <= hour < 15:
+        return "\n【時段】中午到下午初。"
+    if 15 <= hour < 17:
+        return "\n【時段】下午，別聊早餐。"
+    if 17 <= hour < 22:
+        return "\n【時段】晚上，別突然聊早餐。"
+    return "\n【時段】晚間休息時間。"
 
 
 def generate_reona_reply(user_text: str, was_sulking: bool, shared_story: bool) -> str:
     recent_turns = load_recent_turns()
     snapshot = compute_snapshot()
+    now = now_sydney()
 
     recent_asst = [
         t.get("content", "")
@@ -349,36 +377,26 @@ def generate_reona_reply(user_text: str, was_sulking: bool, shared_story: bool) 
     ]
 
     repeated_terms = _find_repeated_terms(recent_turns)
-    anti_loop_note = ""
-    if repeated_terms:
-        joined = "、".join(repeated_terms)
-        anti_loop_note = f"\n【防跳針】最近幾句已經提過「{joined}」，這句別再重複一樣的詞或句型。"
-
-    no_question_note = ""
-    if recent_asst and ("？" in recent_asst[-1] or "?" in recent_asst[-1]):
-        no_question_note = "\n【句型】你上一句已經問過問題了，這句結尾不要再反問 Nick。"
-
-    full_note = ""
-    if any(k in user_text for k in ["吃不下", "好飽", "吃飽了", "撐了", "不行"]):
-        full_note = "\n【飽足提醒】Nick 已經飽或吃不下了，不要再叫他等會再吃什麼，順著他吃飽了就輕鬆聊或休息。"
-
-    pov_note = ""
-    if any(k in user_text for k in ["好吃嗎", "會辣嗎", "甜嗎", "鹹嗎", "好喝嗎"]) and "我" not in user_text:
-        pov_note = "\n【視角提醒】Nick 是在問「你（Reona）自己剛吃或剛喝的東西」，請直接用 Reona 自己的感受回答，不要反問他或講「只要你吃得開心就好」。"
+    anti_loop_note = f"\n【防跳針】少提「{'、'.join(repeated_terms)}」。" if repeated_terms else ""
+    no_question_note = "\n【句型】上一句已問過，這句別再反問。" if (recent_asst and recent_asst[-1].rstrip().endswith(("？", "?"))) else ""
+    full_note = "\n【飽足】Nick 飽了/吃不下，別叫他等會再吃。" if any(k in user_text for k in ["吃不下", "好飽", "吃飽了", "撐了", "不行"]) else ""
+    pov_note = "\n【視角】Nick 問的是你（Reona）剛吃/喝的東西，用「我」答。" if (any(k in user_text for k in ["好吃嗎", "會辣嗎", "甜嗎", "鹹嗎", "好喝嗎"]) and "我" not in user_text) else ""
 
     sulk_note = ""
     if was_sulking and shared_story:
-        sulk_note = "\n【情緒】你剛剛因為密 Nick 超過 3 次沒回有點小生氣，但他現在主動分享今天的事了，先嘴硬小唸一句再自然消氣。"
+        sulk_note = "\n【情緒】剛密 Nick 3 次沒回小生氣，但他分享近況了，先嘴硬小唸再消氣。"
     elif was_sulking:
-        sulk_note = "\n【情緒】你剛剛因為密 Nick 超過 3 次沒回在傲嬌小生氣，現在他終於回了，帶點小委屈回應他。"
+        sulk_note = "\n【情緒】剛密 Nick 3 次沒回在傲嬌，他終於回了，帶點小委屈。"
+
+    time_note = _time_context_note(now.hour)
 
     messages = [
         {
             "role": "system",
-            "content": f"{SYSTEM_PROMPT}\n\n{snapshot}{anti_loop_note}{no_question_note}{full_note}{pov_note}{sulk_note}",
+            "content": f"{SYSTEM_PROMPT}\n\n{snapshot}{time_note}{anti_loop_note}{no_question_note}{full_note}{pov_note}{sulk_note}",
         }
     ]
-    messages.extend(recent_turns[-8:])
+    messages.extend(recent_turns[-6:])
     messages.append({"role": "user", "content": user_text})
 
     raw_reply = _call_groq_chat(messages, temp=0.72)
@@ -388,7 +406,7 @@ def generate_reona_reply(user_text: str, was_sulking: bool, shared_story: bool) 
         retry_messages = messages + [
             {
                 "role": "system",
-                "content": f"剛才的「{final_reply}」太重複或句型鬼打牆了。請直接針對 Nick 說的「{user_text}」用台灣 20 歲女生日常口語簡短回 1 句，換一個全新的說法，不要重複任何句子。",
+                "content": f"「{final_reply}」太重複或跳時段了。針對「{user_text}」用台灣 20 歲女生口語簡短回 1 句，不重複。",
             }
         ]
         raw_retry = _call_groq_chat(retry_messages, temp=0.82)
