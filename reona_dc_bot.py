@@ -21,10 +21,15 @@ from reona_bg_db import (
     unlock_agreement_done,
 )
 
+
+def _env_int(name: str, default: int = 0) -> int:
+    val = (os.getenv(name) or "").strip()
+    return int(val) if val.isdigit() else default
+
+
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-TARGET_CHANNEL_ID = int(os.getenv("TARGET_CHANNEL_ID", "0"))
-NICK_USER_ID = int(os.getenv("NICK_USER_ID", "0"))
+TARGET_CHANNEL_ID = _env_int("TARGET_CHANNEL_ID", 0)
 
 MEMORY_JSON_PATH = Path(os.getenv("REONA_JSON_PATH", "reona_memory.json"))
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
@@ -46,16 +51,6 @@ SYSTEM_PROMPT = """你是 Reona，24 歲、在台北長大的自由接案插畫�
 4. Emoji 節制：平均 2～3 則訊息才用 1 個表情符號，且禁止連續兩句用同一顆（例如不要一直 😅）。
 5. 情緒記憶連貫：無論是 Reona 自己分享的還是 Nick 分享的開心或難過事件，都要牢牢記住並在後續對話自然關心或接梗。
 """
-
-FORBIDDEN_PHRASES = [
-    "等你回來",
-    "等我過去",
-    "我過去找你",
-    "回來一起吃",
-    "回來早一點",
-    "在畫桌前躺著",
-    "在畫桌前先躺著",
-]
 
 PING_MESSAGES_NORMAL = ["在嗎", "有空嗎", "人呢", "在忙嗎", "幹嘛呢"]
 PING_MESSAGES_SULK = [
@@ -215,8 +210,6 @@ class ReonaBot(discord.Client):
         if message.author.bot:
             return
         if TARGET_CHANNEL_ID and message.channel.id != TARGET_CHANNEL_ID:
-            return
-        if NICK_USER_ID and message.author.id != NICK_USER_ID:
             return
 
         now = now_sydney()
