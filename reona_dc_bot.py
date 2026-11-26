@@ -10,6 +10,8 @@ import aiohttp
 import discord
 
 from reona_bg_db import SYDNEY_TZ, ReonaBGDB
+from reona_rag import ReonaMemoryRAG
+
 
 def _env_int(name: str, default: int, minimum: Optional[int] = None) -> int:
     """Read an integer environment variable without crashing on bad configuration."""
@@ -95,8 +97,6 @@ VIDEO_KEYWORDS = ("視訊", "開鏡頭", "打給妳", "打給你", "facetime", "
 WORK_KEYWORDS = ("工作", "畫", "插畫", "案子", "稿", "設計", "客戶", "忙什麼", "在忙", "顏料")
 
 ACTION_KEYWORDS: Dict[str, tuple] = {
-    # Completion phrases only. Generic words such as「晚餐」「超市」caused
-    # questions/plans to be recorded as completed actions.
     "eat_meal": ("吃飽了", "吃完了", "吃好了", "已經吃了"),
     "shower": ("洗完澡了", "洗好了澡", "澡洗好了"),
     "grocery": ("採買好了", "買完菜了", "補貨好了"),
@@ -116,6 +116,15 @@ def _groq_endpoint() -> str:
     return f"https://{host}/openai/v1/chat/completions"
 
 
+def _is_sydney_evening_rest(now_dt: datetime.datetime) -> bool:
+    """雪梨晚間 20:30 後至隔日 08:00 前視為室內休息時段。"""
+    if now_dt.hour > 20 or (now_dt.hour == 20 and now_dt.minute >= 30):
+        return True
+    if now_dt.hour < 8:
+        return True
+    return False
+
+
 def _looks_like_english_cot(text: str) -> bool:
     s = text.strip()
     if not s:
@@ -129,8 +138,6 @@ def _looks_like_english_cot(text: str) -> bool:
     alpha_count = len(re.findall(r"[A-Za-z]", s))
     if (not has_cjk) and alpha_count > 3:
         return True
-    # Mixed Chinese/English is common in natural chat (e.g. app names and names).
-    # Do not reject it merely because it contains several Latin letters.
     return False
 
 
@@ -141,7 +148,6 @@ def _has_prompt_leak(text: str) -> bool:
 def _extract_groq_text(msg: Dict) -> str:
     content = msg.get("content")
     if isinstance(content, list):
-        # Some OpenAI-compatible endpoints return content as typed text parts.
         content = "\n".join(
             part.get("text", "")
             for part in content
@@ -158,7 +164,7 @@ def _extract_groq_text(msg: Dict) -> str:
         and not _looks_like_english_cot(ln)
         and not _has_prompt_leak(ln)
     ]
-    return "\\n".join(kept)
+    return "\n".join(kept)
 
 
 def _trim_at_boundary(chunk: str, max_chars: int) -> str:
@@ -230,13 +236,35 @@ def clean_and_split_lines(raw: str, max_msgs: int, max_chars: int, user_text: st
     return deduped[:max_msgs]
 
 
+def _normalize_for_repeat_check(text: str) -> str:
+    return re.sub(r"[\s，。！？、～~…．・]+", "", (text or "").strip().lower())
+
+
+def _is_too_similar_to_recent(candidate: str, recent_reona_lines: List[str]) -> bool:
+    norm_cand = _normalize_for_repeat_check(candidate)
+    if not norm_cand:
+        return True
+    for prev in recent_reona_lines[-3:]:
+        norm_prev = _normalize_for_repeat_check(prev)
+        if not norm_prev:
+            continue
+        if norm_cand == norm_prev:
+            return True
+        shorter, longer = (norm_cand, norm_prev) if len(norm_cand) <= len(norm_prev) else (norm_prev, norm_cand)
+        if len(shorter) >= 5 and shorter in longer:
+            return True
+    return False
+
+
 def build_system_prompt(
     snapshot: Dict,
-    clues: Dict,
+    matched_card: Optional[Dict],
+    recent_turns: List[str],
     is_proactive: bool = False,
     allow_work: bool = False,
+    is_evening_rest: bool = False,
 ) -> str:
-    """組裝緊扣世界狀態、身體譜系與 Reona 性格反差的 System Prompt。"""
+    """組裝結合當下狀態、RAG 單筆參考卡片與近期對話的 System Prompt。"""
     mode = snapshot["mode"]
     min_m, max_m = snapshot["min_msgs"], snapshot["max_msgs"]
     max_c = snapshot["max_chars"]
@@ -293,13 +321,25 @@ def build_system_prompt(
         else ""
     )
 
+    evening_guard = (
+        "- 作息限制：現在是雪梨晚間休息時段，只能待在室內休息，絕不出門買東西或喝濃咖啡。"
+        if is_evening_rest
+        else ""
+    )
+
     gi_line = f"- 腸胃誘因：{snapshot['gi_cause']}" if snapshot["gi_cause"] else ""
-    clue_lines = [
-        f"- 相關記憶切片：{clues['life_snippet']}" if clues.get("life_snippet") else "",
-        f"- 近期案子（僅在對方問工作時參考）：{clues['story_arc']}" if (allow_work and clues.get("story_arc")) else "",
-        f"- 記憶底色：{clues['daily_memory']}" if clues.get("daily_memory") else "",
-    ]
-    clue_block = "\n".join(x for x in clue_lines if x)
+
+    rag_block = ""
+    if matched_card and matched_card.get("content"):
+        if matched_card.get("category") != "work" or allow_work:
+            rag_block = (
+                f"- 相關背景參考（僅當自然扣得上眼前話題時參考，不搭就別硬套）："
+                f"{matched_card['content']}"
+            )
+
+    turns_block = ""
+    if recent_turns:
+        turns_block = "【近期對話紀錄（僅供接話脈絡，勿直接重複剛說過的話）】\n" + "\n".join(recent_turns[-6:])
 
     return (
         "你是 Reona，20多歲台北長大、現居雪梨的獨立插畫師，養一隻貓叫麻糬（提到麻糬一律用『牠』，不可用『他』）。\n"
@@ -322,20 +362,24 @@ def build_system_prompt(
         f"- 地點與狀態：{snapshot['location']}（{snapshot['positions']}）\n"
         f"- 身邊物品：{snapshot['items']}\n"
         f"{done_line}\n"
+        f"{evening_guard}\n"
         f"{gi_line}\n"
-        f"{clue_block}"
+        f"{rag_block}\n"
+        f"{turns_block}"
     ).strip()
 
 
 class ReonaBot(discord.Client):
-    def __init__(self, db: ReonaBGDB):
+    def __init__(self, db: ReonaBGDB, rag: Optional[ReonaMemoryRAG] = None):
         intents = discord.Intents.default()
         intents.message_content = True
         super().__init__(intents=intents)
         self.db = db
+        self.rag = rag or ReonaMemoryRAG(api_key=GEMINI_API_KEY)
         self.http_session: Optional[aiohttp.ClientSession] = None
         self._session_started = False
         self._gemini_quota_exhausted = False
+        self._recent_reona_lines: List[str] = []
 
     def _touch(self, nick: bool = False, reona: bool = False, proactive: bool = False) -> None:
         if hasattr(self.db, "touch_timestamps"):
@@ -351,10 +395,22 @@ class ReonaBot(discord.Client):
             if any(k in combined for k in kws):
                 self.db.mark_action_done(action_key)
 
+    def _seed_recent_reona_from_memory(self) -> None:
+        for turn in self.rag.get_recent_turns(limit=8):
+            if turn.startswith("Reona:"):
+                line = turn.split(":", 1)[1].strip()
+                if line and line not in self._recent_reona_lines:
+                    self._recent_reona_lines.append(line)
+        self._recent_reona_lines = self._recent_reona_lines[-6:]
+
     async def setup_hook(self) -> None:
         self.http_session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15))
 
     async def close(self) -> None:
+        try:
+            self.rag.save_if_dirty()
+        except Exception as e:
+            print(f"[RAG Save On Close Warning] {type(e).__name__}: {e}", flush=True)
         if self.http_session and not self.http_session.closed:
             await self.http_session.close()
         await super().close()
@@ -403,7 +459,7 @@ class ReonaBot(discord.Client):
                 continue
 
         if GEMINI_API_KEY and not self._gemini_quota_exhausted:
-            url = _gemini_endpoint("gemini-3.8-flash")
+            url = _gemini_endpoint("gemini-2.5-flash")
             try:
                 async with self.http_session.post(
                     url,
@@ -430,29 +486,44 @@ class ReonaBot(discord.Client):
                                 if isinstance(part, dict) and isinstance(part.get("text"), str)
                             ).strip()
                         if content:
-                            print(f"[LLM gemini-3.8-flash OK] raw={content!r}", flush=True)
+                            print(f"[LLM gemini-2.5-flash OK] raw={content!r}", flush=True)
                             return content
                         print(
                             f"[LLM Gemini] No usable text in response: {json.dumps(data, ensure_ascii=False)[:300]}",
                             flush=True,
                         )
                     err_txt = await resp.text()
-                    print(f"[LLM gemini-3.8-flash HTTP {resp.status}] {err_txt[:200]}", flush=True)
+                    print(f"[LLM gemini-2.5-flash HTTP {resp.status}] {err_txt[:200]}", flush=True)
                     if resp.status == 429:
                         self._gemini_quota_exhausted = True
             except Exception as e:
-                print(f"[LLM gemini-3.8-flash Exception] {type(e).__name__}: {repr(e)}", flush=True)
+                print(f"[LLM gemini-2.5-flash Exception] {type(e).__name__}: {repr(e)}", flush=True)
 
         return None
 
     async def _send_burst(self, channel: discord.abc.Messageable, lines: List[str], delay_range: tuple) -> None:
-        for idx, line in enumerate(lines):
+        filtered_lines: List[str] = []
+        for line in lines:
+            if _is_too_similar_to_recent(line, self._recent_reona_lines):
+                print(f"[Repeat Guard Skipped] {line!r}", flush=True)
+                continue
+            filtered_lines.append(line)
+
+        if not filtered_lines and lines:
+            filtered_lines = [lines[0]]
+
+        for idx, line in enumerate(filtered_lines):
             if idx > 0:
                 await asyncio.sleep(random.uniform(*delay_range))
             async with channel.typing():
                 typing_sec = min(2.4, max(0.6, len(line) * 0.1))
                 await asyncio.sleep(typing_sec)
             await channel.send(line)
+            self._recent_reona_lines.append(line)
+            self._recent_reona_lines = self._recent_reona_lines[-6:]
+            self.rag.append_turn("Reona", line)
+
+        self.rag.save_if_dirty()
         self._touch(reona=True)
 
     async def maybe_send_proactive(self, channel: discord.abc.Messageable) -> bool:
@@ -475,8 +546,15 @@ class ReonaBot(discord.Client):
         if snap["already_mentioned_slot"] and snap["gi_status"] == "normal" and snap.get("illness_status") == "normal":
             return False
 
-        clues = self.db.retrieve_rag_clue(snap, user_text="")
-        sys_prompt = build_system_prompt(snap, clues, is_proactive=True, allow_work=False)
+        recent_turns = self.rag.get_recent_turns(limit=6)
+        sys_prompt = build_system_prompt(
+            snap,
+            matched_card=None,
+            recent_turns=recent_turns,
+            is_proactive=True,
+            allow_work=False,
+            is_evening_rest=_is_sydney_evening_rest(now_dt),
+        )
         raw = await self._call_llm_once(
             sys_prompt,
             "請依當下狀態自然主動發 1～2 則完整精簡短句給 Nick。",
@@ -510,6 +588,9 @@ class ReonaBot(discord.Client):
             print(f"Catch-up check skipped: {type(e).__name__}: {repr(e)}", flush=True)
 
     async def _github_session_loop(self) -> None:
+        await self.rag.sync_embeddings(self.http_session)
+        self._seed_recent_reona_from_memory()
+
         channel = None
         if TARGET_CHANNEL_ID:
             channel = self.get_channel(TARGET_CHANNEL_ID) or await self.fetch_channel(TARGET_CHANNEL_ID)
@@ -549,6 +630,9 @@ class ReonaBot(discord.Client):
         causal_flag = self.db.evaluate_causal_events(user_text, now_dt)
         snap = self.db.compute_snapshot(now_dt)
 
+        if user_text and not is_voice:
+            self.rag.append_turn("Nick", user_text)
+
         if snap["in_restroom"]:
             line = self.db.pick_canned_line("restroom", snap["gi_status"]) or "去一下廁所"
             await self._send_burst(message.channel, [line], snap["delay_range"])
@@ -577,8 +661,29 @@ class ReonaBot(discord.Client):
                 return
 
         allow_work = any(k in user_text for k in WORK_KEYWORDS)
-        clues = self.db.retrieve_rag_clue(snap, user_text=user_text)
-        sys_prompt = build_system_prompt(snap, clues, is_proactive=False, allow_work=allow_work)
+        evening_rest = _is_sydney_evening_rest(now_dt)
+
+        matched_card, recent_turns = await self.rag.retrieve(
+            session=self.http_session,
+            user_text=user_text,
+            is_evening_rest=evening_rest,
+            allow_work=allow_work,
+            top_k=2,
+        )
+        if matched_card:
+            print(
+                f"[RAG Hit] id={matched_card.get('id')} score={matched_card.get('score')}",
+                flush=True,
+            )
+
+        sys_prompt = build_system_prompt(
+            snap,
+            matched_card=matched_card,
+            recent_turns=recent_turns,
+            is_proactive=False,
+            allow_work=allow_work,
+            is_evening_rest=evening_rest,
+        )
 
         history_lines: List[str] = []
         async for msg in message.channel.history(limit=5):
@@ -622,5 +727,6 @@ class ReonaBot(discord.Client):
 
 if __name__ == "__main__":
     database = ReonaBGDB()
-    bot = ReonaBot(database)
+    rag_engine = ReonaMemoryRAG(api_key=GEMINI_API_KEY)
+    bot = ReonaBot(database, rag=rag_engine)
     bot.run(DISCORD_TOKEN)
