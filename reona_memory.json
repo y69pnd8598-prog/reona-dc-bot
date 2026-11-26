@@ -2,44 +2,44 @@
   "recent_turns": [
     {
       "role": "user",
-      "content": "是喔"
+      "content": "吃什麼"
     },
     {
       "role": "assistant",
-      "content": "在呀，聽得到"
+      "content": "我剛剛簡單弄點東西吃了，你吃飽沒"
     },
     {
       "role": "user",
-      "content": "在吃什麼"
+      "content": "你吃什麼"
     },
     {
       "role": "assistant",
-      "content": "嗯嗯，我剛剛在看訊息"
+      "content": "今天腸胃比較挑，吃得很清淡"
     },
     {
       "role": "user",
-      "content": "是嗎"
+      "content": "所以你吃什麼"
     },
     {
       "role": "assistant",
-      "content": "在呀，聽得到"
+      "content": "我剛剛簡單弄點東西吃了，你吃飽沒"
     },
     {
       "role": "user",
-      "content": "我知道"
+      "content": "你吃了什麼"
     },
     {
       "role": "assistant",
-      "content": "嗯嗯，我剛剛在看訊息"
+      "content": "今天腸胃比較挑，吃得很清淡"
     },
     {
       "role": "user",
-      "content": "我吃完飯了"
+      "content": "對我知道"
     },
     {
       "role": "assistant",
-      "content": "在呀，聽得到"
+      "content": "原來如此，我剛剛在滑手機"
     }
   ],
-  "updated_at": "2026-11-26T19:58:50.727030+11:00"
+  "updated_at": "2026-11-26T20:53:50.744627+11:00"
 }
