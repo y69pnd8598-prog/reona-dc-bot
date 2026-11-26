@@ -43,8 +43,10 @@ PREFERRED_GEMINI_MODEL = (os.getenv("GEMINI_MODEL") or "").strip()
 GEMINI_MODEL_CANDIDATES: list[str] = []
 for m in [
     PREFERRED_GEMINI_MODEL,
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-3-flash-preview",
+    "gemini-flash-latest",
+    "gemini-flash-lite-latest",
 ]:
     if m and m not in GEMINI_MODEL_CANDIDATES:
         GEMINI_MODEL_CANDIDATES.append(m)
@@ -60,8 +62,8 @@ MEMORY_JSON_PATH = Path(os.getenv("REONA_JSON_PATH", "reona_memory.json"))
 GROQ_MODEL_CANDIDATES: list[str] = []
 for m in [
     PREFERRED_GROQ_MODEL,
-    "llama-3.3-70b-versatile",
-    "llama-3.1-8b-instant",
+    "qwen/qwen3.8-27b",
+    "openai/gpt-oss-120b",
 ]:
     if m and m not in GROQ_MODEL_CANDIDATES:
         GROQ_MODEL_CANDIDATES.append(m)
