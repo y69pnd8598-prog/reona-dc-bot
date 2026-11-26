@@ -39,6 +39,8 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS runtime_state (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 last_active_date TEXT,
+                morning_greeted_date TEXT,
+                night_greeted_date TEXT,
                 location TEXT DEFAULT '雪梨住處畫桌前',
                 physical_state TEXT DEFAULT '正常',
                 physical_until TEXT,
@@ -84,6 +86,8 @@ def init_db() -> None:
             "runtime_state",
             {
                 "last_active_date": "TEXT",
+                "morning_greeted_date": "TEXT",
+                "night_greeted_date": "TEXT",
                 "location": "TEXT DEFAULT '雪梨住處畫桌前'",
                 "physical_state": "TEXT DEFAULT '正常'",
                 "physical_until": "TEXT",
@@ -126,7 +130,7 @@ def init_db() -> None:
 
 def morning_wakeup_reset() -> dict:
     """
-    Runs on startup/wake-up (08:00 Sydney time).
+    Runs on startup/wake-up (08:00+ Sydney time).
     - Resets transient physical states, daily routine counters & yesterday's clutter before 18:00.
     - Retains memories from 18:00–23:59 yesterday tagged as [昨晚], plus notable emotional events.
     """
@@ -186,6 +190,39 @@ def morning_wakeup_reset() -> dict:
             )
 
         return dict(conn.execute("SELECT * FROM runtime_state WHERE id = 1").fetchone())
+
+
+def check_and_claim_daily_greeting() -> str | None:
+    """
+    Returns 'morning' once per day between 08:00 and 10:30 Sydney time,
+    or 'night' once per day between 23:25 and 23:59 Sydney time.
+    """
+    state = morning_wakeup_reset()
+    now = now_sydney()
+    today_str = now.strftime("%Y-%m-%d")
+    minute_of_day = now.hour * 60 + now.minute
+
+    # Morning window: 08:00 - 10:30
+    if (8 * 60) <= minute_of_day <= (10 * 60 + 30):
+        if (state.get("morning_greeted_date") or "") != today_str:
+            with get_conn() as conn:
+                conn.execute(
+                    "UPDATE runtime_state SET morning_greeted_date = ?, location = '雪梨住處客廳' WHERE id = 1",
+                    (today_str,),
+                )
+            return "morning"
+
+    # Goodnight window: 23:25 - 23:59
+    if (23 * 60 + 25) <= minute_of_day <= (23 * 60 + 59):
+        if (state.get("night_greeted_date") or "") != today_str:
+            with get_conn() as conn:
+                conn.execute(
+                    "UPDATE runtime_state SET night_greeted_date = ?, location = '雪梨住處房間床上' WHERE id = 1",
+                    (today_str,),
+                )
+            return "night"
+
+    return None
 
 
 def set_physical_state(state_desc: str, hours: float = 4.0) -> None:
