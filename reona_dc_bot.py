@@ -471,6 +471,7 @@ def _call_llm_with_fallback(messages: list[dict], temp: float = 0.78) -> str:
 
 def generate_reona_reply(user_text: str, was_sulking: bool, shared_story: bool) -> str:
     recent_turns = load_recent_turns()
+    print(f"[Trace] user={user_text!r} gem={bool(GEMINI_API_KEY)} groq={bool(groq_client)}", flush=True)
     snapshot = compute_snapshot()
     now = now_sydney()
 
