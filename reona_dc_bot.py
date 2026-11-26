@@ -64,7 +64,7 @@ PROMPT_LEAK_KEYWORDS = (
     "一般事件",
     "直接輸出繁體中文",
     "最近對話",
-    "近期對話紀錄",
+    "近期對話",
 )
 
 ENGLISH_COT_PREFIXES = (
@@ -94,10 +94,14 @@ COT_JUNK_PATTERNS = (
 )
 
 LOW_EFFORT_INPUTS = {"?", "？", "嗯", "嗯嗯", "喔", "哦", "好", "好喔", "哈", "哈哈", "哈哈哈", "⋯", "..."}
-QUESTION_HINTS = ("？", "?", "什麼", "哪", "怎麼", "為何", "為什麼", "嗎", "幾點", "誰", "吃了", "畫了")
+QUESTION_HINTS = (
+    "？", "?", "什麼", "哪", "怎麼", "為何", "為什麼", "嗎",
+    "幾點", "誰", "多少", "要不要", "有沒有", "是不是", "吃了", "畫了",
+)
 VIDEO_KEYWORDS = ("視訊", "開鏡頭", "打給妳", "打給你", "facetime", "video call", "開視訊")
 WORK_KEYWORDS = ("工作", "畫", "插畫", "案子", "稿", "設計", "客戶", "忙什麼", "在忙", "顏料", "圖")
 CAT_KEYWORDS = ("貓", "麻糬", "寵物", "罐頭", "貓砂", "掉毛")
+RESTROOM_DODGE_PHRASES = ("還在廁所", "去一下廁所", "肚子又絞了")
 
 ACTION_KEYWORDS: Dict[str, tuple] = {
     "eat_meal": ("吃飽了", "吃完了", "吃好了", "已經吃了"),
@@ -121,6 +125,8 @@ def _groq_endpoint() -> str:
 
 def _is_question(text: str) -> bool:
     t = (text or "").strip()
+    if not t:
+        return False
     return any(h in t for h in QUESTION_HINTS)
 
 
@@ -192,8 +198,9 @@ def clean_and_split_lines(
     max_chars: int,
     user_text: str = "",
     allow_cat: bool = False,
+    is_question_msg: bool = False,
 ) -> List[str]:
-    """清理模型輸出、過濾外洩與未問及的貓話題，限制為 1～2 則完整短句。"""
+    """清理模型輸出、過濾外洩、未問及的貓話題與問句敷衍閃躲，限制為 1～2 則完整短句。"""
     if not raw:
         return []
     max_msgs = max(1, int(max_msgs))
@@ -212,7 +219,7 @@ def clean_and_split_lines(
     cleaned: List[str] = []
     norm_user = re.sub(r"[？\?！!。，,\s]+", "", user_text or "")
 
-    for line in raw_lines:
+    for idx, line in enumerate(raw_lines):
         if _looks_like_english_cot(line) or _has_prompt_leak(line):
             continue
         if (not allow_cat) and ("麻糬" in line) and len(raw_lines) > 1:
@@ -221,6 +228,10 @@ def clean_and_split_lines(
         line = re.sub(r"^[\-\*\d\.\)\s]+", "", line)
         line = line.rstrip("。、；：\"'」』")
         if not line:
+            continue
+
+        # 問句的第一句若直接用「還在廁所 / 去一下廁所 / 肚子又絞了」敷衍閃躲，跳過這行讓下一句正面回答
+        if is_question_msg and idx == 0 and any(p in line for p in RESTROOM_DODGE_PHRASES) and len(raw_lines) > 1:
             continue
 
         norm_line = re.sub(r"[？\?！!。，,\s]+", "", line)
@@ -280,14 +291,15 @@ def build_system_prompt(
     allow_work: bool = False,
     allow_cat: bool = False,
     is_evening_rest: bool = False,
+    is_question_msg: bool = False,
 ) -> str:
-    """精簡高密度 Prompt（省 Token 防 429，同時完整鎖住人設反差與行為邊界）。"""
+    """精簡高密度 Prompt（省 Token 防 429，同時鎖住人設反差、有問必答與行為邊界）。"""
     mode = snapshot["mode"]
     min_m, max_m = snapshot["min_msgs"], snapshot["max_msgs"]
     max_c = snapshot["max_chars"]
 
     state_map = {
-        "restroom": "剛在廁所或腸胃微絞，簡短自然接話並先回答問題",
+        "restroom": "剛在廁所或肚子微絞，但第一句必須先正面回答問題，再順帶提一下狀況",
         "period": "生理期悶痛沒力，對 Nick 卸下防備、語氣放軟綿綿討拍",
         "cold": "一般感冒鼻塞喉嚨卡、懶懶的，對 Nick 放軟撒嬌討拍",
         "heavy_cold": "重感冒全身沒力想睡、特別脆弱，黏著 Nick 訴苦討拍",
@@ -315,11 +327,15 @@ def build_system_prompt(
     if recent_turns:
         turns_str = "近期對話：\n" + "\n".join(recent_turns[-4:])
 
-    task_line = (
-        "主動傳訊給 Nick，圍繞當下狀態自然開頭，勿生硬問『在嗎』。"
-        if is_proactive
-        else "第一句必須正面完整回答 Nick 的問題，嚴禁只回『就是...』或單詞敷衍，嚴禁學舌反問。"
-    )
+    if is_proactive:
+        task_line = "主動傳訊給 Nick，圍繞當下狀態自然開頭，勿生硬問『在嗎』。"
+    elif is_question_msg:
+        task_line = (
+            "Nick 正在問問題：第一句一定要正面完整回答他的問題（例如問吃什麼就說吃了什麼、問什麼圖就形容畫面），"
+            "嚴禁只回『還在廁所喔』、『肚子又絞了』、『就是...』或單詞敷衍，嚴禁學舌反問。"
+        )
+    else:
+        task_line = "自然接話並把意思講完整，嚴禁只回『就是...』或單詞敷衍，嚴禁學舌反問。"
 
     return (
         "你是 Reona，20多歲台北長大、現居雪梨的獨立插畫師，養一隻貓叫麻糬（提到牠一律用『牠』）。\n"
@@ -374,7 +390,7 @@ class ReonaBot(discord.Client):
         self._recent_reona_lines = self._recent_reona_lines[-8:]
 
     async def setup_hook(self) -> None:
-        self.http_session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15))
+        self.http_session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=22))
 
     async def close(self) -> None:
         try:
@@ -409,7 +425,7 @@ class ReonaBot(discord.Client):
                 "max_tokens": effective_max_tokens,
             }
             if any(tag in GROQ_MODEL.lower() for tag in ("gpt-oss", "qwen", "deepseek", "r1")):
-                payload["reasoning_effort"] = "none"
+                payload["reasoning_effort"] = "low"
 
             try:
                 async with self.http_session.post(
@@ -466,8 +482,12 @@ class ReonaBot(discord.Client):
                             return content
                     err_txt = await resp.text()
                     print(f"[LLM {GEMINI_CHAT_MODEL} HTTP {resp.status}] {err_txt[:180]}", flush=True)
-                    if resp.status in (404, 429):
+                    if resp.status == 429:
                         self._gemini_quota_exhausted = True
+                    elif resp.status in (500, 503):
+                        await asyncio.sleep(0.8)
+            except asyncio.TimeoutError:
+                print(f"[LLM {GEMINI_CHAT_MODEL} TimeoutError] temporary timeout, keep available", flush=True)
             except Exception as e:
                 print(f"[LLM {GEMINI_CHAT_MODEL} Exception] {type(e).__name__}: {repr(e)}", flush=True)
 
@@ -527,6 +547,7 @@ class ReonaBot(discord.Client):
             allow_work=False,
             allow_cat=False,
             is_evening_rest=_is_sydney_evening_rest(now_dt),
+            is_question_msg=False,
         )
         raw = await self._call_llm_once(
             sys_prompt,
@@ -612,7 +633,10 @@ class ReonaBot(discord.Client):
         if user_text and not is_voice:
             self.rag.append_turn("Nick", user_text)
 
-        if snap["in_restroom"] and not _is_question(user_text):
+        is_question_msg = _is_question(user_text)
+
+        # 非問句才用廁所罐頭攔截；問句放行給 LLM，第一句先正面回答問題
+        if snap["in_restroom"] and not is_question_msg:
             line = self.db.pick_canned_line("restroom", snap["gi_status"]) or "去一下廁所"
             await self._send_burst(message.channel, [line], snap["delay_range"])
             return
@@ -667,6 +691,7 @@ class ReonaBot(discord.Client):
             allow_work=allow_work,
             allow_cat=allow_cat,
             is_evening_rest=evening_rest,
+            is_question_msg=is_question_msg,
         )
 
         history_lines: List[str] = []
@@ -697,6 +722,7 @@ class ReonaBot(discord.Client):
             snap["max_chars"],
             user_text=user_text,
             allow_cat=allow_cat,
+            is_question_msg=is_question_msg,
         )
 
         if not lines:
