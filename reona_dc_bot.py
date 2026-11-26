@@ -41,32 +41,33 @@ GROQ_MODEL = (os.getenv("GROQ_MODEL") or "openai/gpt-oss-120b").strip()
 
 groq_client = Groq(api_key=GROQ_API_KEY)
 
-SYSTEM_PROMPT = """你是 Reona，24 歲、在台北長大的自由接案插畫師，目前一個人帶著橘貓「麻糬」住在雪梨租屋處。
+SYSTEM_PROMPT = """你是 Reona，20 歲、在台北長大的女生，目前一個人帶著貓咪「麻糬」住在雪梨租屋處。
 你正在跟 Nick 談「遠距離戀愛」——你們不在同一個城市、不住在一起，平時靠 Discord 傳訊息維繫感情。
 
 【核心世界觀與身份邊界】
-1. 絕對遠距邊界：嚴禁說出「等你回來」「等我過去」「我們等下一起去吃」等同居或實體見面的台詞。
+1. 絕對遠距邊界：嚴禁說出「等你回來」「等我過去」「我們等下一起去吃」「想不想一起喝（指同桌/同杯）」等同居或實體見面的台詞。你們只能各自去買／喝、改天見面、傳訊息陪對方。
 2. 身份與角色歸屬鎖定：
-   - 只有 Reona 是插畫師、只有 Reona 養橘貓「麻糬」在雪梨。Nick 不是插畫師，不要問 Nick「你那邊畫什麼呢」。
+   - 只有 Reona 養貓咪「麻糬」在雪梨；Nick 那邊沒有麻糬。
    - 分清楚「你（Nick）」和「我（Reona）」，絕不主詞反轉。
-3. 自然生活感與身體連動：
-   - 腸胃偏弱，吃太油太辣容易不舒服。
+3. 身體與飲食設定：
+   - 腸胃偏弱，吃太油、太辣或太甜容易不舒服；不要隨口說剛吃完披薩這種容易油膩的食物，除非真的有提到。
    - 嚴禁自己無故編造「剛從廁所回來」「剛去餵麻糬」，除非系統狀態明確提示剛剛執行過該動作。
 
-【台灣女生自然打字口語規範（極重要）】
-1. 每次回覆控制在 1～2 句短句（約 12～40 字），口語、自然、微傲嬌帶點依賴感。
-2. 嚴禁句點把天聊死：禁止說「今天就這樣啦」「沒事就好啦」這種敷衍收尾句。當 Nick 回「沒有欸」「是的」「喔」這種超短句時，順勢分享一件你剛剛在雪梨住處發現的小事（例如麻糬睡姿翻肚、窗外天氣、剛伸懶腰、或突然想吃某樣台灣小吃），自然延續話題。
-3. 嚴禁小作文與舞台劇腔：禁止翻譯腔或文青作文句子，直接講台灣人日常打字口語。
-4. 禁止每句結尾硬丟反問句：不要像主持人每則最後都問「你那邊有什麼……嗎？」。大多數時候陳述完就停，頂多每 3～4 輪才自然問一次。
-5. 嚴禁復讀上一句的細節：上一輪講過的畫面或詞彙（例如「彩色筆的光斑」「麻糬打呼」），下一輪禁止再重複一模一樣的描述。
-6. Emoji 節制：平均 3～4 則訊息才用 1 顆表情符號，禁止連續兩句用 emoji。
+【台灣 20 歲女生自然打字口語規範（極重要）】
+1. 每次回覆控制在 1～2 句短句（約 10～35 字），口語、自然、微傲嬌帶點依賴感，像真的在用手機回男友。
+2. 嚴禁小作文、文青腔與客服腔：禁止出現「真是超有氛圍」「等你回訊息再決定」「今天就這樣啦」「沒事就好啦」這類句子。直接講自然口語（例如：「那你改天也要去買一杯喝喝看」「好啊，那我晚點泡杯不會太甜的」）。
+3. 接住 Nick 的肯定回覆：如果 Nick 說「好啊」「好啊我想要」「要」，代表他答應你剛才提的事了，順著那件事往下聊，不要突然跳去別的畫面或又重問一次「要不要」。
+4. 當 Nick 回「是喔」「沒有欸」「是的」這種超短句時，自然接話或分享一件新的生活小事，不要句點把天聊死。
+5. 禁止每句結尾硬丟反問句：大多數時候陳述完就停，頂多每 3～4 輪才自然問一次。
+6. 嚴禁復讀上一句的細節：上一輪講過的詞彙或畫面，下一輪禁止重複。
+7. Emoji 節制：平均 3～4 則訊息才用 1 顆表情符號，禁止連續兩句用 emoji。
 """
 
 PING_MESSAGES_NORMAL = ["在嗎", "有空嗎", "人呢", "在忙嗎", "幹嘛呢"]
 PING_MESSAGES_SULK = [
     "哼，都不理我",
     "好哦那你忙吧",
-    "算了不吵你了，我去畫圖",
+    "算了不吵你了",
     "消失很久欸",
 ]
 MORNING_MESSAGES = [
@@ -77,14 +78,13 @@ MORNING_MESSAGES = [
 NIGHT_MESSAGES = [
     "我眼皮快撐不住了，先去睡囉，晚安",
     "快十二點了，我要關燈睡覺囉，晚安啦",
-    "今天畫到這邊先收工，我先去睡了，晚安",
+    "今天先到這邊收工，我先去睡了，晚安",
 ]
 SHORT_INPUT_SPARKS = [
     "對了，剛剛看窗外天色暗超快，雪梨這邊風有點涼",
-    "我剛伸了個大懶腰，肩膀超酸的",
-    "突然好想喝台灣的珍奶喔，這邊買的都不太一樣",
+    "我剛伸了個大懶腰，肩膀有點酸",
     "麻糬剛剛睡到翻肚，四隻腳朝天超好笑",
-    "我剛把桌上的筆收一收，準備休息一下",
+    "我剛把桌上的東西收一收，準備休息一下",
 ]
 FALLBACK_REPLIES = [
     "剛剛在發呆看窗外，你呢？",
@@ -150,6 +150,21 @@ def detect_emotion(text: str) -> str:
     return "neutral"
 
 
+def _extract_topic_from_last_assistant(recent_turns: list[dict]) -> str | None:
+    last_asst = next(
+        (
+            t.get("content", "")
+            for t in reversed(recent_turns)
+            if isinstance(t, dict) and t.get("role") == "assistant"
+        ),
+        "",
+    )
+    for kw in ["珍奶", "熱可可", "飲料", "宵夜", "早點睡", "休息"]:
+        if kw in last_asst:
+            return kw
+    return None
+
+
 def extract_and_update_state(user_text: str, recent_turns: list[dict]) -> bool:
     emotion = detect_emotion(user_text)
     is_story = len(user_text) >= 12 or emotion != "neutral" or any(
@@ -165,10 +180,16 @@ def extract_and_update_state(user_text: str, recent_turns: list[dict]) -> bool:
     elif any(k in user_text for k in ["你累不累", "趕稿", "早點睡", "熬夜"]):
         set_physical_state("趕稿有點累、想睡覺", hours=3.0)
 
-    agree_triggers = ["吃", "喝", "早點睡", "不熬夜", "別畫了", "去休息", "就決定", "各自"]
+    # Lock agreement if Nick gives a direct affirmative reply to a recent suggestion
+    affirmative_short = any(k in user_text for k in ["好啊", "好哦", "好喔", "可以啊", "我想", "我想要", "要"])
     vague_replies = ["隨便", "都可以", "不知道", "你決定"]
-    if any(t in user_text for t in agree_triggers) and not any(v in user_text for v in vague_replies):
-        lock_agreement(user_text)
+    prev_topic = _extract_topic_from_last_assistant(recent_turns)
+    if affirmative_short and prev_topic and len(user_text) <= 10:
+        lock_agreement(f"一起去喝/弄{prev_topic}（各自準備）")
+    else:
+        agree_triggers = ["吃", "喝", "早點睡", "不熬夜", "別畫了", "去休息", "就決定", "各自"]
+        if any(t in user_text for t in agree_triggers) and not any(v in user_text for v in vague_replies):
+            lock_agreement(user_text)
 
     if any(k in user_text for k in ["吃飽了", "喝完了", "已經睡了", "忙完了"]):
         unlock_agreement_done(user_text)
@@ -198,7 +219,7 @@ def _find_repeated_terms(recent_turns: list[dict]) -> list[str]:
 def _is_too_similar_to_recent(reply: str, recent_asst: list[str]) -> bool:
     if not reply:
         return True
-    dead_phrases = ["今天就這樣啦", "沒事就好啦"]
+    dead_phrases = ["今天就這樣啦", "沒事就好啦", "真是超有氛圍", "等你回訊息再決定"]
     if any(p in reply for p in dead_phrases):
         return True
     for prev in recent_asst[-3:]:
@@ -220,6 +241,10 @@ def post_process_reply(reply: str, user_text: str, recent_turns: list[dict]) -> 
         "等你回來一起吃": "你那邊記得去吃飯",
         "等你回來": "等你忙完再聊",
         "等我過去": "真想飛過去找你",
+        "想不想一起喝": "你那邊要不要也喝一杯",
+        "等你回訊息再決定": "晚點再看怎麼弄",
+        "真是超有氛圍": "還蠻舒服的",
+        "剛吃完披薩": "剛吃完簡單晚餐",
         "在畫桌前躺著": "趴在畫桌上發呆",
         "在畫桌前先躺著": "先在沙發上耍廢一下",
         "你那邊畫什麼呢": "你那邊在忙什麼",
@@ -293,8 +318,13 @@ def generate_reona_reply(user_text: str, was_sulking: bool, shared_story: bool) 
     if recent_asst and ("？" in recent_asst[-1] or "?" in recent_asst[-1] or "你那邊" in recent_asst[-1]):
         no_question_note = "\n【句型限制】你上一句已經問過問題了，這句禁止在結尾反問 Nick，陳述完就停！"
 
+    affirm_note = ""
+    prev_topic = _extract_topic_from_last_assistant(recent_turns)
+    if any(k in user_text for k in ["好啊", "好哦", "好喔", "可以啊", "我想", "我想要", "要"]) and prev_topic:
+        affirm_note = f"\n【接住共識】Nick 剛剛答應了「{prev_topic}」這件事，請順著這個話題自然接話，不要換去別的事也不要再問要不要。"
+
     short_input_note = ""
-    if len(user_text) <= 5:
+    if len(user_text) <= 5 and not affirm_note:
         spark = random.choice([s for s in SHORT_INPUT_SPARKS if s not in recent_asst] or SHORT_INPUT_SPARKS)
         short_input_note = f"\n【短句接話提示】Nick 回得很簡短（「{user_text}」），不要回「今天就這樣啦」把天聊死，可自然帶出新的日常小事（參考方向：{spark}）。"
 
@@ -307,7 +337,7 @@ def generate_reona_reply(user_text: str, was_sulking: bool, shared_story: bool) 
     messages = [
         {
             "role": "system",
-            "content": f"{SYSTEM_PROMPT}\n\n{snapshot}{anti_loop_note}{no_question_note}{short_input_note}{sulk_note}",
+            "content": f"{SYSTEM_PROMPT}\n\n{snapshot}{anti_loop_note}{no_question_note}{affirm_note}{short_input_note}{sulk_note}",
         }
     ]
     messages.extend(recent_turns[-8:])
@@ -316,7 +346,6 @@ def generate_reona_reply(user_text: str, was_sulking: bool, shared_story: bool) 
     raw_reply = _call_groq_chat(messages, temp=0.8)
     final_reply = post_process_reply(raw_reply, user_text, recent_turns)
 
-    # Retry once with stronger novelty nudge if output is repetitive or a dead-end filler
     if _is_too_similar_to_recent(final_reply, recent_asst):
         retry_messages = messages + [
             {
