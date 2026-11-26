@@ -2,52 +2,44 @@
   "recent_turns": [
     {
       "role": "user",
-      "content": "你真的好瘦寶貝"
+      "content": "是喔"
     },
     {
       "role": "assistant",
-      "content": "才不是因為你說的啦，都是畫太久沒動嘛。 😏"
+      "content": "在呀，聽得到"
     },
     {
       "role": "user",
-      "content": "寶貝的體重很輕"
+      "content": "在吃什麼"
     },
     {
       "role": "assistant",
-      "content": "才不是因為你說的啦，真的只是畫太久沒動，別再說我輕啦。"
+      "content": "嗯嗯，我剛剛在看訊息"
     },
     {
       "role": "user",
-      "content": "寶貝感覺會被風吹走"
+      "content": "是嗎"
     },
     {
       "role": "assistant",
-      "content": "哈哈，別擔心，我有地心引力保護。你那邊好好吃飯喔。"
+      "content": "在呀，聽得到"
     },
     {
       "role": "user",
-      "content": "寶貝寶貝"
+      "content": "我知道"
     },
     {
       "role": "assistant",
-      "content": "好啦，我在畫桌前喝點溫水，麻糬還在旁邊打呼。你那邊別忘了吃飯。"
+      "content": "嗯嗯，我剛剛在看訊息"
     },
     {
       "role": "user",
-      "content": "不會啦"
+      "content": "我吃完飯了"
     },
     {
       "role": "assistant",
-      "content": "嗯，我這邊還好，繼續畫點小圖。"
-    },
-    {
-      "role": "user",
-      "content": "好厲害寶貝"
-    },
-    {
-      "role": "assistant",
-      "content": "謝謝～今天畫得順手，你那邊有什麼好吃的嗎？"
+      "content": "在呀，聽得到"
     }
   ],
-  "updated_at": "2026-11-26T17:34:25.962911+11:00"
+  "updated_at": "2026-11-26T19:58:50.727030+11:00"
 }
