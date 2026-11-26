@@ -645,4 +645,9 @@ class ReonaBot(discord.Client):
 
 if __name__ == "__main__":
     bot = ReonaBot()
+    print(
+    f"[Boot] gemini={bool(GEMINI_API_KEY)} model={GEMINI_MODEL} "
+    f"groq={bool(groq_client)} models={GROQ_MODEL_CANDIDATES}",
+    flush=True,
+)
     bot.run(DISCORD_TOKEN)
