@@ -9,6 +9,7 @@ from discord.ext import tasks
 from groq import Groq
 
 from reona_bg_db import (
+    check_and_claim_daily_greeting,
     compute_snapshot,
     init_db,
     lock_agreement,
@@ -68,6 +69,16 @@ PING_MESSAGES_SULK = [
     "好哦那你忙吧",
     "算了不吵你了，我去畫圖",
     "消失很久欸",
+]
+MORNING_MESSAGES = [
+    "早安～剛睡醒還迷迷糊糊的",
+    "早安，麻糬剛剛直接踩在我臉上叫我起床",
+    "早安呀，我剛爬起來準備去刷牙",
+]
+NIGHT_MESSAGES = [
+    "我眼皮快撐不住了，先去睡囉，晚安",
+    "快十二點了，我要關燈睡覺囉，晚安啦",
+    "今天畫到這邊先收工，我先去睡了，晚安",
 ]
 FALLBACK_REPLIES = [
     "剛剛在看麻糬發呆，你呢？",
@@ -144,7 +155,6 @@ def extract_and_update_state(user_text: str, recent_turns: list[dict]) -> bool:
         cat = "notable_event" if emotion != "neutral" else "routine"
         log_memory("Nick", user_text, category=cat, emotion_tag=emotion)
 
-    # Detect if Reona's physical state shifts based on context (e.g., spicy/oily food, stomachache, fatigue)
     if any(k in user_text for k in ["你肚子", "你腸胃", "拉肚子", "吃太辣", "吃太油"]):
         set_physical_state("腸胃有點不舒服", hours=4.0)
     elif any(k in user_text for k in ["你累不累", "趕稿", "早點睡", "熬夜"]):
@@ -282,7 +292,6 @@ def generate_reona_reply(user_text: str, was_sulking: bool, shared_story: bool) 
         candidates = [f for f in FALLBACK_REPLIES if f != last_bot] or FALLBACK_REPLIES
         final_reply = random.choice(candidates)
 
-    # Sync physical state if Reona herself mentions stomach discomfort or fatigue
     if any(k in final_reply for k in ["肚子痛", "腸胃不舒服", "拉肚子", "吃太辣", "吃太油"]):
         set_physical_state("腸胃有點不舒服", hours=4.0)
     elif any(k in final_reply for k in ["好累", "想睡覺", "趕稿"]):
@@ -317,6 +326,25 @@ class ReonaBot(discord.Client):
         morning_wakeup_reset()
         self.proactive_ping_loop.start()
 
+    async def _send_daily_greeting_if_due(self) -> bool:
+        if not TARGET_CHANNEL_ID:
+            return False
+        channel = self.get_channel(TARGET_CHANNEL_ID)
+        if not channel:
+            return False
+
+        greeting_type = check_and_claim_daily_greeting()
+        if not greeting_type:
+            return False
+
+        msg = random.choice(MORNING_MESSAGES if greeting_type == "morning" else NIGHT_MESSAGES)
+        recent_turns = load_recent_turns()
+        recent_turns.append({"role": "assistant", "content": msg})
+        save_recent_turns_atomic(recent_turns)
+        log_memory("Reona", msg, category="routine", emotion_tag="neutral")
+        await channel.send(msg)
+        return True
+
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot:
             return
@@ -341,7 +369,7 @@ class ReonaBot(discord.Client):
         if reply and reply.strip():
             await message.channel.send(reply.strip())
 
-    @tasks.loop(minutes=45)
+    @tasks.loop(minutes=10)
     async def proactive_ping_loop(self) -> None:
         now = now_sydney()
         if not (8 <= now.hour <= 23):
@@ -353,7 +381,12 @@ class ReonaBot(discord.Client):
         if not channel:
             return
 
-        if random.random() > 0.35:
+        # 1. Guaranteed once-per-day morning (08:00-10:30) / goodnight (23:25-23:59) greeting
+        if await self._send_daily_greeting_if_due():
+            return
+
+        # 2. Regular proactive check-in (~10% per 10-min tick ≈ 35% per 45 mins)
+        if random.random() > 0.10:
             return
 
         recent_turns = load_recent_turns()
