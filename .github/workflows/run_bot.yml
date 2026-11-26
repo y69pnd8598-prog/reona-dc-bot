@@ -1,120 +1,58 @@
-name: Reona Discord Bot
+name: Reona Discord Companion
 
 on:
   schedule:
-    # 雪梨夏令時間 AEDT (UTC+11)：07:30 起床 (UTC 20:30) ～ 23:30 睡覺 (UTC 12:30)
-    # 每 30 分鐘接力啟動一次（每次跑 28 分鐘），白天全程持續在線
-    - cron: "30 20 * * *"
+    # Runs every 30 mins during Sydney 08:00–23:30 (UTC 21:00–12:30 during AEDT, adjust +1h in AEST)
     - cron: "0,30 21-23 * * *"
-    - cron: "0,30 0-11 * * *"
-    - cron: "0 12 * * *"
+    - cron: "0,30 0-12 * * *"
   workflow_dispatch:
+
+concurrency:
+  group: reona-bot-singleton
+  cancel-in-progress: false
 
 permissions:
   contents: write
 
-concurrency:
-  group: reona-discord-bot
-  cancel-in-progress: false
-
 jobs:
-  run-reona:
+  run-bot:
     runs-on: ubuntu-latest
     timeout-minutes: 32
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
 
       - name: Install dependencies
-        run: pip install discord.py aiohttp
-
-      - name: Reset daily transient state on new Sydney day
-        env:
-          REONA_DB_PATH: reona_bg.db
         run: |
-          python - <<'EOF'
-          import datetime
-          import os
-          import sqlite3
-          from zoneinfo import ZoneInfo
+          python -m pip install --upgrade pip
+          pip install discord.py groq tzdata
 
-          db_path = os.getenv("REONA_DB_PATH", "reona_bg.db")
-          if not os.path.exists(db_path):
-              print("No existing DB yet; will initialize fresh on bot startup.")
-              raise SystemExit(0)
-
-          today_sydney = datetime.datetime.now(ZoneInfo("Australia/Sydney")).strftime("%Y-%m-%d")
-          conn = sqlite3.connect(db_path)
-          try:
-              cols = {r[1] for r in conn.execute("PRAGMA table_info(runtime_state)").fetchall()}
-              if not cols:
-                  raise SystemExit(0)
-
-              row = conn.execute("SELECT * FROM runtime_state WHERE id = 1").fetchone()
-              if not row:
-                  raise SystemExit(0)
-
-              col_names = [d[0] for d in conn.execute("SELECT * FROM runtime_state WHERE id = 1").description]
-              state = dict(zip(col_names, row))
-
-              if state.get("mainline_date") != today_sydney:
-                  updates = {
-                      "mainline_date": "",
-                      "mainline_key": "",
-                      "mainline_title": "",
-                      "gi_cause": "",
-                      "gi_triggered_today": 0,
-                      "mood": "normal",
-                      "mood_until": 0,
-                      "recovery_until": 0,
-                      "gi_status": "normal",
-                      "gi_until": 0,
-                      "illness_status": "normal",
-                      "illness_until": 0,
-                      "restroom_until": 0,
-                      "pending_request_until": 0,
-                      "mentioned_slots": "",
-                      "done_actions_today": "",
-                  }
-                  set_clauses = [f"{k} = ?" for k in updates if k in cols]
-                  params = [updates[k] for k in updates if k in cols]
-                  if set_clauses:
-                      conn.execute(f"UPDATE runtime_state SET {', '.join(set_clauses)} WHERE id = 1", params)
-                      conn.commit()
-                      print(f"Reset daily transient state for new Sydney day: {today_sydney}")
-              else:
-                  print(f"Same Sydney day ({today_sydney}); keeping today's transient state.")
-          finally:
-              conn.close()
-          EOF
-
-      - name: Run Reona bot
+      - name: Run Reona Bot (28-min shift)
         env:
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
-          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-          TARGET_CHANNEL_ID: ${{ secrets.TARGET_CHANNEL_ID }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          GROQ_API_KEYS: ${{ secrets.GROQ_API_KEYS }}
-          GROQ_MODEL: ${{ secrets.GROQ_MODEL }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          REONA_DB_PATH: reona_bg.db
-          PROACTIVE_ONLY: "0"
-          RUN_SECONDS: "1680"
-        run: python reona_dc_bot.py
+          TARGET_CHANNEL_ID: ${{ secrets.TARGET_CHANNEL_ID }}
+          NICK_USER_ID: ${{ secrets.NICK_USER_ID }}
+        run: |
+          timeout -s SIGINT 1680 python reona_dc_bot.py || true
 
-      - name: Persist SQLite memory back to repo
-        if: always()
+      - name: Commit and push memory safely
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f *.db 2>/dev/null || true
-          if ! git diff --staged --quiet; then
-            git commit -m "chore: update reona state and memory [skip ci]"
-            git push
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add reona_bg.db reona_memory.json
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(memory): sync Reona state and memories"
+            for i in 1 2 3; do
+              git pull --rebase origin main && git push origin main && break
+              sleep 3
+            done
           fi
