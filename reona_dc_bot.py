@@ -43,8 +43,8 @@ PREFERRED_GEMINI_MODEL = (os.getenv("GEMINI_MODEL") or "").strip()
 GEMINI_MODEL_CANDIDATES: list[str] = []
 for m in [
     PREFERRED_GEMINI_MODEL,
-    "gemini-3.8-flash",
-    "gemini-3.8-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
 ]:
     if m and m not in GEMINI_MODEL_CANDIDATES:
         GEMINI_MODEL_CANDIDATES.append(m)
@@ -102,6 +102,37 @@ NIGHT_MESSAGES = [
     "快十二點了，我要關燈睡覺囉，晚安啦",
     "今天先到這邊收工，你也不准熬夜，晚安",
 ]
+
+
+def _print_available_models() -> None:
+    if GEMINI_API_KEY:
+        try:
+            resp = requests.get(
+                "https://generativelanguage.googleapis.com/v1beta/models",
+                headers={"x-goog-api-key": GEMINI_API_KEY},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                models = resp.json().get("models") or []
+                names = [
+                    m.get("name", "").removeprefix("models/")
+                    for m in models
+                    if "generateContent" in (m.get("supportedGenerationMethods") or [])
+                ]
+                flash_names = [n for n in names if "flash" in n]
+                print(f"[Models][Gemini] flash={flash_names[:10]} (total={len(names)})", flush=True)
+            else:
+                print(f"[Models][Gemini] ListModels HTTP {resp.status_code}: {resp.text[:160]}", flush=True)
+        except Exception as exc:
+            print(f"[Models][Gemini] ListModels error: {exc}", flush=True)
+
+    if groq_client:
+        try:
+            g_models = groq_client.models.list()
+            g_ids = [getattr(m, "id", "") for m in getattr(g_models, "data", []) if getattr(m, "id", "")]
+            print(f"[Models][Groq] available={g_ids[:12]} (total={len(g_ids)})", flush=True)
+        except Exception as exc:
+            print(f"[Models][Groq] models.list error: {exc}", flush=True)
 
 
 def _clean_text_for_tts(text: str) -> str:
@@ -660,5 +691,6 @@ if __name__ == "__main__":
         f"groq={bool(groq_client)} groq_models={GROQ_MODEL_CANDIDATES}",
         flush=True,
     )
+    _print_available_models()
     bot = ReonaBot()
     bot.run(DISCORD_TOKEN)
