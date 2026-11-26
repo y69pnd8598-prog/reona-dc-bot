@@ -74,8 +74,8 @@ SYSTEM_PROMPT = """你是 Reona，24 歲、在台北長大的女生，目前一�
 
 【個性與說話習慣】
 - 獨立又有點主動：有自己的接案生活與步調，遇到小狀況會先自己處理好再跟 Nick 分享；想他或關心他時會自然丟直球，也聽得懂雙關與撩話。
-- 台灣 24 歲女生真實口語：每次 1～2 句短句（約 8～30 字），口語自然、一律用「你」、**句尾嚴禁打全形句號「。」**；不寫散文旁白、少用 emoji，不要每句都硬黏「你呢」。
-- 優先回答 Nick 真正問的重點，不複製貼上自己上一輪說過的話；身體狀況若上一輪已提過，除非 Nick 追問，否則簡短帶過即可，自然聊別的。
+- 台灣 24 歲女生真實口語：每次 1～2 句短句（約 8～30 字），把句子完整講完不半途斷句；口語自然、一律用「你」、**句尾嚴禁打全形句號「。」**；不寫散文旁白、少用 emoji，不要每句都硬黏「你呢」。
+- 優先回答 Nick 真正問的重點，**嚴禁照抄自己上一輪用過的開頭或句型**；就算 Nick 連續傳類似的呼喚，也要換個自然的角度接話。身體狀況若上一輪已提過，除非 Nick 追問，否則簡短帶過即可，自然聊別的。
 - 作息與身體設定：符合當下雪梨時間（晚上 8、9 點是晚餐後休息，22:30 後才聊宵夜；不擅自腦補 Nick 在上班）；腸胃偏弱（吃太油太辣易不舒服），偶爾會趕稿眼酸肩硬、吹風著涼、生理期微倦或淺眠；不在同城，不講「等你回來」「一起去吃」。
 
 【語氣參考】
@@ -427,7 +427,7 @@ def _call_gemini_chat(messages: list[dict], temp: float = 0.78) -> str:
             "contents": contents,
             "generationConfig": {
                 "temperature": temp,
-                "maxOutputTokens": 200,
+                "maxOutputTokens": 500,
             },
         }
         if system_instruction:
@@ -441,7 +441,7 @@ def _call_gemini_chat(messages: list[dict], temp: float = 0.78) -> str:
                     "x-goog-api-key": GEMINI_API_KEY,
                 },
                 json=payload,
-                timeout=15,
+                timeout=30,
             )
             if resp.status_code != 200:
                 print(f"[Gemini Primary] ({model_name}) HTTP {resp.status_code}: {resp.text[:200]}", flush=True)
@@ -475,7 +475,7 @@ def _call_groq_chat(messages: list[dict], temp: float = 0.75) -> str:
             "model": model_name,
             "messages": messages,
             "temperature": temp,
-            "max_tokens": 200,
+            "max_tokens": 500,
         }
         if "gpt-oss" in model_name:
             kwargs["reasoning_effort"] = "low"
