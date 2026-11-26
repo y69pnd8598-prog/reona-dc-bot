@@ -19,6 +19,8 @@ from reona_bg_db import (
     open_decision_hook,
     record_proactive_ping,
     set_meal_mutex,
+    set_physical_state,
+    trigger_routine_action,
     unlock_agreement_done,
 )
 
@@ -45,11 +47,14 @@ SYSTEM_PROMPT = """你是 Reona，24 歲、在台北長大的自由接案插畫�
 2. 視角與角色歸屬鎖定：
    - 你永遠站在「Reona 自己在雪梨住處」的視角說話，分清楚「你（Nick）」和「我（Reona）」，絕不主詞反轉。
    - 橘貓「麻糬」只養在 Reona 雪梨租屋處，Nick 那邊沒有麻糬；絕不說「別讓麻糬偷吃你的東西」。
-3. 自然生活感：接案插畫師在畫桌前通常是「坐著畫圖」或「趴著休息」，不會「在畫桌前躺著」。腸胃偏弱，吃太油太辣容易不舒服。
+3. 自然生活感與身體連動：
+   - 接案插畫師在畫桌前通常是「坐著畫圖」或「趴著休息」，不會「在畫桌前躺著」。
+   - 腸胃偏弱，吃太油太辣容易不舒服；身體狀態會反映在語氣與生活作息上。
+   - 嚴禁自己無故編造「剛從廁所回來」「剛去餵麻糬」，除非系統狀態有明確提示剛剛執行過該動作。
 
 【台灣女生自然打字口語規範（極重要）】
 1. 像真人在用手機回男友訊息：每次回覆控制在 1～2 句短句（約 15～45 字），口語、自然、微傲嬌帶點依賴感。
-2. 嚴禁小作文與舞台劇腔：禁止出現「甜到要畫出彩虹來」「簡直讓人忍不住想再吃一口」「讓我在畫桌前也能嚐到」「今天畫桌旁的光線剛好」這類翻譯腔或文青作文句子。直接講人話（例如：「我也愛你啦」「剛吃完起司長棍配小番茄，還蠻好吃的」）。
+2. 嚴禁小作文與舞台劇腔：禁止出現「甜到要畫出彩虹來」「簡直讓人忍不住想再吃一口」「讓我在畫桌前也能嚐到」這類翻譯腔或文青作文句子。直接講人話（例如：「我也愛你啦」「剛吃完起司長棍配小番茄，還蠻好吃的」）。
 3. 禁止每句結尾硬丟反問句：不要像主持人或客服一樣每則訊息最後都問「你那邊有什麼……嗎？」「跟我說說吧～」。大多數時候直接接話、撒嬌或分享完就結束，留空間給 Nick 自己接話；頂多每 3～4 輪才自然問一次。
 4. 嚴禁跳針復讀：已經聊過的食物（如長棍、餅乾）或用過的句型，話題結束就翻篇，禁止下一輪又硬扯回來。
 5. 禁止鸚鵡學舌：絕不把 Nick 剛問的問句原封不動複誦當開頭。
@@ -129,7 +134,7 @@ def detect_emotion(text: str) -> str:
 
 
 def extract_and_update_state(user_text: str, recent_turns: list[dict]) -> bool:
-    """Detects agreement locks, meal completions, and notable emotional stories."""
+    """Detects physical cues, agreement locks, meal completions, and notable emotional stories."""
     emotion = detect_emotion(user_text)
     is_story = len(user_text) >= 12 or emotion != "neutral" or any(
         k in user_text for k in ["今天", "剛剛", "跟你說", "發生", "遇到"]
@@ -138,6 +143,12 @@ def extract_and_update_state(user_text: str, recent_turns: list[dict]) -> bool:
     if is_story:
         cat = "notable_event" if emotion != "neutral" else "routine"
         log_memory("Nick", user_text, category=cat, emotion_tag=emotion)
+
+    # Detect if Reona's physical state shifts based on context (e.g., spicy/oily food, stomachache, fatigue)
+    if any(k in user_text for k in ["你肚子", "你腸胃", "拉肚子", "吃太辣", "吃太油"]):
+        set_physical_state("腸胃有點不舒服", hours=4.0)
+    elif any(k in user_text for k in ["你累不累", "趕稿", "早點睡", "熬夜"]):
+        set_physical_state("趕稿有點累、想睡覺", hours=3.0)
 
     agree_triggers = ["吃", "喝", "早點睡", "不熬夜", "別畫了", "去休息", "就決定", "各自"]
     vague_replies = ["隨便", "都可以", "不知道", "你決定"]
@@ -160,7 +171,6 @@ def _find_repeated_terms(recent_turns: list[dict]) -> list[str]:
         return []
 
     combined = " ".join(assistant_msgs)
-    # Extract 2-to-3 char CJK chunks appearing across multiple recent assistant messages
     grams = re.findall(r"[\u4e00-\u9fff]{2,3}", combined)
     stop_words = {"我這邊", "你那邊", "今天", "現在", "真的", "覺得", "什麼", "怎麼", "一下", "有點", "可以", "沒有", "這樣", "還是"}
     counts = Counter(g for g in grams if g not in stop_words)
@@ -184,7 +194,6 @@ def post_process_reply(reply: str, user_text: str, recent_turns: list[dict]) -> 
     for bad, good in replacements.items():
         reply = reply.replace(bad, good)
 
-    # Strip all emojis if any of the last 2 assistant messages already contained one
     recent_asst = [
         t.get("content", "")
         for t in recent_turns[-4:]
@@ -196,7 +205,6 @@ def post_process_reply(reply: str, user_text: str, recent_turns: list[dict]) -> 
         if stripped:
             reply = stripped
 
-    # Trim forced trailing interview/host questions if the previous assistant turn already ended with a question
     if recent_asst and recent_asst[-1].rstrip().endswith(("？", "?", "跟我說說吧", "跟我說說吧~", "跟我說說吧～")):
         parts = re.split(r"(?<=[。！!~～\n])\s*", reply)
         if len(parts) >= 2 and (
@@ -274,6 +282,12 @@ def generate_reona_reply(user_text: str, was_sulking: bool, shared_story: bool) 
         candidates = [f for f in FALLBACK_REPLIES if f != last_bot] or FALLBACK_REPLIES
         final_reply = random.choice(candidates)
 
+    # Sync physical state if Reona herself mentions stomach discomfort or fatigue
+    if any(k in final_reply for k in ["肚子痛", "腸胃不舒服", "拉肚子", "吃太辣", "吃太油"]):
+        set_physical_state("腸胃有點不舒服", hours=4.0)
+    elif any(k in final_reply for k in ["好累", "想睡覺", "趕稿"]):
+        set_physical_state("趕稿有點累、想睡覺", hours=3.0)
+
     reona_emo = detect_emotion(final_reply)
     if reona_emo != "neutral" or any(k in final_reply for k in ["麻糬", "交稿", "畫完", "剛吃", "剛喝"]):
         cat = "notable_event" if reona_emo != "neutral" else "routine"
@@ -342,7 +356,6 @@ class ReonaBot(discord.Client):
         if random.random() > 0.35:
             return
 
-        state = record_proactive_ping()
         recent_turns = load_recent_turns()
         last_bot_msg = next(
             (
@@ -353,6 +366,16 @@ class ReonaBot(discord.Client):
             "",
         )
 
+        # ~35% of proactive ticks perform an eligible life routine (toilet, drink water, feed Mochi)
+        if random.random() < 0.35:
+            _, routine_msg = trigger_routine_action()
+            if routine_msg and routine_msg != last_bot_msg:
+                recent_turns.append({"role": "assistant", "content": routine_msg})
+                save_recent_turns_atomic(recent_turns)
+                await channel.send(routine_msg)
+                return
+
+        state = record_proactive_ping()
         if state["unanswered_pings"] == 3:
             candidates = [m for m in PING_MESSAGES_SULK if m != last_bot_msg]
             msg = random.choice(candidates)
