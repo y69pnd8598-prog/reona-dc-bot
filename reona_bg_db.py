@@ -19,10 +19,12 @@ def get_conn() -> sqlite3.Connection:
     return conn
 
 
+def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
 def _ensure_columns(conn: sqlite3.Connection, table: str, expected_cols: dict[str, str]) -> None:
-    existing = {
-        row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
-    }
+    existing = _table_columns(conn, table)
     for col_name, col_def in expected_cols.items():
         if col_name not in existing:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_def};")
@@ -56,8 +58,8 @@ def init_db() -> None:
                 date_str TEXT NOT NULL,
                 hour_int INTEGER NOT NULL,
                 speaker TEXT NOT NULL,
-                category TEXT NOT NULL, -- 'routine', 'notable_event', 'agreement'
-                emotion_tag TEXT DEFAULT 'neutral', -- 'happy', 'sad', 'neutral'
+                category TEXT NOT NULL,
+                emotion_tag TEXT DEFAULT 'neutral',
                 content TEXT NOT NULL,
                 is_overnight_kept INTEGER DEFAULT 0
             );
@@ -127,20 +129,23 @@ def morning_wakeup_reset() -> dict:
         state = dict(conn.execute("SELECT * FROM runtime_state WHERE id = 1").fetchone())
 
         if (state.get("last_active_date") or "") != today_str:
+            mem_cols = _table_columns(conn, "daily_memories")
+            date_expr = "COALESCE(NULLIF(date_str, ''), mem_date)" if "mem_date" in mem_cols else "date_str"
+
             conn.execute(
-                """
+                f"""
                 DELETE FROM daily_memories
-                WHERE date_str < ?
-                   OR (date_str = ? AND hour_int < 18 AND category = 'routine')
+                WHERE {date_expr} < ?
+                   OR ({date_expr} = ? AND hour_int < 18 AND category = 'routine')
                 """,
                 (yesterday_str, yesterday_str),
             )
 
             conn.execute(
-                """
+                f"""
                 UPDATE daily_memories
                 SET is_overnight_kept = 1
-                WHERE date_str = ?
+                WHERE {date_expr} = ?
                 """,
                 (yesterday_str,),
             )
@@ -187,23 +192,29 @@ def log_memory(
 ) -> None:
     init_db()
     now = now_sydney()
+    today_str = now.strftime("%Y-%m-%d")
     clean_content = de_pronoun_text(speaker, raw_content)
+
     with get_conn() as conn:
+        mem_cols = _table_columns(conn, "daily_memories")
+        row_data = {
+            "created_at": now.isoformat(),
+            "date_str": today_str,
+            "hour_int": now.hour,
+            "speaker": speaker,
+            "category": category,
+            "emotion_tag": emotion_tag,
+            "content": clean_content,
+        }
+        if "mem_date" in mem_cols:
+            row_data["mem_date"] = today_str
+
+        cols = list(row_data.keys())
+        placeholders = ", ".join(["?"] * len(cols))
+        col_sql = ", ".join(cols)
         conn.execute(
-            """
-            INSERT INTO daily_memories
-            (created_at, date_str, hour_int, speaker, category, emotion_tag, content)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                now.isoformat(),
-                now.strftime("%Y-%m-%d"),
-                now.hour,
-                speaker,
-                category,
-                emotion_tag,
-                clean_content,
-            ),
+            f"INSERT INTO daily_memories ({col_sql}) VALUES ({placeholders})",
+            [row_data[c] for c in cols],
         )
 
 
