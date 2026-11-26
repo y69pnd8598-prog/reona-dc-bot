@@ -59,6 +59,7 @@ PING_MESSAGES_SULK = [
     "算了不吵你了，我去畫圖",
     "消失很久欸",
 ]
+FALLBACK_REPLIES = ["在呀，剛剛稍微放空了一下", "嗯嗯，我在聽", "欸？剛剛走神了一下"]
 
 
 def load_recent_turns() -> list[dict]:
@@ -128,13 +129,11 @@ def extract_and_update_state(user_text: str, recent_turns: list[dict]) -> bool:
         cat = "notable_event" if emotion != "neutral" else "routine"
         log_memory("Nick", user_text, category=cat, emotion_tag=emotion)
 
-    # Check if Nick is locking an agreement (command/suggestion on food, rest, schedule)
     agree_triggers = ["吃", "喝", "早點睡", "不熬夜", "別畫了", "去休息", "就決定", "各自"]
     vague_replies = ["隨便", "都可以", "不知道", "你決定"]
     if any(t in user_text for t in agree_triggers) and not any(v in user_text for v in vague_replies):
         lock_agreement(user_text)
 
-    # Check if Reona/Nick confirmed completion of an agreed action
     if any(k in user_text for k in ["吃飽了", "喝完了", "已經睡了", "忙完了"]):
         unlock_agreement_done(user_text)
 
@@ -142,12 +141,12 @@ def extract_and_update_state(user_text: str, recent_turns: list[dict]) -> bool:
 
 
 def post_process_reply(reply: str, user_text: str, recent_turns: list[dict]) -> str:
-    # 1. Strip parroted question prefix if present
+    reply = re.sub(r"<think>.*?</think>", "", reply, flags=re.DOTALL).strip()
+
     clean_q = user_text.rstrip("？?！!。 ")
     if len(clean_q) >= 3 and reply.startswith(clean_q):
         reply = reply[len(clean_q) :].lstrip("？?！!，, ")
 
-    # 2. Replace any residual cohabitation/teletransportation hallucinations
     replacements = {
         "等你回來一起吃": "你那邊記得去吃飯",
         "等你回來": "等你忙完再聊",
@@ -158,19 +157,19 @@ def post_process_reply(reply: str, user_text: str, recent_turns: list[dict]) -> 
     for bad, good in replacements.items():
         reply = reply.replace(bad, good)
 
-    # 3. Reduce repetitive emoji spam if previous assistant turn already had an emoji
     if recent_turns and isinstance(recent_turns[-1], dict) and recent_turns[-1].get("role") == "assistant":
         if any(e in recent_turns[-1].get("content", "") for e in ["😅", "😂", "🥺", "✨", "😭"]):
-            reply = re.sub(r"[😅😂🥺✨😭😊]", "", reply).strip()
+            stripped = re.sub(r"[😅😂🥺✨😭😊]", "", reply).strip()
+            if stripped:
+                reply = stripped
 
-    return reply
+    return reply.strip()
 
 
 def generate_reona_reply(user_text: str, was_sulking: bool, shared_story: bool) -> str:
     recent_turns = load_recent_turns()
     snapshot = compute_snapshot()
 
-    # Check repeated words in last 2 assistant turns to inject anti-loop hint
     recent_assistant_text = " ".join(
         t.get("content", "")
         for t in recent_turns[-4:]
@@ -204,10 +203,13 @@ def generate_reona_reply(user_text: str, was_sulking: bool, shared_story: bool) 
         frequency_penalty=0.65,
         presence_penalty=0.55,
     )
-    raw_reply = (resp.choices[0].message.content or "").strip()
+    msg_obj = resp.choices[0].message
+    raw_reply = (msg_obj.content or "").strip()
     final_reply = post_process_reply(raw_reply, user_text, recent_turns)
 
-    # Record Reona's own notable events / decision hooks
+    if not final_reply:
+        final_reply = random.choice(FALLBACK_REPLIES)
+
     reona_emo = detect_emotion(final_reply)
     if reona_emo != "neutral" or any(k in final_reply for k in ["麻糬", "交稿", "畫完", "剛吃", "剛喝"]):
         cat = "notable_event" if reona_emo != "neutral" else "routine"
@@ -244,7 +246,6 @@ class ReonaBot(discord.Client):
             return
 
         now = now_sydney()
-        # Sleep hours: 00:00 - 07:59 Sydney time
         if 0 <= now.hour < 8:
             return
 
@@ -259,12 +260,12 @@ class ReonaBot(discord.Client):
         async with message.channel.typing():
             reply = generate_reona_reply(user_text, was_sulking, shared_story)
 
-        await message.channel.send(reply)
+        if reply and reply.strip():
+            await message.channel.send(reply.strip())
 
     @tasks.loop(minutes=45)
     async def proactive_ping_loop(self) -> None:
         now = now_sydney()
-        # Only active between 08:00 and 23:59 Sydney time
         if not (8 <= now.hour <= 23):
             return
         if not TARGET_CHANNEL_ID:
@@ -274,7 +275,6 @@ class ReonaBot(discord.Client):
         if not channel:
             return
 
-        # ~35% chance per 45-min tick to send a short casual ping
         if random.random() > 0.35:
             return
 
@@ -290,19 +290,18 @@ class ReonaBot(discord.Client):
         )
 
         if state["unanswered_pings"] == 3:
-            # Triggers sulk on the 3rd consecutive unanswered ping
             candidates = [m for m in PING_MESSAGES_SULK if m != last_bot_msg]
             msg = random.choice(candidates)
         elif state["unanswered_pings"] > 3:
-            # Already sulked once; stay quiet so she doesn't spam while sulking
             return
         else:
             candidates = [m for m in PING_MESSAGES_NORMAL if m != last_bot_msg]
             msg = random.choice(candidates)
 
-        recent_turns.append({"role": "assistant", "content": msg})
-        save_recent_turns_atomic(recent_turns)
-        await channel.send(msg)
+        if msg and msg.strip():
+            recent_turns.append({"role": "assistant", "content": msg.strip()})
+            save_recent_turns_atomic(recent_turns)
+            await channel.send(msg.strip())
 
     @proactive_ping_loop.before_loop
     async def before_ping_loop(self) -> None:
