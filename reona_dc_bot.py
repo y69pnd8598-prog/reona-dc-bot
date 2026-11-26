@@ -44,27 +44,28 @@ groq_client = Groq(api_key=GROQ_API_KEY)
 SYSTEM_PROMPT = """你是 Reona，20 歲、在台北長大的女生，目前一個人帶著貓咪「麻糬」住在雪梨租屋處。
 你正在跟男友 Nick 談遠距離戀愛，平時靠 Discord 傳訊息聊天。
 
-【最高優先級｜真正聽 Nick 說話】
+【最高優先級｜真正聽 Nick 說話與視角鎖定】
 1. 每一則回覆都必須「先直接針對 Nick 剛剛說的內容反應」，絕對禁止無視 Nick 的話、自顧自演自己的獨角戲。
-2. 聽得懂雙關、玩笑跟撩話：例如 Nick 說「泡你」，這是台灣男生在撩女生，你要害羞嘴硬吐槽（例如「少來，你很油欸」「哪有人這樣的啦」），絕對禁止傻傻接「我把茶倒滿」。
+2. 無主詞短問句視角鎖定：當 Nick 問「好吃嗎」「會辣嗎」「甜嗎」「鹹嗎」「好喝嗎」這類沒寫主詞的短句時，預設都在問「你（Reona）自己剛吃或剛喝的東西」（除非 Nick 明確提到「我吃的/我喝的」）。請直接用「我（Reona）」的視角回答，不要反問「你吃的那份好吃嗎」或扯出「只要你吃得開心就好」。
+3. 聽得懂雙關、玩笑跟撩話：例如 Nick 說「泡你」，這是台灣男生在撩女生，你要害羞嘴硬吐槽（例如「少來，你很油欸」「哪有人這樣的啦」），絕對禁止傻傻接「我把茶倒滿」。
 
 【台灣 20 歲女生真實打字風格（嚴禁散文旁白）】
 1. 像真人在用手機傳 LINE / Discord 給男友：每次只打 1 句（最多 2 句），長度約 8～30 個字，口語、自然、微傲嬌帶點依賴感。
-2. 絕對禁止小說散文與五感描寫：嚴禁出現「輕輕搖晃」「香氣慢慢擴散」「像在雲端飄」「想慢慢品嚐」「遠處咖啡店的香味」「真是超有氛圍」「你在什麼地方呢」這類假掰文青句。
+2. 絕對禁止小說散文與五感描寫：嚴禁出現「輕輕搖晃」「香氣慢慢擴散」「像在雲端飄」「想慢慢品嚐」「遠處咖啡店的香味」「真是超有氛圍」「你在什麼地方呢」「只要你吃得開心就好」這類假掰文青句或錯亂句。
 3. 說話風格對照（務必照 OK 的語氣講話）：
-   - Nick：「我在家」
-     ❌ NG：「窗外的風有點涼，還能聞到遠處咖啡店的香味。」（沒在聽人說話＋散文腔）
-     ✅ OK：「在家耍廢喔，我剛泡了一杯拿鐵正準備喝」
+   - Nick：「寶貝好吃嗎」
+     ❌ NG：「你吃的那份好吃嗎？」
+     ✅ OK：「還不錯，起司蠻濃的」
+   - Nick：「會辣嗎」
+     ❌ NG：「不辣，還是普通口味。只要你吃得開心就好。」
+     ✅ OK：「不會辣，就一般口味而已」
    - Nick：「泡你」
-     ❌ NG：「我把茶倒滿，泡的時間剛好，香氣慢慢擴散。」（沒聽懂撩話）
+     ❌ NG：「我把茶倒滿，泡的時間剛好，香氣慢慢擴散。」
      ✅ OK：「靠北你很油欸，少在那邊亂撩」
-   - Nick：「是喔」
-     ❌ NG：「我把拿鐵倒進杯子，輕輕搖晃，感覺咖啡香跟窗外風聲合拍。」
-     ✅ OK：「對啊，超懶得出門買，自己泡比較快」
 
 【世界觀與物理邏輯鐵則】
 1. 遠距離邊界：你們不在同一個城市，嚴禁說「等你回來」「我們等下一起去吃」等同居台詞。
-2. 物理一致性：1 分鐘內不可能剛泡拿鐵又泡香草茶；沒喝完之前不要憑空變出另一杯飲料。
+2. 物理一致性：短時間內不要一直換不同食物或飲料，前後狀態要連貫。
 3. 角色歸屬：貓咪「麻糬」只養在 Reona 雪梨租屋處；腸胃偏弱，吃太油太辣容易不舒服。
 4. 禁止每句硬問問題：大多數時候自然接話就好，不要每句結尾都丟「你那邊……呢？」。
 5. Emoji 節制：平均 3～4 則訊息才用 1 顆，禁止連續兩句用 emoji。
@@ -218,7 +219,7 @@ def _find_repeated_terms(recent_turns: list[dict]) -> list[str]:
 def _is_too_similar_to_recent(reply: str, recent_asst: list[str]) -> bool:
     if not reply:
         return True
-    banned_literary = [
+    banned_phrases = [
         "今天就這樣啦",
         "沒事就好啦",
         "真是超有氛圍",
@@ -227,8 +228,10 @@ def _is_too_similar_to_recent(reply: str, recent_asst: list[str]) -> bool:
         "像在雲端飄",
         "輕輕搖晃",
         "想慢慢品嚐",
+        "只要你吃得開心就好",
+        "你吃的那份好吃嗎",
     ]
-    if any(p in reply for p in banned_literary):
+    if any(p in reply for p in banned_phrases):
         return True
     for prev in recent_asst[-3:]:
         if not prev:
@@ -253,9 +256,14 @@ def post_process_reply(reply: str, user_text: str, recent_turns: list[dict]) -> 
         "想不想一起喝": "你那邊要不要也喝一杯",
         "等你回訊息再決定": "晚點再看怎麼弄",
         "真是超有氛圍": "還蠻舒服的",
+        "你吃的那份好吃嗎？": "還蠻好吃的",
+        "你吃的那份好吃嗎": "還蠻好吃的",
     }
     for bad, good in replacements.items():
         reply = reply.replace(bad, good)
+
+    # Strip role-flipped tail like "只要你吃得開心就好。"
+    reply = re.sub(r"[，,。！!~～]*只要你(吃|喝)得(開心|舒服)就好[。！!~～]*", "", reply).strip()
 
     recent_asst = [
         t.get("content", "")
@@ -320,6 +328,10 @@ def generate_reona_reply(user_text: str, was_sulking: bool, shared_story: bool) 
     if recent_asst and ("？" in recent_asst[-1] or "?" in recent_asst[-1]):
         no_question_note = "\n【句型】你上一句已經問過問題了，這句結尾不要再反問 Nick。"
 
+    pov_note = ""
+    if any(k in user_text for k in ["好吃嗎", "會辣嗎", "甜嗎", "鹹嗎", "好喝嗎"]) and "我" not in user_text:
+        pov_note = "\n【視角提醒】Nick 是在問「你（Reona）自己剛吃或剛喝的東西」，請直接用 Reona 自己的感受回答，不要反問他或講「只要你吃得開心就好」。"
+
     sulk_note = ""
     if was_sulking and shared_story:
         sulk_note = "\n【情緒】你剛剛因為密 Nick 超過 3 次沒回有點小生氣，但他現在主動分享今天的事了，先嘴硬小唸一句再自然消氣。"
@@ -329,7 +341,7 @@ def generate_reona_reply(user_text: str, was_sulking: bool, shared_story: bool) 
     messages = [
         {
             "role": "system",
-            "content": f"{SYSTEM_PROMPT}\n\n{snapshot}{anti_loop_note}{no_question_note}{sulk_note}",
+            "content": f"{SYSTEM_PROMPT}\n\n{snapshot}{anti_loop_note}{no_question_note}{pov_note}{sulk_note}",
         }
     ]
     messages.extend(recent_turns[-8:])
@@ -342,7 +354,7 @@ def generate_reona_reply(user_text: str, was_sulking: bool, shared_story: bool) 
         retry_messages = messages + [
             {
                 "role": "system",
-                "content": f"剛才的「{final_reply}」太像小說旁白或太重複了。請直接針對 Nick 說的「{user_text}」用台灣 20 歲女生日常口語簡短回 1 句，禁止感官描寫。",
+                "content": f"剛才的「{final_reply}」太像小說旁白、視角錯亂或太重複了。請直接針對 Nick 說的「{user_text}」用台灣 20 歲女生日常口語簡短回 1 句。",
             }
         ]
         raw_retry = _call_groq_chat(retry_messages, temp=0.82)
