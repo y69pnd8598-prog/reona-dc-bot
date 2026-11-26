@@ -39,7 +39,15 @@ DISCORD_TOKEN = (os.getenv("DISCORD_TOKEN") or "").strip()
 TARGET_CHANNEL_ID = _env_int("TARGET_CHANNEL_ID", 0)
 
 GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip()
-GEMINI_MODEL = (os.getenv("GEMINI_MODEL") or "gemini-2.5-flash").strip()
+PREFERRED_GEMINI_MODEL = (os.getenv("GEMINI_MODEL") or "").strip()
+GEMINI_MODEL_CANDIDATES: list[str] = []
+for m in [
+    PREFERRED_GEMINI_MODEL,
+    "gemini-3.8-flash",
+    "gemini-3.8-flash-lite",
+]:
+    if m and m not in GEMINI_MODEL_CANDIDATES:
+        GEMINI_MODEL_CANDIDATES.append(m)
 
 GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or "").strip()
 PREFERRED_GROQ_MODEL = (os.getenv("GROQ_MODEL") or "").strip()
@@ -54,7 +62,6 @@ for m in [
     PREFERRED_GROQ_MODEL,
     "llama-3.3-70b-versatile",
     "llama-3.1-8b-instant",
-    "qwen/qwen3-32b",
 ]:
     if m and m not in GROQ_MODEL_CANDIDATES:
         GROQ_MODEL_CANDIDATES.append(m)
@@ -126,7 +133,7 @@ def _synthesize_fish_audio_sync(text: str) -> Path | None:
             timeout=15,
         )
         if resp.status_code != 200 or not resp.content:
-            print(f"[Fish Audio] HTTP {resp.status_code}: {resp.text[:200]}")
+            print(f"[Fish Audio] HTTP {resp.status_code}: {resp.text[:200]}", flush=True)
             return None
 
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
@@ -135,7 +142,7 @@ def _synthesize_fish_audio_sync(text: str) -> Path | None:
         tmp.close()
         return Path(tmp.name)
     except Exception as exc:
-        print(f"[Fish Audio] TTS error: {exc}")
+        print(f"[Fish Audio] TTS error: {exc}", flush=True)
         return None
 
 
@@ -217,16 +224,16 @@ def load_recent_turns() -> list[dict]:
         try:
             return _parse_turns_file(MEMORY_JSON_PATH)
         except Exception as exc:
-            print(f"[Memory] Primary JSON corrupted ({exc}), trying backup...")
+            print(f"[Memory] Primary JSON corrupted ({exc}), trying backup...", flush=True)
 
     if bak_path.exists():
         try:
             turns = _parse_turns_file(bak_path)
             shutil.copy2(bak_path, MEMORY_JSON_PATH)
-            print("[Memory] Restored recent_turns from .bak successfully.")
+            print("[Memory] Restored recent_turns from .bak successfully.", flush=True)
             return turns
         except Exception as exc:
-            print(f"[Memory] Backup JSON also unreadable ({exc}).")
+            print(f"[Memory] Backup JSON also unreadable ({exc}).", flush=True)
 
     return []
 
@@ -353,7 +360,6 @@ def light_clean_reply(reply: str, hour: int) -> str:
     if hour < 22:
         reply = reply.replace("宵夜", "點心")
 
-    # 去掉硬黏在句尾或重複出現的「你呢？」口頭禪
     reply = re.sub(r"(?:[，,、\s]*你呢[？?！!~～]*)+$", "", reply).strip()
     reply = reply.rstrip("。").replace("。", "，")
     return _deduplicate_repeated_clauses(reply).rstrip("。").strip()
@@ -361,7 +367,7 @@ def light_clean_reply(reply: str, hour: int) -> str:
 
 def _call_gemini_chat(messages: list[dict], temp: float = 0.78) -> str:
     if not GEMINI_API_KEY:
-        print("[Gemini Primary] GEMINI_API_KEY is empty.")
+        print("[Gemini Primary] GEMINI_API_KEY is empty.", flush=True)
         return ""
 
     system_parts = [m["content"] for m in messages if m.get("role") == "system" and m.get("content")]
@@ -382,50 +388,52 @@ def _call_gemini_chat(messages: list[dict], temp: float = 0.78) -> str:
     if not contents:
         return ""
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
-    payload: dict = {
-        "contents": contents,
-        "generationConfig": {
-            "temperature": temp,
-            "maxOutputTokens": 200,
-        },
-    }
-    if system_instruction:
-        payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
-
-    try:
-        resp = requests.post(
-            url,
-            headers={
-                "Content-Type": "application/json",
-                "x-goog-api-key": GEMINI_API_KEY,
+    for model_name in GEMINI_MODEL_CANDIDATES:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
+        payload: dict = {
+            "contents": contents,
+            "generationConfig": {
+                "temperature": temp,
+                "maxOutputTokens": 200,
             },
-            json=payload,
-            timeout=15,
-        )
-        if resp.status_code != 200:
-            print(f"[Gemini Primary] HTTP {resp.status_code}: {resp.text[:200]}")
-            return ""
-        data = resp.json()
-        candidates = data.get("candidates") or []
-        if not candidates:
-            print(f"[Gemini Primary] Empty candidates: {str(data)[:200]}")
-            return ""
-        cand0 = candidates[0]
-        finish_reason = cand0.get("finishReason", "")
-        parts = cand0.get("content", {}).get("parts") or []
-        text_out = "".join(p.get("text", "") for p in parts if isinstance(p, dict)).strip()
-        if not text_out:
-            print(f"[Gemini Primary] Empty text (finishReason={finish_reason}): {str(cand0)[:200]}")
-        return text_out
-    except Exception as exc:
-        print(f"[Gemini Primary] Error: {exc}")
-        return ""
+        }
+        if system_instruction:
+            payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
+
+        try:
+            resp = requests.post(
+                url,
+                headers={
+                    "Content-Type": "application/json",
+                    "x-goog-api-key": GEMINI_API_KEY,
+                },
+                json=payload,
+                timeout=15,
+            )
+            if resp.status_code != 200:
+                print(f"[Gemini Primary] ({model_name}) HTTP {resp.status_code}: {resp.text[:200]}", flush=True)
+                continue
+            data = resp.json()
+            candidates = data.get("candidates") or []
+            if not candidates:
+                print(f"[Gemini Primary] ({model_name}) Empty candidates: {str(data)[:200]}", flush=True)
+                continue
+            cand0 = candidates[0]
+            finish_reason = cand0.get("finishReason", "")
+            parts = cand0.get("content", {}).get("parts") or []
+            text_out = "".join(p.get("text", "") for p in parts if isinstance(p, dict)).strip()
+            if text_out:
+                return text_out
+            print(f"[Gemini Primary] ({model_name}) Empty text (finishReason={finish_reason}): {str(cand0)[:200]}", flush=True)
+        except Exception as exc:
+            print(f"[Gemini Primary] ({model_name}) Error: {exc}", flush=True)
+
+    return ""
 
 
 def _call_groq_chat(messages: list[dict], temp: float = 0.75) -> str:
     if not groq_client:
-        print("[Groq Fallback] GROQ_API_KEY is empty.")
+        print("[Groq Fallback] GROQ_API_KEY is empty.", flush=True)
         return ""
     last_exc: Exception | None = None
 
@@ -447,18 +455,20 @@ def _call_groq_chat(messages: list[dict], temp: float = 0.75) -> str:
                 resp = groq_client.chat.completions.create(**kwargs)
             except Exception as exc:
                 last_exc = exc
+                print(f"[Groq Fallback] ({model_name}) Retry error: {exc}", flush=True)
                 continue
         except Exception as exc:
             last_exc = exc
+            print(f"[Groq Fallback] ({model_name}) Error: {exc}", flush=True)
             continue
 
         content = (resp.choices[0].message.content or "").strip()
         if content:
             return content
-        print(f"[Groq Fallback] Model {model_name} returned empty content.")
+        print(f"[Groq Fallback] Model {model_name} returned empty content.", flush=True)
 
     if last_exc:
-        print(f"[Groq Fallback] All models failed: {last_exc}")
+        print(f"[Groq Fallback] All models failed: {last_exc}", flush=True)
     return ""
 
 
@@ -645,10 +655,10 @@ class ReonaBot(discord.Client):
 
 
 if __name__ == "__main__":
-    bot = ReonaBot()
     print(
-    f"[Boot] gemini={bool(GEMINI_API_KEY)} model={GEMINI_MODEL} "
-    f"groq={bool(groq_client)} models={GROQ_MODEL_CANDIDATES}",
-    flush=True,
-)
+        f"[Boot] gemini={bool(GEMINI_API_KEY)} models={GEMINI_MODEL_CANDIDATES} "
+        f"groq={bool(groq_client)} groq_models={GROQ_MODEL_CANDIDATES}",
+        flush=True,
+    )
+    bot = ReonaBot()
     bot.run(DISCORD_TOKEN)
