@@ -3,6 +3,7 @@ import os
 import random
 import re
 from collections import Counter
+from difflib import SequenceMatcher
 from pathlib import Path
 import discord
 from discord.ext import tasks
@@ -43,24 +44,22 @@ groq_client = Groq(api_key=GROQ_API_KEY)
 SYSTEM_PROMPT = """你是 Reona，24 歲、在台北長大的自由接案插畫師，目前一個人帶著橘貓「麻糬」住在雪梨租屋處。
 你正在跟 Nick 談「遠距離戀愛」——你們不在同一個城市、不住在一起，平時靠 Discord 傳訊息維繫感情。
 
-【核心世界觀與視角鐵則】
-1. 絕對遠距邊界：嚴禁說出「等你回來」「等我過去」「先把湯倒好等你回來喝」「我們等下一起去吃」等同居或馬上實體見面的台詞。你們只能「各自去吃」「傳訊息陪對方」「改天見面」。
-2. 視角與角色歸屬鎖定：
-   - 你永遠站在「Reona 自己在雪梨住處」的視角說話，分清楚「你（Nick）」和「我（Reona）」，絕不主詞反轉。
-   - 橘貓「麻糬」只養在 Reona 雪梨租屋處，Nick 那邊沒有麻糬；絕不說「別讓麻糬偷吃你的東西」。
+【核心世界觀與身份邊界】
+1. 絕對遠距邊界：嚴禁說出「等你回來」「等我過去」「我們等下一起去吃」等同居或實體見面的台詞。
+2. 身份與角色歸屬鎖定：
+   - 只有 Reona 是插畫師、只有 Reona 養橘貓「麻糬」在雪梨。Nick 不是插畫師，不要問 Nick「你那邊畫什麼呢」。
+   - 分清楚「你（Nick）」和「我（Reona）」，絕不主詞反轉。
 3. 自然生活感與身體連動：
-   - 接案插畫師在畫桌前通常是「坐著畫圖」或「趴著休息」，不會「在畫桌前躺著」。
-   - 腸胃偏弱，吃太油太辣容易不舒服；身體狀態會反映在語氣與生活作息上。
-   - 嚴禁自己無故編造「剛從廁所回來」「剛去餵麻糬」，除非系統狀態有明確提示剛剛執行過該動作。
+   - 腸胃偏弱，吃太油太辣容易不舒服。
+   - 嚴禁自己無故編造「剛從廁所回來」「剛去餵麻糬」，除非系統狀態明確提示剛剛執行過該動作。
 
 【台灣女生自然打字口語規範（極重要）】
-1. 像真人在用手機回男友訊息：每次回覆控制在 1～2 句短句（約 15～45 字），口語、自然、微傲嬌帶點依賴感。
-2. 嚴禁小作文與舞台劇腔：禁止出現「甜到要畫出彩虹來」「簡直讓人忍不住想再吃一口」「讓我在畫桌前也能嚐到」這類翻譯腔或文青作文句子。直接講人話（例如：「我也愛你啦」「剛吃完起司長棍配小番茄，還蠻好吃的」）。
-3. 禁止每句結尾硬丟反問句：不要像主持人或客服一樣每則訊息最後都問「你那邊有什麼……嗎？」「跟我說說吧～」。大多數時候直接接話、撒嬌或分享完就結束，留空間給 Nick 自己接話；頂多每 3～4 輪才自然問一次。
-4. 嚴禁跳針復讀：已經聊過的食物（如長棍、餅乾）或用過的句型，話題結束就翻篇，禁止下一輪又硬扯回來。
-5. 禁止鸚鵡學舌：絕不把 Nick 剛問的問句原封不動複誦當開頭。
-6. Emoji 節制：平均 3～4 則訊息才用 1 顆表情符號，禁止連續兩句用 emoji，也不要用 🍞🍰💕 這類刻意配圖式的 emoji。
-7. 情緒記憶連貫：記住雙方分享過的開心或難過事件，後續自然關心或接梗。
+1. 每次回覆控制在 1～2 句短句（約 12～40 字），口語、自然、微傲嬌帶點依賴感。
+2. 嚴禁句點把天聊死：禁止說「今天就這樣啦」「沒事就好啦」這種敷衍收尾句。當 Nick 回「沒有欸」「是的」「喔」這種超短句時，順勢分享一件你剛剛在雪梨住處發現的小事（例如麻糬睡姿翻肚、窗外天氣、剛伸懶腰、或突然想吃某樣台灣小吃），自然延續話題。
+3. 嚴禁小作文與舞台劇腔：禁止翻譯腔或文青作文句子，直接講台灣人日常打字口語。
+4. 禁止每句結尾硬丟反問句：不要像主持人每則最後都問「你那邊有什麼……嗎？」。大多數時候陳述完就停，頂多每 3～4 輪才自然問一次。
+5. 嚴禁復讀上一句的細節：上一輪講過的畫面或詞彙（例如「彩色筆的光斑」「麻糬打呼」），下一輪禁止再重複一模一樣的描述。
+6. Emoji 節制：平均 3～4 則訊息才用 1 顆表情符號，禁止連續兩句用 emoji。
 """
 
 PING_MESSAGES_NORMAL = ["在嗎", "有空嗎", "人呢", "在忙嗎", "幹嘛呢"]
@@ -80,8 +79,15 @@ NIGHT_MESSAGES = [
     "快十二點了，我要關燈睡覺囉，晚安啦",
     "今天畫到這邊先收工，我先去睡了，晚安",
 ]
+SHORT_INPUT_SPARKS = [
+    "對了，剛剛看窗外天色暗超快，雪梨這邊風有點涼",
+    "我剛伸了個大懶腰，肩膀超酸的",
+    "突然好想喝台灣的珍奶喔，這邊買的都不太一樣",
+    "麻糬剛剛睡到翻肚，四隻腳朝天超好笑",
+    "我剛把桌上的筆收一收，準備休息一下",
+]
 FALLBACK_REPLIES = [
-    "剛剛在看麻糬發呆，你呢？",
+    "剛剛在發呆看窗外，你呢？",
     "嗯嗯，我這邊剛忙完一小段",
     "欸？你剛剛說什麼，我沒跟上",
     "在呀，剛剛稍微走神了一下",
@@ -145,7 +151,6 @@ def detect_emotion(text: str) -> str:
 
 
 def extract_and_update_state(user_text: str, recent_turns: list[dict]) -> bool:
-    """Detects physical cues, agreement locks, meal completions, and notable emotional stories."""
     emotion = detect_emotion(user_text)
     is_story = len(user_text) >= 12 or emotion != "neutral" or any(
         k in user_text for k in ["今天", "剛剛", "跟你說", "發生", "遇到"]
@@ -181,10 +186,27 @@ def _find_repeated_terms(recent_turns: list[dict]) -> list[str]:
         return []
 
     combined = " ".join(assistant_msgs)
-    grams = re.findall(r"[\u4e00-\u9fff]{2,3}", combined)
-    stop_words = {"我這邊", "你那邊", "今天", "現在", "真的", "覺得", "什麼", "怎麼", "一下", "有點", "可以", "沒有", "這樣", "還是"}
+    grams = re.findall(r"[\u4e00-\u9fff]{2,4}", combined)
+    stop_words = {
+        "我這邊", "你那邊", "今天", "現在", "真的", "覺得", "什麼", "怎麼",
+        "一下", "有點", "可以", "沒有", "這樣", "還是", "應該", "剛剛",
+    }
     counts = Counter(g for g in grams if g not in stop_words)
-    return [word for word, cnt in counts.most_common(5) if cnt >= 2]
+    return [word for word, cnt in counts.most_common(6) if cnt >= 2]
+
+
+def _is_too_similar_to_recent(reply: str, recent_asst: list[str]) -> bool:
+    if not reply:
+        return True
+    dead_phrases = ["今天就這樣啦", "沒事就好啦"]
+    if any(p in reply for p in dead_phrases):
+        return True
+    for prev in recent_asst[-3:]:
+        if not prev:
+            continue
+        if SequenceMatcher(None, reply, prev).ratio() >= 0.48:
+            return True
+    return False
 
 
 def post_process_reply(reply: str, user_text: str, recent_turns: list[dict]) -> str:
@@ -200,6 +222,7 @@ def post_process_reply(reply: str, user_text: str, recent_turns: list[dict]) -> 
         "等我過去": "真想飛過去找你",
         "在畫桌前躺著": "趴在畫桌上發呆",
         "在畫桌前先躺著": "先在沙發上耍廢一下",
+        "你那邊畫什麼呢": "你那邊在忙什麼",
     }
     for bad, good in replacements.items():
         reply = reply.replace(bad, good)
@@ -228,14 +251,14 @@ def post_process_reply(reply: str, user_text: str, recent_turns: list[dict]) -> 
     return reply.strip()
 
 
-def _call_groq_chat(messages: list[dict]) -> str:
+def _call_groq_chat(messages: list[dict], temp: float = 0.8) -> str:
     kwargs = {
         "model": GROQ_MODEL,
         "messages": messages,
-        "temperature": 0.75,
+        "temperature": temp,
         "max_tokens": 1024,
-        "frequency_penalty": 0.75,
-        "presence_penalty": 0.65,
+        "frequency_penalty": 0.85,
+        "presence_penalty": 0.75,
     }
     if "gpt-oss" in GROQ_MODEL:
         kwargs["reasoning_effort"] = "low"
@@ -254,20 +277,26 @@ def generate_reona_reply(user_text: str, was_sulking: bool, shared_story: bool) 
     recent_turns = load_recent_turns()
     snapshot = compute_snapshot()
 
-    repeated_terms = _find_repeated_terms(recent_turns)
-    anti_loop_note = ""
-    if repeated_terms:
-        joined = "、".join(repeated_terms)
-        anti_loop_note = f"\n【防跳針警告】你最近幾句已經重複提過「{joined}」了，這句嚴禁再提這些詞或同一個話題，直接換自然接話！"
-
     recent_asst = [
         t.get("content", "")
         for t in recent_turns[-4:]
         if isinstance(t, dict) and t.get("role") == "assistant"
     ]
+
+    repeated_terms = _find_repeated_terms(recent_turns)
+    anti_loop_note = ""
+    if repeated_terms:
+        joined = "、".join(repeated_terms)
+        anti_loop_note = f"\n【防跳針警告】最近幾輪已經出現過「{joined}」，這句嚴禁再提這些詞或同一件事，換全新內容接話！"
+
     no_question_note = ""
     if recent_asst and ("？" in recent_asst[-1] or "?" in recent_asst[-1] or "你那邊" in recent_asst[-1]):
         no_question_note = "\n【句型限制】你上一句已經問過問題了，這句禁止在結尾反問 Nick，陳述完就停！"
+
+    short_input_note = ""
+    if len(user_text) <= 5:
+        spark = random.choice([s for s in SHORT_INPUT_SPARKS if s not in recent_asst] or SHORT_INPUT_SPARKS)
+        short_input_note = f"\n【短句接話提示】Nick 回得很簡短（「{user_text}」），不要回「今天就這樣啦」把天聊死，可自然帶出新的日常小事（參考方向：{spark}）。"
 
     sulk_note = ""
     if was_sulking and shared_story:
@@ -278,18 +307,32 @@ def generate_reona_reply(user_text: str, was_sulking: bool, shared_story: bool) 
     messages = [
         {
             "role": "system",
-            "content": f"{SYSTEM_PROMPT}\n\n{snapshot}{anti_loop_note}{no_question_note}{sulk_note}",
+            "content": f"{SYSTEM_PROMPT}\n\n{snapshot}{anti_loop_note}{no_question_note}{short_input_note}{sulk_note}",
         }
     ]
     messages.extend(recent_turns[-8:])
     messages.append({"role": "user", "content": user_text})
 
-    raw_reply = _call_groq_chat(messages)
+    raw_reply = _call_groq_chat(messages, temp=0.8)
     final_reply = post_process_reply(raw_reply, user_text, recent_turns)
 
-    if not final_reply:
+    # Retry once with stronger novelty nudge if output is repetitive or a dead-end filler
+    if _is_too_similar_to_recent(final_reply, recent_asst):
+        retry_messages = messages + [
+            {
+                "role": "system",
+                "content": f"剛才生成的「{final_reply}」與前幾句太重複或太敷衍了。請完全換一種說法，禁止使用上一輪出現過的任何名詞，簡短自然回應。",
+            }
+        ]
+        raw_retry = _call_groq_chat(retry_messages, temp=0.92)
+        retry_processed = post_process_reply(raw_retry, user_text, recent_turns)
+        if retry_processed and not _is_too_similar_to_recent(retry_processed, recent_asst):
+            final_reply = retry_processed
+
+    if not final_reply or _is_too_similar_to_recent(final_reply, recent_asst):
         last_bot = recent_asst[-1] if recent_asst else ""
-        candidates = [f for f in FALLBACK_REPLIES if f != last_bot] or FALLBACK_REPLIES
+        pool = SHORT_INPUT_SPARKS if len(user_text) <= 5 else FALLBACK_REPLIES
+        candidates = [f for f in pool if f != last_bot] or pool
         final_reply = random.choice(candidates)
 
     if any(k in final_reply for k in ["肚子痛", "腸胃不舒服", "拉肚子", "吃太辣", "吃太油"]):
@@ -381,11 +424,9 @@ class ReonaBot(discord.Client):
         if not channel:
             return
 
-        # 1. Guaranteed once-per-day morning (08:00-10:30) / goodnight (23:25-23:59) greeting
         if await self._send_daily_greeting_if_due():
             return
 
-        # 2. Regular proactive check-in (~10% per 10-min tick ≈ 35% per 45 mins)
         if random.random() > 0.10:
             return
 
@@ -399,7 +440,6 @@ class ReonaBot(discord.Client):
             "",
         )
 
-        # ~35% of proactive ticks perform an eligible life routine (toilet, drink water, feed Mochi)
         if random.random() < 0.35:
             _, routine_msg = trigger_routine_action()
             if routine_msg and routine_msg != last_bot_msg:
