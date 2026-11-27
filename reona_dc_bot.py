@@ -398,6 +398,18 @@ def light_clean_reply(reply: str, hour: int) -> str:
     return _deduplicate_repeated_clauses(reply).rstrip("。").strip()
 
 
+def _send_gemini_request(url: str, payload: dict) -> requests.Response:
+    return requests.post(
+        url,
+        headers={
+            "Content-Type": "application/json",
+            "x-goog-api-key": GEMINI_API_KEY,
+        },
+        json=payload,
+        timeout=30,
+    )
+
+
 def _call_gemini_chat(messages: list[dict], temp: float = 0.78) -> str:
     if not GEMINI_API_KEY:
         print("[Gemini Primary] GEMINI_API_KEY is empty.", flush=True)
@@ -427,34 +439,41 @@ def _call_gemini_chat(messages: list[dict], temp: float = 0.78) -> str:
             "contents": contents,
             "generationConfig": {
                 "temperature": temp,
-                "maxOutputTokens": 500,
+                "maxOutputTokens": 1024,
+                "thinkingConfig": {"thinkingBudget": 0},
             },
         }
         if system_instruction:
             payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
 
         try:
-            resp = requests.post(
-                url,
-                headers={
-                    "Content-Type": "application/json",
-                    "x-goog-api-key": GEMINI_API_KEY,
-                },
-                json=payload,
-                timeout=30,
-            )
+            resp = _send_gemini_request(url, payload)
+            if resp.status_code == 400 and "thinking" in resp.text.lower():
+                payload["generationConfig"].pop("thinkingConfig", None)
+                resp = _send_gemini_request(url, payload)
+
             if resp.status_code != 200:
                 print(f"[Gemini Primary] ({model_name}) HTTP {resp.status_code}: {resp.text[:200]}", flush=True)
                 continue
+
             data = resp.json()
             candidates = data.get("candidates") or []
             if not candidates:
                 print(f"[Gemini Primary] ({model_name}) Empty candidates: {str(data)[:200]}", flush=True)
                 continue
+
             cand0 = candidates[0]
             finish_reason = cand0.get("finishReason", "")
             parts = cand0.get("content", {}).get("parts") or []
-            text_out = "".join(p.get("text", "") for p in parts if isinstance(p, dict)).strip()
+            text_out = "".join(
+                p.get("text", "")
+                for p in parts
+                if isinstance(p, dict) and not p.get("thought")
+            ).strip()
+
+            if finish_reason and finish_reason != "STOP":
+                print(f"[Gemini Primary] ({model_name}) finishReason={finish_reason} len={len(text_out)}", flush=True)
+
             if text_out:
                 return text_out
             print(f"[Gemini Primary] ({model_name}) Empty text (finishReason={finish_reason}): {str(cand0)[:200]}", flush=True)
@@ -475,7 +494,7 @@ def _call_groq_chat(messages: list[dict], temp: float = 0.75) -> str:
             "model": model_name,
             "messages": messages,
             "temperature": temp,
-            "max_tokens": 500,
+            "max_tokens": 1024,
         }
         if "gpt-oss" in model_name:
             kwargs["reasoning_effort"] = "low"
@@ -495,7 +514,11 @@ def _call_groq_chat(messages: list[dict], temp: float = 0.75) -> str:
             print(f"[Groq Fallback] ({model_name}) Error: {exc}", flush=True)
             continue
 
-        content = (resp.choices[0].message.content or "").strip()
+        choice0 = resp.choices[0]
+        finish_reason = getattr(choice0, "finish_reason", "")
+        content = (choice0.message.content or "").strip()
+        if finish_reason and finish_reason != "stop":
+            print(f"[Groq Fallback] ({model_name}) finish_reason={finish_reason} len={len(content)}", flush=True)
         if content:
             return content
         print(f"[Groq Fallback] Model {model_name} returned empty content.", flush=True)
