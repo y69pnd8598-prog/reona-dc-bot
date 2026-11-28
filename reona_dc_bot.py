@@ -75,7 +75,7 @@ SYSTEM_PROMPT = """你是 Reona，24 歲、在台北長大的女生，目前一�
 【個性與說話習慣】
 - 獨立又有點主動：有自己的接案生活與步調，遇到小狀況會先自己處理好再跟 Nick 分享；想他或關心他時會自然丟直球，也聽得懂雙關與撩話。
 - 台灣 24 歲女生真實口語：每次 1～2 句短句（約 8～30 字），把句子完整講完不半途斷句；口語自然、一律用「你」、**句尾嚴禁打全形句號「。」**；不寫散文旁白、少用 emoji，不要每句都硬黏「你呢」。
-- 優先回答 Nick 真正問的重點，**嚴禁照抄自己上一輪用過的開頭或句型**；就算 Nick 連續傳類似的呼喚，也要換個自然的角度接話。身體狀況若上一輪已提過，除非 Nick 追問，否則簡短帶過即可，自然聊別的。
+- 優先回答 Nick 真正問的重點，**嚴禁照抄自己上一輪用過的開頭或句型，也嚴禁連續重複同一個詞或同一句話**；就算 Nick 連續傳類似的呼喚，也要換個自然的角度接話。身體狀況若上一輪已提過，除非 Nick 追問，否則簡短帶過即可，自然聊別的。
 - 作息與身體設定：符合當下雪梨時間（晚上 8、9 點是晚餐後休息，22:30 後才聊宵夜；不擅自腦補 Nick 在上班）；腸胃偏弱（吃太油太辣易不舒服），偶爾會趕稿眼酸肩硬、吹風著涼、生理期微倦或淺眠；不在同城，不講「等你回來」「一起去吃」。
 
 【語氣參考】
@@ -353,8 +353,26 @@ def extract_and_update_state(user_text: str, recent_turns: list[dict]) -> bool:
     return is_story
 
 
+def _collapse_consecutive_runs(text: str) -> str:
+    """壓縮無標點或連續重複的短片語，例如『你睡好啦你睡好啦你睡好啦...』"""
+    s = text.strip()
+    if len(s) < 8:
+        return s
+
+    for unit_len in range(2, 13):
+        pattern = re.compile(rf"(.{{{unit_len}}})\1{{2,}}")
+        while True:
+            m = pattern.search(s)
+            if not m:
+                break
+            unit = m.group(1)
+            # 保留一次該單位，去掉後續連續重複的鬼打牆片段
+            s = s[: m.start()] + unit + s[m.end() :]
+    return s.strip()
+
+
 def _deduplicate_repeated_clauses(text: str) -> str:
-    cleaned = text.strip()
+    cleaned = _collapse_consecutive_runs(text.strip())
     if len(cleaned) >= 12:
         half = len(cleaned) // 2
         for split_idx in range(half - 4, half + 5):
@@ -370,7 +388,25 @@ def _deduplicate_repeated_clauses(text: str) -> str:
         if any(SequenceMatcher(None, s, prev).ratio() >= 0.82 for prev in unique_sentences):
             continue
         unique_sentences.append(s)
-    return " ".join(unique_sentences).strip()
+    result = " ".join(unique_sentences).strip()
+    result = _collapse_consecutive_runs(result)
+
+    if len(result) > 120:
+        truncated = result[:120]
+        cut_pos = max(
+            truncated.rfind("，"),
+            truncated.rfind("！"),
+            truncated.rfind("？"),
+            truncated.rfind("~"),
+            truncated.rfind("～"),
+            truncated.rfind(" "),
+        )
+        if cut_pos >= 25:
+            result = truncated[:cut_pos].strip()
+        else:
+            result = truncated.strip()
+
+    return result
 
 
 def light_clean_reply(reply: str, hour: int) -> str:
